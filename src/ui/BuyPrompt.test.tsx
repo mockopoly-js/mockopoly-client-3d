@@ -59,4 +59,18 @@ describe('BuyPrompt', () => {
     const { container } = render(<BuyPrompt />);
     expect(container.textContent).not.toContain(prop.name);
   });
+
+  it('shows the prompt when properties array has no entry for the space (sparse/no-entry path)', () => {
+    useGameStore.getState().update({
+      roomCode: 'ABCD', status: 'in-progress',
+      players: [{ id: 'p1', name: 'Maya', token: 'red', money: 15_000_000, position: prop.index, isBankrupt: false, isConnected: true }],
+      turn: { currentPlayerId: 'p1', phase: 'action', hasRolled: true },
+      config: { maxPlayers: 4 },
+      properties: [],
+    } as unknown as GameState);
+    useGameStore.getState().setMyPlayerId('p1');
+    render(<BuyPrompt />);
+    expect(screen.getByText(prop.name)).toBeTruthy();
+    expect(screen.getByRole('button', { name: /buy/i })).toBeTruthy();
+  });
 });

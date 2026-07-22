@@ -19,7 +19,7 @@ export function BuyPrompt() {
   const space = BOARD_SPACES[me.position];
   if (!space || !BUYABLE.includes(space.type)) return null;
   const owned = properties?.find((p) => p.spaceIndex === space.index);
-  if (!owned || owned.ownerId != null) return null; // only unowned
+  if (owned?.ownerId != null) return null;   // show unless a real owner exists (dense array today; robust if ever sparse)
   const price = space.price ?? 0;
   if (price <= 0) return null;
 
