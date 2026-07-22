@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { socketManager } from '../network/SocketManager';
 import { gameBus } from '../state/gameBus';
-import { useGameStore } from '../state/gameStore';
+import { useGameStore, selectMyPlayer } from '../state/gameStore';
 import { EVENTS } from '../types/SocketEvents';
 import { TOKEN_HEX } from '../constants/theme';
 import type { Player, TokenType } from '../types/GameState';
@@ -14,7 +14,7 @@ export function Lobby() {
 
   const players: Player[] = state?.players ?? [];
   const myId = socketManager.playerId;
-  const me = players.find((p) => p.id === myId);
+  const me = selectMyPlayer(useGameStore.getState());
   const isHost = !!me?.isHost;
   const status = state?.status;
 
@@ -59,7 +59,7 @@ export function Lobby() {
         })}
       </div>
 
-      {countdown !== null
+      {countdown !== null && status === 'starting'
         ? <div style={{ fontWeight: 800, fontSize: 20, color: '#e07d0a' }}>Starting in {countdown}...</div>
         : (
           <div style={{ display: 'flex', gap: 10 }}>

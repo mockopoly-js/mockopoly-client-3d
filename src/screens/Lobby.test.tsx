@@ -14,6 +14,7 @@ function setState(players: unknown[], status = 'lobby') {
   act(() => {
     useGameStore.getState().update({ roomCode: 'ABCD', status, players, config: { maxPlayers: 4 } } as unknown as GameState);
     useGameStore.getState().setRoomCode('ABCD');
+    useGameStore.getState().setMyPlayerId('p1');
   });
 }
 
@@ -58,7 +59,7 @@ describe('Lobby', () => {
   });
 
   it('shows the countdown from the gameBus', () => {
-    setState([seat('p1', 'Maya', { isHost: true })]);
+    setState([seat('p1', 'Maya', { isHost: true })], 'starting');
     render(<Lobby />);
     act(() => { gameBus.emit('countdown', { seconds: 3 }); });
     expect(screen.getByText(/starting in 3/i)).toBeTruthy();
