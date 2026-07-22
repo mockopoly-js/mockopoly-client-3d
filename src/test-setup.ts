@@ -27,3 +27,6 @@ Object.defineProperty(globalThis, 'localStorage', {
   writable: true,
   configurable: true,
 });
+
+import { afterEach } from 'vitest';
+afterEach(() => { store.clear(); });
