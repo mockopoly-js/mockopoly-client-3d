@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 import type { GameState, Player } from '../types/GameState';
 import type { ToastMessage, ToastType } from '../types/ui';
+import type { S_GameOver } from '../types/SocketEvents';
 
 const RECONNECT_KEY = 'mockopoly_reconnect';
 
@@ -21,6 +22,7 @@ interface GameStore {
   showPartnershipPanel: boolean;
   showDealPanel: boolean;
   screen: Screen;
+  gameOver: S_GameOver | null;
 
   // ── actions ──
   update: (state: GameState) => void;
@@ -29,11 +31,13 @@ interface GameStore {
   setReconnectToken: (token: string) => void;
   clearReconnectToken: () => void;
   addToast: (message: string, type?: ToastType) => void;
+  removeToast: (timestamp: number) => void;
   selectProperty: (index: number | null) => void;
   toggleTradePanel: (show?: boolean) => void;
   togglePartnershipPanel: (show?: boolean) => void;
   toggleDealPanel: (show?: boolean) => void;
   setScreen: (screen: Screen) => void;
+  setGameOver: (gameOver: S_GameOver | null) => void;
   reset: () => void;
 }
 
@@ -49,6 +53,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
   showPartnershipPanel: false,
   showDealPanel: false,
   screen: 'menu',
+  gameOver: null,
 
   update: (state) => set({ state }),
   setMyPlayerId: (id) => set({ myPlayerId: id }),
@@ -66,6 +71,9 @@ export const useGameStore = create<GameStore>((set, get) => ({
   addToast: (message, type = 'info') =>
     set((s) => ({ toasts: [...s.toasts, { message, type, timestamp: Date.now() }] })),
 
+  removeToast: (timestamp) =>
+    set((s) => ({ toasts: s.toasts.filter((t) => t.timestamp !== timestamp) })),
+
   selectProperty: (index) =>
     set({ selectedPropertyIndex: index, showPropertyCard: index !== null }),
   toggleTradePanel: (show) =>
@@ -75,6 +83,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
   toggleDealPanel: (show) =>
     set((s) => ({ showDealPanel: show ?? !s.showDealPanel })),
   setScreen: (screen) => set({ screen }),
+  setGameOver: (gameOver) => set({ gameOver }),
 
   reset: () => {
     get().clearReconnectToken();
@@ -89,6 +98,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
       showPartnershipPanel: false,
       showDealPanel: false,
       screen: 'menu',
+      gameOver: null,
     });
   },
 }));

@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
 import {
   useGameStore,
   selectMyPlayer,
@@ -80,5 +80,25 @@ describe('gameStore', () => {
     useGameStore.getState().setScreen('game');
     useGameStore.getState().reset();
     expect(useGameStore.getState().screen).toBe('menu');
+  });
+
+  it('stores and clears the gameOver payload', () => {
+    const go = { winnerId: 'p1', finalStandings: [] } as any;
+    useGameStore.getState().setGameOver(go);
+    expect(useGameStore.getState().gameOver).toBe(go);
+    useGameStore.getState().reset();
+    expect(useGameStore.getState().gameOver).toBe(null);
+  });
+
+  it('removes a toast by timestamp', () => {
+    const nowSpy = vi.spyOn(Date, 'now').mockReturnValueOnce(1000).mockReturnValueOnce(2000);
+    useGameStore.getState().addToast('a', 'info');
+    const ts = useGameStore.getState().toasts[0].timestamp;   // 1000
+    useGameStore.getState().addToast('b', 'error');            // 2000
+    useGameStore.getState().removeToast(ts);
+    const msgs = useGameStore.getState().toasts.map((t) => t.message);
+    expect(msgs).not.toContain('a');
+    expect(msgs).toContain('b');
+    nowSpy.mockRestore();
   });
 });
