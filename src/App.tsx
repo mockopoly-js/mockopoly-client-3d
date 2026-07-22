@@ -10,6 +10,13 @@ import { GameScene } from './screens/GameScene';
 import { TurnHud } from './ui/TurnHud';
 import { DiceDisplay } from './ui/DiceDisplay';
 import { BuyPrompt } from './ui/BuyPrompt';
+import { useGameBusEvent } from './state/useGameBus';
+import { ToastLayer } from './ui/ToastLayer';
+import { PlayerPods } from './ui/PlayerPods';
+import { PropertyListPanel } from './ui/PropertyListPanel';
+import { GameLog } from './ui/GameLog';
+import { GameOverScreen } from './screens/GameOverScreen';
+import type { S_GameOver } from './types/SocketEvents';
 
 export default function App() {
   const screen = useGameStore((s) => s.screen);
@@ -33,19 +40,28 @@ export default function App() {
     };
   }, []);
 
+  const setGameOver = useGameStore((s) => s.setGameOver);
+  const setScreen = useGameStore((s) => s.setScreen);
+  useGameBusEvent('game-over', (d: S_GameOver) => { setGameOver(d); setScreen('game-over'); });
+
   return (
     <>
       <ConnectionStatus connected={connected} playerId={playerId} />
       {screen === 'menu' && <MainMenu />}
       {screen === 'lobby' && <Lobby />}
-      {(screen === 'game' || screen === 'game-over') && (
+      {screen === 'game' && (
         <>
           <GameScene />
           <TurnHud />
           <DiceDisplay />
           <BuyPrompt />
+          <PropertyListPanel />
+          <PlayerPods />
+          <GameLog />
+          <ToastLayer />
         </>
       )}
+      {screen === 'game-over' && <GameOverScreen />}
     </>
   );
 }

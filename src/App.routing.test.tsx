@@ -33,4 +33,13 @@ describe('App routing', () => {
     // (see below — this assertion is completed once App renders TurnHud)
     expect(screen.getByTestId('canvas')).toBeTruthy();
   });
+
+  it('renders GameOverScreen on the game-over screen', () => {
+    useGameStore.getState().setGameOver({ winnerId: 'p1', finalStandings: [{ id: 'p1', name: 'Maya', token: 'red', money: 1, isBankrupt: false } as any] });
+    useGameStore.getState().setMyPlayerId('p1');
+    useGameStore.getState().setScreen('game-over');
+    render(<App />);
+    expect(screen.getByText(/you win|maya wins/i)).toBeTruthy();
+    expect(screen.queryByTestId('canvas')).toBe(null); // NOT the game canvas anymore
+  });
 });
