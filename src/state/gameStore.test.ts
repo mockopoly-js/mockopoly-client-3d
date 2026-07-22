@@ -81,4 +81,23 @@ describe('gameStore', () => {
     useGameStore.getState().reset();
     expect(useGameStore.getState().screen).toBe('menu');
   });
+
+  it('stores and clears the gameOver payload', () => {
+    const go = { winnerId: 'p1', finalStandings: [] } as any;
+    useGameStore.getState().setGameOver(go);
+    expect(useGameStore.getState().gameOver).toBe(go);
+    useGameStore.getState().reset();
+    expect(useGameStore.getState().gameOver).toBe(null);
+  });
+
+  it('removes a toast by timestamp', async () => {
+    useGameStore.getState().addToast('a', 'info');
+    const ts = useGameStore.getState().toasts[0].timestamp;
+    await new Promise((r) => setTimeout(r, 1));
+    useGameStore.getState().addToast('b', 'error');
+    useGameStore.getState().removeToast(ts);
+    const msgs = useGameStore.getState().toasts.map((t) => t.message);
+    expect(msgs).not.toContain('a');
+    expect(msgs).toContain('b');
+  });
 });
