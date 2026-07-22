@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { render, screen, act } from '@testing-library/react';
 import App from './App';
 import { useGameStore } from './state/gameStore';
+import { gameBus } from './state/gameBus';
 
 // stub the R3F Canvas so jsdom doesn't try to init WebGL
 vi.mock('@react-three/fiber', () => ({
@@ -10,6 +11,7 @@ vi.mock('@react-three/fiber', () => ({
 }));
 vi.mock('./board/BoardTiles', () => ({ BoardTiles: () => null }));
 vi.mock('./board/PlayerTokens', () => ({ PlayerTokens: () => null }));
+vi.mock('@react-three/postprocessing', () => ({ EffectComposer: () => null, Bloom: () => null, ToneMapping: () => null }));
 
 describe('App routing', () => {
   beforeEach(() => useGameStore.getState().reset());
@@ -58,5 +60,13 @@ describe('App routing', () => {
     render(<App />);
     expect(screen.getByText(/you win|maya wins/i)).toBeTruthy();
     expect(screen.queryByTestId('canvas')).toBe(null); // NOT the game canvas anymore
+  });
+
+  it('shows a big-moment banner on the game screen', () => {
+    useGameStore.getState().update({ roomCode: 'A', status: 'in-progress', players: [{ id: 'p1', name: 'Maya', token: 'red' }, { id: 'p2', name: 'Jonas', token: 'blue' }], turn: { currentPlayerId: 'p1' }, config: { maxPlayers: 4 }, properties: [] } as any);
+    useGameStore.getState().setScreen('game');
+    render(<App />);
+    act(() => { gameBus.emit('jail-sent', { playerId: 'p2' }); });
+    expect(screen.getByText(/jonas.*jail/i)).toBeTruthy();
   });
 });

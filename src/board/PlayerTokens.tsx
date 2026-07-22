@@ -89,6 +89,10 @@ export function PlayerTokens() {
         mesh.position.x = THREE.MathUtils.lerp(anim.fromX, tx, t);
         mesh.position.z = THREE.MathUtils.lerp(anim.fromZ, tz, t);
         mesh.position.y = BASE_Y + Math.sin(t * Math.PI) * HOP_H;
+        // juice: squash toward the top of the arc, pop on arrival
+        const arc = Math.sin(t * Math.PI);           // 0→1→0 over the hop
+        const s = 1 + arc * 0.12;                     // stretch up mid-hop
+        mesh.scale.set(1 + (1 - arc) * 0.06, s, 1 + (1 - arc) * 0.06);
         seeded.current[p.id] = true;
         if (t >= 1) {
           // Advance to the next tile; carry over overshoot so we stay in lockstep.
@@ -103,6 +107,7 @@ export function PlayerTokens() {
         const [x, , z] = tileToWorld(p.position);
         const [ox, oz] = restOffset(p, current);
         mesh.position.set(x + ox, BASE_Y, z + oz);
+        mesh.scale.set(1, 1, 1);
         seeded.current[p.id] = true;
       }
     }
