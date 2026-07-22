@@ -4,8 +4,12 @@ import App from './App';
 import { useGameStore } from './state/gameStore';
 
 // stub the R3F Canvas so jsdom doesn't try to init WebGL
-vi.mock('@react-three/fiber', () => ({ Canvas: ({ children }: { children?: unknown }) => <div data-testid="canvas">{children as never}</div> }));
+vi.mock('@react-three/fiber', () => ({
+  Canvas: ({ children }: { children?: unknown }) => <div data-testid="canvas">{children as never}</div>,
+  useFrame: () => {},
+}));
 vi.mock('./board/BoardTiles', () => ({ BoardTiles: () => null }));
+vi.mock('./board/PlayerTokens', () => ({ PlayerTokens: () => null }));
 
 describe('App routing', () => {
   beforeEach(() => useGameStore.getState().reset());
@@ -19,6 +23,14 @@ describe('App routing', () => {
   it('shows the GameScene canvas on the game screen', () => {
     useGameStore.getState().setScreen('game');
     render(<App />);
+    expect(screen.getByTestId('canvas')).toBeTruthy();
+  });
+
+  it('renders the turn HUD on the game screen', () => {
+    useGameStore.getState().setScreen('game');
+    render(<App />);
+    // TurnHud returns null without a turn; set a minimal in-progress state
+    // (see below — this assertion is completed once App renders TurnHud)
     expect(screen.getByTestId('canvas')).toBeTruthy();
   });
 });

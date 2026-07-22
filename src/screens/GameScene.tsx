@@ -1,5 +1,6 @@
 import { Canvas } from '@react-three/fiber';
 import { BoardTiles } from '../board/BoardTiles';
+import { PlayerTokens } from '../board/PlayerTokens';
 
 /** Phase 1 placeholder game screen: renders the static 3D board in a daylight scene. */
 export function GameScene() {
@@ -9,6 +10,7 @@ export function GameScene() {
       <ambientLight intensity={0.8} />
       <directionalLight position={[6, 10, 6]} intensity={1.1} castShadow />
       <BoardTiles />
+      <PlayerTokens />
     </Canvas>
   );
 }
