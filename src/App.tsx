@@ -16,12 +16,26 @@ import { PlayerPods } from './ui/PlayerPods';
 import { PropertyListPanel } from './ui/PropertyListPanel';
 import { GameLog } from './ui/GameLog';
 import { GameOverScreen } from './screens/GameOverScreen';
+import { MortgagePanel } from './ui/MortgagePanel';
+import { DevHacksPanel } from './ui/DevHacksPanel';
 import type { S_GameOver } from './types/SocketEvents';
 
 export default function App() {
   const screen = useGameStore((s) => s.screen);
+  const toggleDevHacks = useGameStore((s) => s.toggleDevHacks);
   const [connected, setConnected] = useState(false);
   const [playerId, setPlayerId] = useState<string | null>(null);
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.shiftKey && e.altKey && e.key.toLowerCase() === 'm') {
+        e.preventDefault();
+        toggleDevHacks();
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [toggleDevHacks]);
 
   useEffect(() => {
     const socket = socketManager.connect();
@@ -47,6 +61,7 @@ export default function App() {
   return (
     <>
       <ConnectionStatus connected={connected} playerId={playerId} />
+      <ToastLayer />
       {screen === 'menu' && <MainMenu />}
       {screen === 'lobby' && <Lobby />}
       {screen === 'game' && (
@@ -58,7 +73,8 @@ export default function App() {
           <PropertyListPanel />
           <PlayerPods />
           <GameLog />
-          <ToastLayer />
+          <MortgagePanel />
+          <DevHacksPanel />
         </>
       )}
       {screen === 'game-over' && <GameOverScreen />}

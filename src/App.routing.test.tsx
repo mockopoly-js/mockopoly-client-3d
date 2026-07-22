@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { render, screen, act } from '@testing-library/react';
 import App from './App';
 import { useGameStore } from './state/gameStore';
 
@@ -32,6 +32,15 @@ describe('App routing', () => {
     // TurnHud returns null without a turn; set a minimal in-progress state
     // (see below — this assertion is completed once App renders TurnHud)
     expect(screen.getByTestId('canvas')).toBeTruthy();
+  });
+
+  it('opens DevHacksPanel via the keyboard chord on the game screen', () => {
+    useGameStore.getState().setScreen('game');
+    render(<App />);
+    act(() => {
+      window.dispatchEvent(new KeyboardEvent('keydown', { key: 'm', metaKey: true, shiftKey: true, altKey: true }));
+    });
+    expect(useGameStore.getState().showDevHacks).toBe(true);
   });
 
   it('renders GameOverScreen on the game-over screen', () => {

@@ -21,6 +21,7 @@ interface GameStore {
   showTradePanel: boolean;
   showPartnershipPanel: boolean;
   showDealPanel: boolean;
+  showDevHacks: boolean;
   screen: Screen;
   gameOver: S_GameOver | null;
 
@@ -36,6 +37,7 @@ interface GameStore {
   toggleTradePanel: (show?: boolean) => void;
   togglePartnershipPanel: (show?: boolean) => void;
   toggleDealPanel: (show?: boolean) => void;
+  toggleDevHacks: (show?: boolean) => void;
   setScreen: (screen: Screen) => void;
   setGameOver: (gameOver: S_GameOver | null) => void;
   reset: () => void;
@@ -52,6 +54,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
   showTradePanel: false,
   showPartnershipPanel: false,
   showDealPanel: false,
+  showDevHacks: false,
   screen: 'menu',
   gameOver: null,
 
@@ -82,6 +85,8 @@ export const useGameStore = create<GameStore>((set, get) => ({
     set((s) => ({ showPartnershipPanel: show ?? !s.showPartnershipPanel })),
   toggleDealPanel: (show) =>
     set((s) => ({ showDealPanel: show ?? !s.showDealPanel })),
+  toggleDevHacks: (show) =>
+    set((s) => ({ showDevHacks: show ?? !s.showDevHacks })),
   setScreen: (screen) => set({ screen }),
   setGameOver: (gameOver) => set({ gameOver }),
 
@@ -97,6 +102,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
       showTradePanel: false,
       showPartnershipPanel: false,
       showDealPanel: false,
+      showDevHacks: false,
       screen: 'menu',
       gameOver: null,
     });
