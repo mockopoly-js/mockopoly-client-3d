@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { socketManager } from '../network/SocketManager';
 import { gameBus } from '../state/gameBus';
-import { useGameStore, getStoredReconnectToken, selectMyPlayer } from '../state/gameStore';
+import { useGameStore, getStoredReconnectToken } from '../state/gameStore';
 import { EVENTS } from '../types/SocketEvents';
 import { TOKEN_HEX } from '../constants/theme';
 import type { TokenType } from '../types/GameState';
@@ -20,9 +20,16 @@ export function MainMenu() {
       const store = useGameStore.getState();
       store.setRoomCode(state.roomCode);
       store.update(state);
-      store.setMyPlayerId(socketManager.playerId ?? '');
-      const me = selectMyPlayer(useGameStore.getState());
-      if (me?.reconnectToken) store.setReconnectToken(me.reconnectToken);
+      // The server assigns each player a uuid as player.id (NOT socket.id / connect-ack id).
+      // The just-added local player is the last entry in the freshly-returned state
+      // (the creator when alone; the joiner is appended last) — mirrors the 2D client.
+      // NOTE: does not self-identify on a reconnect that re-attaches an existing (non-last)
+      // player slot; refine when reconnect UX lands.
+      const me = state.players[state.players.length - 1];
+      if (me) {
+        store.setMyPlayerId(me.id);
+        store.setReconnectToken(me.reconnectToken);
+      }
     };
     const onCreated = (d: S_RoomCreated) => { applyJoined(d.state); useGameStore.getState().setScreen('lobby'); };
     const onJoined = (d: S_RoomJoined) => {

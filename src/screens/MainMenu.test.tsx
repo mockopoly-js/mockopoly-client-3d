@@ -20,7 +20,8 @@ describe('MainMenu', () => {
   beforeEach(() => {
     useGameStore.getState().reset();
     vi.restoreAllMocks();
-    vi.spyOn(socketManager, 'playerId', 'get').mockReturnValue('p1');
+    // Deliberately different from player.id ('p1') — proves identity comes from state, not socket.
+    vi.spyOn(socketManager, 'playerId', 'get').mockReturnValue('socket-temp');
   });
 
   it('disables CREATE until a name is entered', () => {
@@ -39,13 +40,15 @@ describe('MainMenu', () => {
     expect(emit).toHaveBeenCalledWith(EVENTS.ROOM_CREATE, { playerName: 'Maya', token: 'red' });
   });
 
-  it('on room-created: writes store, sets my id, navigates to lobby', () => {
+  it('on room-created: writes store, sets my id from state (not socket.id), navigates to lobby', () => {
     render(<MainMenu />);
     act(() => { gameBus.emit('room-created', { roomCode: 'ABCD', state: fakeState() }); });
     const s = useGameStore.getState();
     expect(s.roomCode).toBe('ABCD');
     expect(s.state?.roomCode).toBe('ABCD');
+    // myPlayerId must be 'p1' (from state.players[last].id), NOT 'socket-temp' (socketManager.playerId)
     expect(s.myPlayerId).toBe('p1');
+    expect(s.reconnectToken).toBe('tok-1');
     expect(s.screen).toBe('lobby');
   });
 

@@ -13,7 +13,7 @@ export function Lobby() {
   const [countdown, setCountdown] = useState<number | null>(null);
 
   const players: Player[] = state?.players ?? [];
-  const myId = socketManager.playerId;
+  const myId = useGameStore((s) => s.myPlayerId);
   const me = selectMyPlayer(useGameStore.getState());
   const isHost = !!me?.isHost;
   const status = state?.status;
