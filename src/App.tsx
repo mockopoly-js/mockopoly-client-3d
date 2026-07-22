@@ -22,6 +22,7 @@ import { TradePanel } from './ui/TradePanel';
 import { PartnershipPanel } from './ui/PartnershipPanel';
 import { DealPanel } from './ui/DealPanel';
 import { HudButtons } from './ui/HudButtons';
+import { BigMomentOverlay } from './ui/BigMomentOverlay';
 import type { S_GameOver } from './types/SocketEvents';
 
 export default function App() {
@@ -93,6 +94,7 @@ export default function App() {
           <TradePanel />
           <PartnershipPanel />
           <DealPanel />
+          <BigMomentOverlay />
         </>
       )}
       {screen === 'game-over' && <GameOverScreen />}
