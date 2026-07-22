@@ -27,7 +27,7 @@ export function Lobby() {
   useEffect(() => {
     const onTick = (d: { seconds: number }) => setCountdown(d.seconds);
     gameBus.on('countdown', onTick);
-    return () => gameBus.off('countdown', onTick);
+    return () => { gameBus.off('countdown', onTick); };
   }, []);
 
   const toggleReady = () => socketManager.emit(EVENTS.ROOM_READY, { isReady: !me?.isReady });
