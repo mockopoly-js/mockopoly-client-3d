@@ -1,4 +1,4 @@
-import type { GameState, Player, TradeOffer, DrawnCard, CardEffect, AuctionState, SpaceType, TokenType, Partnership, PartnershipProposal, PartnershipDissolutionRequest, PartnershipEquity, RentDeal, ColorGroup, DevHacks } from './GameState';
+import type { GameState, Player, TradeOffer, DrawnCard, CardEffect, SpaceType, TokenType, Partnership, PartnershipProposal, PartnershipEquity, RentDeal, ColorGroup, DevHacks } from './GameState';
 
 // ─── Event Name Constants ─────────────────────────────────────────────────────
 
