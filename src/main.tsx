@@ -1,10 +1,10 @@
-import { createRoot } from 'react-dom/client';
+import React from 'react';
+import ReactDOM from 'react-dom/client';
+import App from './App';
+import './index.css';
 
-function App() {
-  return <div>Mockopoly 3D</div>;
-}
-
-const root = document.getElementById('root');
-if (root) {
-  createRoot(root).render(<App />);
-}
+ReactDOM.createRoot(document.getElementById('root')!).render(
+  <React.StrictMode>
+    <App />
+  </React.StrictMode>,
+);
