@@ -10,6 +10,7 @@ vi.mock('@react-three/fiber', () => ({
 }));
 vi.mock('./board/BoardTiles', () => ({ BoardTiles: () => null }));
 vi.mock('./board/PlayerTokens', () => ({ PlayerTokens: () => null }));
+vi.mock('@react-three/postprocessing', () => ({ EffectComposer: () => null, Bloom: () => null, ToneMapping: () => null }));
 
 describe('App routing', () => {
   beforeEach(() => useGameStore.getState().reset());
