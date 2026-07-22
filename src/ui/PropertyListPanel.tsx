@@ -7,6 +7,7 @@ export function PropertyListPanel() {
   const properties: PropertyState[] = useGameStore((s) => s.state?.properties) ?? [];
   const partnerships: Partnership[] = useGameStore((s) => s.state?.partnerships) ?? [];
   const myId = useGameStore((s) => s.myPlayerId);
+  const selectProperty = useGameStore((s) => s.selectProperty);
   if (!myId) return null;
 
   const myPartnerGroups = new Set(
@@ -35,7 +36,7 @@ export function PropertyListPanel() {
         ].filter(Boolean).join(' ');
         const accent = space?.colorGroup ? COLOR_GROUP_HEX[space.colorGroup] : '#555570';
         return (
-          <div key={p.spaceIndex} style={{ ...row, opacity: p.isMortgaged ? 0.6 : 1 }}>
+          <div key={p.spaceIndex} style={{ ...row, opacity: p.isMortgaged ? 0.6 : 1, cursor: 'pointer' }} onClick={() => selectProperty(p.spaceIndex)}>
             <span style={{ width: 4, alignSelf: 'stretch', borderRadius: 2, background: accent }} />
             <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{space?.name ?? `#${p.spaceIndex}`}</span>
             {badges && <span style={{ color: '#8888a0', fontWeight: 700, fontSize: 11 }}>{badges}</span>}
