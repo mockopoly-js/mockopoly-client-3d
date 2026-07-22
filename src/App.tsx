@@ -7,6 +7,9 @@ import { ConnectionStatus } from './ui/ConnectionStatus';
 import { MainMenu } from './screens/MainMenu';
 import { Lobby } from './screens/Lobby';
 import { GameScene } from './screens/GameScene';
+import { TurnHud } from './ui/TurnHud';
+import { DiceDisplay } from './ui/DiceDisplay';
+import { BuyPrompt } from './ui/BuyPrompt';
 
 export default function App() {
   const screen = useGameStore((s) => s.screen);
@@ -35,7 +38,14 @@ export default function App() {
       <ConnectionStatus connected={connected} playerId={playerId} />
       {screen === 'menu' && <MainMenu />}
       {screen === 'lobby' && <Lobby />}
-      {(screen === 'game' || screen === 'game-over') && <GameScene />}
+      {(screen === 'game' || screen === 'game-over') && (
+        <>
+          <GameScene />
+          <TurnHud />
+          <DiceDisplay />
+          <BuyPrompt />
+        </>
+      )}
     </>
   );
 }
