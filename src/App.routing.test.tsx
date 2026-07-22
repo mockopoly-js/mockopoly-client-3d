@@ -43,6 +43,14 @@ describe('App routing', () => {
     expect(useGameStore.getState().showDevHacks).toBe(true);
   });
 
+  it('auto-opens the deal panel when I must pay rent', () => {
+    useGameStore.getState().setMyPlayerId('p1');
+    useGameStore.getState().update({ roomCode: 'A', status: 'in-progress', players: [{ id: 'p1', name: 'M', token: 'red' }], turn: { currentPlayerId: 'p1', mustPayRent: true }, config: { maxPlayers: 4 }, properties: [] } as any);
+    useGameStore.getState().setScreen('game');
+    render(<App />);
+    expect(useGameStore.getState().showDealPanel).toBe(true);
+  });
+
   it('renders GameOverScreen on the game-over screen', () => {
     useGameStore.getState().setGameOver({ winnerId: 'p1', finalStandings: [{ id: 'p1', name: 'Maya', token: 'red', money: 1, isBankrupt: false } as any] });
     useGameStore.getState().setMyPlayerId('p1');

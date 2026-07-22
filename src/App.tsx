@@ -18,11 +18,20 @@ import { GameLog } from './ui/GameLog';
 import { GameOverScreen } from './screens/GameOverScreen';
 import { MortgagePanel } from './ui/MortgagePanel';
 import { DevHacksPanel } from './ui/DevHacksPanel';
+import { TradePanel } from './ui/TradePanel';
+import { PartnershipPanel } from './ui/PartnershipPanel';
+import { DealPanel } from './ui/DealPanel';
+import { HudButtons } from './ui/HudButtons';
 import type { S_GameOver } from './types/SocketEvents';
 
 export default function App() {
   const screen = useGameStore((s) => s.screen);
   const toggleDevHacks = useGameStore((s) => s.toggleDevHacks);
+  const toggleDealPanel = useGameStore((s) => s.toggleDealPanel);
+  const mustPay = useGameStore(
+    (s) =>
+      !!(s.state?.turn?.mustPayRent && s.state?.turn?.currentPlayerId === s.myPlayerId),
+  );
   const [connected, setConnected] = useState(false);
   const [playerId, setPlayerId] = useState<string | null>(null);
 
@@ -57,6 +66,11 @@ export default function App() {
   const setGameOver = useGameStore((s) => s.setGameOver);
   const setScreen = useGameStore((s) => s.setScreen);
   useGameBusEvent('game-over', (d: S_GameOver) => { setGameOver(d); setScreen('game-over'); });
+  useGameBusEvent('open-negotiation', () => toggleDealPanel(true));
+
+  useEffect(() => {
+    if (mustPay) toggleDealPanel(true);
+  }, [mustPay, toggleDealPanel]);
 
   return (
     <>
@@ -75,6 +89,10 @@ export default function App() {
           <GameLog />
           <MortgagePanel />
           <DevHacksPanel />
+          <HudButtons />
+          <TradePanel />
+          <PartnershipPanel />
+          <DealPanel />
         </>
       )}
       {screen === 'game-over' && <GameOverScreen />}
