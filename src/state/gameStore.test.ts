@@ -101,4 +101,15 @@ describe('gameStore', () => {
     expect(msgs).toContain('b');
     nowSpy.mockRestore();
   });
+
+  it('toggles the dev-hacks panel and reset closes it', () => {
+    expect(useGameStore.getState().showDevHacks).toBe(false);
+    useGameStore.getState().toggleDevHacks(true);
+    expect(useGameStore.getState().showDevHacks).toBe(true);
+    useGameStore.getState().toggleDevHacks();       // flips → false
+    expect(useGameStore.getState().showDevHacks).toBe(false);
+    useGameStore.getState().toggleDevHacks(true);
+    useGameStore.getState().reset();
+    expect(useGameStore.getState().showDevHacks).toBe(false);
+  });
 });
