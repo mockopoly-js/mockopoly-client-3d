@@ -69,4 +69,16 @@ describe('gameStore', () => {
     useGameStore.getState().selectProperty(null);
     expect(useGameStore.getState().showPropertyCard).toBe(false);
   });
+
+  it('starts on the menu screen and can navigate', () => {
+    expect(useGameStore.getState().screen).toBe('menu');
+    useGameStore.getState().setScreen('lobby');
+    expect(useGameStore.getState().screen).toBe('lobby');
+  });
+
+  it('reset returns to the menu screen', () => {
+    useGameStore.getState().setScreen('game');
+    useGameStore.getState().reset();
+    expect(useGameStore.getState().screen).toBe('menu');
+  });
 });

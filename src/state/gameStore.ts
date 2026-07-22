@@ -4,6 +4,8 @@ import type { ToastMessage, ToastType } from '../types/ui';
 
 const RECONNECT_KEY = 'mockopoly_reconnect';
 
+export type Screen = 'menu' | 'lobby' | 'game' | 'game-over';
+
 interface GameStore {
   // ── durable mirror of server state (was LocalGameState) ──
   state: GameState | null;
@@ -18,6 +20,7 @@ interface GameStore {
   showTradePanel: boolean;
   showPartnershipPanel: boolean;
   showDealPanel: boolean;
+  screen: Screen;
 
   // ── actions ──
   update: (state: GameState) => void;
@@ -30,6 +33,7 @@ interface GameStore {
   toggleTradePanel: (show?: boolean) => void;
   togglePartnershipPanel: (show?: boolean) => void;
   toggleDealPanel: (show?: boolean) => void;
+  setScreen: (screen: Screen) => void;
   reset: () => void;
 }
 
@@ -44,6 +48,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
   showTradePanel: false,
   showPartnershipPanel: false,
   showDealPanel: false,
+  screen: 'menu',
 
   update: (state) => set({ state }),
   setMyPlayerId: (id) => set({ myPlayerId: id }),
@@ -69,6 +74,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
     set((s) => ({ showPartnershipPanel: show ?? !s.showPartnershipPanel })),
   toggleDealPanel: (show) =>
     set((s) => ({ showDealPanel: show ?? !s.showDealPanel })),
+  setScreen: (screen) => set({ screen }),
 
   reset: () => {
     get().clearReconnectToken();
@@ -82,6 +88,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
       showTradePanel: false,
       showPartnershipPanel: false,
       showDealPanel: false,
+      screen: 'menu',
     });
   },
 }));
