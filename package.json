@@ -10,7 +10,8 @@
     "preview": "vite preview",
     "test": "vitest run",
     "test:watch": "vitest",
-    "sync-contract": "node scripts/sync-contract.mjs"
+    "sync-contract": "node scripts/sync-contract.mjs",
+    "models:build": "/Applications/Blender.app/Contents/MacOS/Blender --background --python scripts/blender/gen_models.py"
   },
   "keywords": [],
   "author": "",
@@ -28,6 +29,7 @@
     "zustand": "^5.0.14"
   },
   "devDependencies": {
+    "@gltf-transform/core": "^4.4.1",
     "@testing-library/dom": "^10.4.1",
     "@testing-library/react": "^16.3.2",
     "@types/react": "^18.3.31",
