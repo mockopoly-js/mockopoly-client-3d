@@ -11,6 +11,7 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "sync-contract": "node scripts/sync-contract.mjs",
+    "icons:build": "node scripts/gen-icons.mjs",
     "models:tokens": "/Applications/Blender.app/Contents/MacOS/Blender --background --python scripts/blender/gen_tokens.py",
     "models:buildings": "/Applications/Blender.app/Contents/MacOS/Blender --background --python scripts/blender/gen_buildings.py",
     "models:city": "/Applications/Blender.app/Contents/MacOS/Blender --background --python scripts/blender/gen_city.py",
@@ -41,8 +42,10 @@
     "@types/three": "^0.169.0",
     "@vitejs/plugin-react": "^4.7.0",
     "jsdom": "^25.0.1",
+    "sharp": "^0.35.3",
     "typescript": "^5.9.3",
     "vite": "^5.4.21",
+    "vite-plugin-pwa": "^1.3.0",
     "vitest": "^2.1.9"
   }
 }
