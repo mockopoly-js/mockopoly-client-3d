@@ -114,7 +114,7 @@ def build_house() -> bpy.types.Object:
         return HOUSE_ROOF if co.z >= roof_z else HOUSE_WALL
 
     lib.apply_material_and_colors(obj, house_color)
-    lib.apply_smooth_modifiers(obj, bevel_width=0.008, bevel_segments=1, subsurf_levels=0)
+    lib.apply_smooth_modifiers(obj, bevel_width=0.016, bevel_segments=2, subsurf_levels=1)
     return obj
 
 
@@ -156,7 +156,7 @@ def build_hotel() -> bpy.types.Object:
         return HOTEL_ROOF if co.z >= roof_z else HOTEL_WALL
 
     lib.apply_material_and_colors(obj, hotel_color)
-    lib.apply_smooth_modifiers(obj, bevel_width=0.010, bevel_segments=1, subsurf_levels=0)
+    lib.apply_smooth_modifiers(obj, bevel_width=0.018, bevel_segments=2, subsurf_levels=1)
     return obj
 
 

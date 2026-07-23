@@ -201,9 +201,13 @@ def build_dog() -> bpy.types.Object:
 
 
 def build_ship() -> bpy.types.Object:
-    """Battleship: tapered hull + flat deck + 2 smokestacks."""
+    """Battleship: tapered hull + flat deck + 2 smokestacks.
+    Geometry scaled by S=0.80 so footprint radius ~0.32 (matching the token set).
+    Original footprint radius was ~0.40 (bow tip at y=0.40).
+    """
     bm = bmesh.new()
-    hull_h = 0.16
+    S = 0.865  # uniform scale: total Y-span 0.74*S → 0.64 → footprintR ~0.32
+    hull_h = 0.16 * S
     # Tapered hull: bottom narrow, top wide, pointed bow (+y).
     # Build as a lofted box using two rings of 4 verts (rectangles) — bow taper.
     def rect(y_front, y_back, half_w_front, half_w_back, z, taper_front=0.0):
@@ -213,21 +217,21 @@ def build_ship() -> bpy.types.Object:
             bm.verts.new((half_w_front - taper_front, y_front, z)),
             bm.verts.new((-half_w_front + taper_front, y_front, z)),
         ]
-    y_front, y_back = 0.40, -0.34
-    lower = rect(y_front, y_back, 0.10, 0.14, 0.0, taper_front=0.07)
-    upper = rect(y_front, y_back, 0.16, 0.20, hull_h, taper_front=0.10)
+    y_front, y_back = 0.40 * S, -0.34 * S
+    lower = rect(y_front, y_back, 0.10 * S, 0.14 * S, 0.0, taper_front=0.07 * S)
+    upper = rect(y_front, y_back, 0.16 * S, 0.20 * S, hull_h, taper_front=0.10 * S)
     lib.bridge(bm, lower, upper)
     bm.faces.new(tuple(reversed(lower)))  # hull bottom
     # deck (flat top box)
-    add_box(bm, 0.0, 0.0, hull_h + 0.03, 0.30, 0.58, 0.06)
+    add_box(bm, 0.0, 0.0, hull_h + 0.03 * S, 0.30 * S, 0.58 * S, 0.06 * S)
     # superstructure block
-    add_box(bm, 0.0, -0.02, hull_h + 0.13, 0.20, 0.24, 0.14)
+    add_box(bm, 0.0, -0.02 * S, hull_h + 0.13 * S, 0.20 * S, 0.24 * S, 0.14 * S)
     # 2 smokestacks
-    add_cylinder(bm, 0.0, 0.02, hull_h + 0.20, hull_h + 0.40, 0.05, segments=14)
-    add_cylinder(bm, 0.0, -0.14, hull_h + 0.20, hull_h + 0.40, 0.05, segments=14)
+    add_cylinder(bm, 0.0, 0.02 * S, hull_h + 0.20 * S, hull_h + 0.40 * S, 0.05 * S, segments=14)
+    add_cylinder(bm, 0.0, -0.14 * S, hull_h + 0.20 * S, hull_h + 0.40 * S, 0.05 * S, segments=14)
     obj = lib.finalize_bmesh(bm, "Ship")
     lib.apply_material_and_colors(obj, WHITE)
-    lib.apply_smooth_modifiers(obj, bevel_width=0.015, subsurf_levels=1)
+    lib.apply_smooth_modifiers(obj, bevel_width=0.012, subsurf_levels=1)
     return obj
 
 
