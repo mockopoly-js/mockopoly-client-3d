@@ -148,7 +148,7 @@ export function PlayerTokens() {
             {/* Subtle white base disc for legibility on colored tiles — a child
                 of the group, so it follows the animated transform for free
                 (same role the ring played as a child of the old cylinder mesh). */}
-            <mesh position={[0, -0.12, 0]} castShadow>
+            <mesh position={[0, -0.12, 0]}>
               <cylinderGeometry args={[0.32, 0.32, 0.04, 24]} />
               <meshStandardMaterial color="#ffffff" />
             </mesh>
