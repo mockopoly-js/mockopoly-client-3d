@@ -11,6 +11,18 @@ vi.mock('@react-three/fiber', () => ({
 }));
 vi.mock('./board/BoardTiles', () => ({ BoardTiles: () => null }));
 vi.mock('./board/PlayerTokens', () => ({ PlayerTokens: () => null }));
+// Dice3D (now mounted in GameScene) drives three via useFrame; stub it out so
+// jsdom never exercises the R3F frame loop — the tumble is browser-only.
+vi.mock('./board/Dice3D', () => ({ Dice3D: () => null }));
+// CameraRig uses drei OrbitControls which needs a real WebGL renderer; stub it
+// out so jsdom never exercises OrbitControls internals.
+vi.mock('./board/CameraRig', () => ({ CameraRig: () => null }));
+// SoftShadows (directly in GameScene) calls useThree internally, which throws
+// outside a real Canvas. Stub it out so jsdom routing tests pass.
+vi.mock('@react-three/drei', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@react-three/drei')>();
+  return { ...actual, SoftShadows: () => null };
+});
 // ModelMesh calls drei useGLTF, which tries to fetch a .glb over jsdom's
 // (broken) FileLoader — stub it out; the .glb load is exercised in the browser.
 // Buildings + CityDressing (now mounted in GameScene) call `ModelMesh.preload`
