@@ -8,7 +8,7 @@ import {
 } from '@react-three/rapier';
 import * as THREE from 'three';
 import { useGameBusEvent } from '../state/useGameBus';
-import { FACE_NORMAL, resolveQuaternion } from './dice-orientation';
+import { FACE_NORMAL, resolveQuaternion, resolveQuaternionNear } from './dice-orientation';
 
 // ---- Geometry / placement constants -----------------------------------------
 const DIE_SIZE = 0.5;               // cube edge length
@@ -139,36 +139,10 @@ function DieMesh() {
 }
 
 // ---- Predetermined-orientation helper ---------------------------------------
-// resolveQuaternion(value) puts `value`'s face up but leaves the yaw (spin about
-// the vertical) arbitrary. To make the correction read as a small settle rather
-// than a jarring snap, we add the yaw-about-Y that best matches the die's
-// current resting orientation. We scan the 4 in-plane 90° rotations (the cube
-// symmetries that keep the same face up) plus a continuous yaw fit, and pick the
-// closest by quaternion dot. The face shown is ALWAYS `value` — only yaw varies.
-const YAW_STEPS = 4; // 0, 90, 180, 270 about world-Y
-const _tmpBase = new THREE.Quaternion();
-const _tmpYaw = new THREE.Quaternion();
-const _tmpCand = new THREE.Quaternion();
-const _yAxis = new THREE.Vector3(0, 1, 0);
-
-function resolveQuaternionNear(value: number, current: THREE.Quaternion): THREE.Quaternion {
-  _tmpBase.copy(resolveQuaternion(value));
-  let best = new THREE.Quaternion().copy(_tmpBase);
-  let bestDot = -Infinity;
-  for (let k = 0; k < YAW_STEPS; k++) {
-    const angle = (k * Math.PI) / 2;
-    _tmpYaw.setFromAxisAngle(_yAxis, angle);
-    // Yaw is applied in WORLD space (pre-multiply): keeps `value` up, spins die.
-    _tmpCand.copy(_tmpYaw).multiply(_tmpBase);
-    // Quaternion "distance" is symmetric under q/-q; use abs(dot).
-    const dot = Math.abs(_tmpCand.dot(current));
-    if (dot > bestDot) {
-      bestDot = dot;
-      best = new THREE.Quaternion().copy(_tmpCand);
-    }
-  }
-  return best;
-}
+// resolveQuaternionNear (imported from dice-orientation.ts) puts `value`'s face
+// up and then picks the yaw (rotation about world-Y) that keeps the correction
+// looking like a small settle. It is defined in dice-orientation.ts so it can be
+// unit-tested without pulling in R3F / Rapier.
 
 // ---- Per-die runtime state (refs, no React re-render) ------------------------
 type Phase = 'idle' | 'tumbling' | 'snapping' | 'holding';
@@ -332,6 +306,26 @@ export function Dice3D() {
             REST_Y,
             THREE.MathUtils.clamp(t.z, -PLAY_HALF + HALF, PLAY_HALF - HALF),
           );
+          // Overlap nudge: if this die's rest pos overlaps die[1-i]'s already-set
+          // snap pos, push it apart along the axis with the least separation so
+          // the two dice don't visually interpenetrate. Values are unchanged.
+          const other = states.current[1 - i];
+          if (other.phase === 'snapping' || other.phase === 'holding') {
+            const dx = Math.abs(s.snapPos.x - other.snapPos.x);
+            const dz = Math.abs(s.snapPos.z - other.snapPos.z);
+            if (dx < DIE_SIZE && dz < DIE_SIZE) {
+              // Nudge along the axis with least current separation (or X by default).
+              if (dz <= dx) {
+                const sepZ = DIE_SIZE - dz + 0.01;
+                s.snapPos.z += s.snapPos.z >= other.snapPos.z ? sepZ : -sepZ;
+                s.snapPos.z = THREE.MathUtils.clamp(s.snapPos.z, -PLAY_HALF + HALF, PLAY_HALF - HALF);
+              } else {
+                const sepX = DIE_SIZE - dx + 0.01;
+                s.snapPos.x += s.snapPos.x >= other.snapPos.x ? sepX : -sepX;
+                s.snapPos.x = THREE.MathUtils.clamp(s.snapPos.x, -PLAY_HALF + HALF, PLAY_HALF - HALF);
+              }
+            }
+          }
           // Freeze physics: kinematic bodies ignore gravity/collisions.
           body.setBodyType(2 /* KinematicPositionBased */, true);
           body.setLinvel({ x: 0, y: 0, z: 0 }, true);
