@@ -5,6 +5,7 @@ import { EVENTS } from '../types/SocketEvents';
 import { BOARD_SPACES } from '../constants/board';
 import { COLOR_GROUP_HEX } from '../constants/theme';
 import { formatMoney } from '../utils/format';
+import { useIsMobile } from './useIsMobile';
 
 const BUYABLE = ['property', 'railroad', 'utility'];
 
@@ -13,6 +14,7 @@ export function BuyPrompt() {
   const isMyTurn = useGameStore(selectIsMyTurn);
   const phase = useGameStore((s) => s.state?.turn.phase);
   const properties = useGameStore((s) => s.state?.properties);
+  const isMobile = useIsMobile();
 
   if (!me || !isMyTurn || phase !== 'action') return null;
 
@@ -29,25 +31,38 @@ export function BuyPrompt() {
   const buy = () => socketManager.emit(EVENTS.TURN_BUY_PROPERTY);
   const decline = () => socketManager.emit(EVENTS.TURN_PASS_BUY);
 
+  const inner = (
+    <>
+      <div style={{ height: 10, borderRadius: 6, background: accent, marginBottom: 12 }} />
+      <div style={{ fontWeight: 800, fontSize: 20 }}>{space.name}</div>
+      <div style={{ color: '#9a8f7c', margin: '4px 0 16px', fontVariantNumeric: 'tabular-nums' }}>
+        Price {formatMoney(price)}
+      </div>
+      <div style={{ display: 'flex', gap: 10 }}>
+        <button onClick={buy} disabled={!canAfford} style={{ ...btn, ...(canAfford ? buyBtn : disabledBtn) }}>Buy</button>
+        <button onClick={decline} style={{ ...btn, ...declineBtn }}>Decline</button>
+      </div>
+      {!canAfford && <div style={{ color: '#e5533d', marginTop: 8, fontSize: 13 }}>Not enough cash</div>}
+    </>
+  );
+
+  if (isMobile) {
+    return (
+      <div style={wrapMobile}>
+        <div style={sheetMobile}>{inner}</div>
+      </div>
+    );
+  }
+
   return (
     <div style={wrap}>
-      <div style={card}>
-        <div style={{ height: 10, borderRadius: 6, background: accent, marginBottom: 12 }} />
-        <div style={{ fontWeight: 800, fontSize: 20 }}>{space.name}</div>
-        <div style={{ color: '#9a8f7c', margin: '4px 0 16px', fontVariantNumeric: 'tabular-nums' }}>
-          Price {formatMoney(price)}
-        </div>
-        <div style={{ display: 'flex', gap: 10 }}>
-          <button onClick={buy} disabled={!canAfford} style={{ ...btn, ...(canAfford ? buyBtn : disabledBtn) }}>Buy</button>
-          <button onClick={decline} style={{ ...btn, ...declineBtn }}>Decline</button>
-        </div>
-        {!canAfford && <div style={{ color: '#e5533d', marginTop: 8, fontSize: 13 }}>Not enough cash</div>}
-      </div>
+      <div style={card}>{inner}</div>
     </div>
   );
 }
 
 const FONT = "ui-rounded, system-ui, sans-serif";
+// ── Desktop styles (unchanged) ──
 const wrap: React.CSSProperties = {
   position: 'fixed', inset: 0, display: 'grid', placeItems: 'center', fontFamily: FONT, zIndex: 40, pointerEvents: 'none',
 };
@@ -59,3 +74,14 @@ const btn: React.CSSProperties = { fontFamily: FONT, fontWeight: 800, border: 'n
 const buyBtn: React.CSSProperties = { background: '#46b16a', color: '#fff' };
 const declineBtn: React.CSSProperties = { background: '#e7dcbf', color: '#3b3224' };
 const disabledBtn: React.CSSProperties = { background: '#d8ccae', color: '#9a8f7c', cursor: 'default' };
+// ── Mobile bottom-sheet styles ──
+const wrapMobile: React.CSSProperties = {
+  position: 'fixed', inset: 0, fontFamily: FONT, zIndex: 40, display: 'flex', alignItems: 'flex-end',
+};
+const sheetMobile: React.CSSProperties = {
+  background: '#fbf6ec', color: '#3b3224',
+  borderRadius: '20px 20px 0 0', padding: 22,
+  width: '100vw', maxHeight: '85vh', overflowY: 'auto',
+  boxShadow: '0 -8px 40px -8px rgba(0,0,0,.6)',
+  paddingBottom: 'calc(22px + env(safe-area-inset-bottom))',
+};

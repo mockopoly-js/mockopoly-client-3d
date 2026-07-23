@@ -3,6 +3,7 @@ import { useGameStore } from '../state/gameStore';
 import { socketManager } from '../network/SocketManager';
 import { EVENTS } from '../types/SocketEvents';
 import { formatMoney } from '../utils/format';
+import { useIsMobile } from './useIsMobile';
 import type { Player, RentDeal } from '../types/GameState';
 
 export function DealPanel() {
@@ -21,18 +22,22 @@ export function DealPanel() {
   // Hooks MUST be before early return to avoid conditional hook errors
   const [offerMoney, setOfferMoney] = useState(0);
   const [exemption, setExemption] = useState(0);
+  const isMobile = useIsMobile();
 
   if (!isOpen || !turn) return null;
 
   const name = (id: string) => players.find((p) => p.id === id)?.name ?? id;
   const emit = (ev: string, payload: object) => socketManager.emit(ev, payload);
 
+  const outerWrap = isMobile ? wrapMobile : wrap;
+  const innerCard = isMobile ? sheetMobile : card;
+
   // ── active deal negotiation ──
   if (deal) {
     const iAmLast = deal.lastOfferBy === myId;
     const amDebtor = deal.debtorId === myId;
     return (
-      <div style={wrap}><div style={card}>
+      <div style={outerWrap}><div style={innerCard}>
         <Hdr title="Rent Deal" onClose={() => close(false)} />
         <div style={line}>{name(deal.debtorId)} owes {formatMoney(deal.totalRentOwed)}</div>
         <div style={line}>Offer: {formatMoney(deal.offeredMoney)}{deal.offeredProperties.length ? ` + ${deal.offeredProperties.length} propertie(s)` : ''} for {formatMoney(deal.requestedExemption)} exemption</div>
@@ -62,7 +67,7 @@ export function DealPanel() {
   });
 
   return (
-    <div style={wrap}><div style={card}>
+    <div style={outerWrap}><div style={innerCard}>
       <Hdr title="Can't pay rent?" onClose={() => close(false)} />
       <div style={line}>You owe {formatMoney(owed)} to {creditorIds.map(name).join(', ') || '—'}</div>
 
@@ -96,8 +101,12 @@ function Hdr({ title, onClose }: { title: string; onClose: () => void }) {
 }
 
 const F = 'ui-rounded, system-ui, sans-serif';
+// ── Desktop styles (unchanged) ──
 const wrap: React.CSSProperties = { position: 'fixed', inset: 0, display: 'grid', placeItems: 'center', background: 'rgba(0,0,0,.5)', zIndex: 40, fontFamily: F };
 const card: React.CSSProperties = { background: '#12121e', color: '#e8e8f0', borderRadius: 16, padding: 20, width: 400, maxWidth: '92vw', boxShadow: '0 24px 60px -20px rgba(0,0,0,.7)' };
+// ── Mobile bottom-sheet styles ──
+const wrapMobile: React.CSSProperties = { position: 'fixed', inset: 0, background: 'rgba(0,0,0,.5)', zIndex: 40, fontFamily: F, display: 'flex', alignItems: 'flex-end' };
+const sheetMobile: React.CSSProperties = { background: '#12121e', color: '#e8e8f0', borderRadius: '20px 20px 0 0', padding: 20, width: '100vw', maxHeight: '85vh', overflowY: 'auto', boxShadow: '0 -8px 40px -8px rgba(0,0,0,.7)', paddingBottom: 'calc(20px + env(safe-area-inset-bottom))' };
 const hdr: React.CSSProperties = { display: 'flex', alignItems: 'center', marginBottom: 12 };
 const x: React.CSSProperties = { background: 'none', border: 'none', color: '#8888a0', fontSize: 22, cursor: 'pointer' };
 const line: React.CSSProperties = { fontSize: 14, margin: '4px 0' };

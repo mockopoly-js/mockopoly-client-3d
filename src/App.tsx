@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { lazy, Suspense, useEffect, useState } from 'react';
 import { socketManager } from './network/SocketManager';
 import { gameStateSync } from './network/GameStateSync';
 import { useGameStore } from './state/gameStore';
@@ -6,7 +6,7 @@ import { EVENTS } from './types/SocketEvents';
 import { ConnectionStatus } from './ui/ConnectionStatus';
 import { MainMenu } from './screens/MainMenu';
 import { Lobby } from './screens/Lobby';
-import { GameScene } from './screens/GameScene';
+import { LoadingScreen } from './ui/LoadingScreen';
 import { TurnHud } from './ui/TurnHud';
 import { BuyPrompt } from './ui/BuyPrompt';
 import { useGameBusEvent } from './state/useGameBus';
@@ -26,6 +26,13 @@ import { MuteButton } from './ui/MuteButton';
 import { useSfx } from './audio/useSfx';
 import { initAudioOnGesture } from './audio/sfx';
 import type { S_GameOver } from './types/SocketEvents';
+
+// Lazy-load the 3D GameScene so three/drei/postprocessing land in an async
+// chunk fetched only when the game starts — kept off the initial (menu/lobby)
+// critical path. Declared after all imports (ordering only; behavior identical).
+const GameScene = lazy(() =>
+  import('./screens/GameScene').then((m) => ({ default: m.GameScene })),
+);
 
 export default function App() {
   const screen = useGameStore((s) => s.screen);
@@ -105,7 +112,9 @@ export default function App() {
       {screen === 'lobby' && <Lobby />}
       {screen === 'game' && (
         <>
-          <GameScene />
+          <Suspense fallback={<LoadingScreen />}>
+            <GameScene />
+          </Suspense>
           <TurnHud />
           <BuyPrompt />
           <PropertyListPanel />

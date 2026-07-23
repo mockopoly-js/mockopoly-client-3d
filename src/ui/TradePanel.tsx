@@ -4,6 +4,7 @@ import { socketManager } from '../network/SocketManager';
 import { EVENTS } from '../types/SocketEvents';
 import { BOARD_SPACES } from '../constants/board';
 import { formatMoney } from '../utils/format';
+import { useIsMobile } from './useIsMobile';
 import type { Player, PropertyState, TradeOffer } from '../types/GameState';
 
 const tradeable = (props: PropertyState[], ownerId: string) =>
@@ -16,6 +17,7 @@ export function TradePanel() {
   const properties: PropertyState[] = useGameStore((s) => s.state?.properties) ?? [];
   const activeTrade: TradeOffer | null = useGameStore((s) => s.state?.activeTrade) ?? null;
   const myId = useGameStore((s) => s.myPlayerId) ?? '';
+  const isMobile = useIsMobile();
 
   // ALL useState calls MUST come before the early return to satisfy React hooks rules
   const [opp, setOpp] = useState<string | null>(null);
@@ -67,7 +69,7 @@ export function TradePanel() {
   // ── active trade view (not countering) ──
   if (activeTrade && !countering) {
     return (
-      <Shell title="Trade" onClose={() => close(false)}>
+      <Shell title="Trade" onClose={() => close(false)} isMobile={isMobile}>
         <div style={sub}>{name(activeTrade.fromPlayerId)} → {name(activeTrade.toPlayerId)}</div>
         <Cols
           giveLabel={`${name(activeTrade.fromPlayerId)} gives`}
@@ -101,6 +103,7 @@ export function TradePanel() {
     <Shell
       title={countering ? 'Counter offer' : 'Propose trade'}
       onClose={() => { close(false); setCountering(false); }}
+      isMobile={isMobile}
     >
       {!countering && (
         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 12 }}>
@@ -175,7 +178,20 @@ export function TradePanel() {
 }
 
 // ── shared modal bits ──
-function Shell({ title, onClose, children }: { title: string; onClose: () => void; children: React.ReactNode }) {
+function Shell({ title, onClose, children, isMobile }: { title: string; onClose: () => void; children: React.ReactNode; isMobile?: boolean }) {
+  if (isMobile) {
+    return (
+      <div style={wrapMobile}>
+        <div style={sheetMobile}>
+          <div style={hdr}>
+            <span style={{ flex: 1, fontWeight: 800, fontSize: 18 }}>{title}</span>
+            <button aria-label="Close" onClick={onClose} style={x}>×</button>
+          </div>
+          {children}
+        </div>
+      </div>
+    );
+  }
   return (
     <div style={wrap}>
       <div style={card}>
@@ -209,8 +225,12 @@ function Cols({ giveLabel, getLabel, gives, gets }: { giveLabel: string; getLabe
 }
 
 const F = 'ui-rounded, system-ui, sans-serif';
+// ── Desktop styles (unchanged) ──
 const wrap: React.CSSProperties = { position: 'fixed', inset: 0, display: 'grid', placeItems: 'center', background: 'rgba(0,0,0,.5)', zIndex: 40, fontFamily: F };
 const card: React.CSSProperties = { background: '#12121e', color: '#e8e8f0', borderRadius: 16, padding: 20, width: 420, maxWidth: '92vw', boxShadow: '0 24px 60px -20px rgba(0,0,0,.7)' };
+// ── Mobile bottom-sheet styles ──
+const wrapMobile: React.CSSProperties = { position: 'fixed', inset: 0, background: 'rgba(0,0,0,.5)', zIndex: 40, fontFamily: F, display: 'flex', alignItems: 'flex-end' };
+const sheetMobile: React.CSSProperties = { background: '#12121e', color: '#e8e8f0', borderRadius: '20px 20px 0 0', padding: 20, width: '100vw', maxHeight: '85vh', overflowY: 'auto', boxShadow: '0 -8px 40px -8px rgba(0,0,0,.7)', paddingBottom: 'calc(20px + env(safe-area-inset-bottom))' };
 const hdr: React.CSSProperties = { display: 'flex', alignItems: 'center', marginBottom: 12 };
 const x: React.CSSProperties = { background: 'none', border: 'none', color: '#8888a0', fontSize: 22, cursor: 'pointer' };
 const sub: React.CSSProperties = { color: '#8888a0', fontWeight: 700, marginBottom: 10 };

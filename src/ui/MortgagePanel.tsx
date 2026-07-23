@@ -4,6 +4,7 @@ import { EVENTS } from '../types/SocketEvents';
 import { BOARD_SPACES } from '../constants/board';
 import { COLOR_GROUP_HEX } from '../constants/theme';
 import { formatMoney } from '../utils/format';
+import { useIsMobile } from './useIsMobile';
 
 export function MortgagePanel() {
   const idx = useGameStore((s) => s.selectedPropertyIndex);
@@ -12,6 +13,7 @@ export function MortgagePanel() {
   const players = useGameStore((s) => s.state?.players);
   const currentId = useGameStore((s) => s.state?.turn.currentPlayerId);
   const myId = useGameStore((s) => s.myPlayerId);
+  const isMobile = useIsMobile();
 
   if (idx == null) return null;
   const space = BOARD_SPACES[idx];
@@ -34,37 +36,50 @@ export function MortgagePanel() {
   const canSellHouse = mine && canBuild && prop.houses > 0 && !prop.hasHotel;
   const canSellHotel = mine && canBuild && prop.hasHotel;
 
+  const inner = (
+    <>
+      <div style={hdr}>
+        <span style={{ ...strip, background: accent }} />
+        <span style={{ flex: 1, fontWeight: 800, fontSize: 18 }}>{space.name}</span>
+        <button onClick={() => selectProperty(null)} aria-label="Close" style={x}>×</button>
+      </div>
+      <div style={meta}>
+        {prop.hasHotel ? 'Hotel' : `${prop.houses} house${prop.houses === 1 ? '' : 's'}`}
+        {prop.isMortgaged && ' · Mortgaged'}
+        {houseCost > 0 && ` · House ${formatMoney(houseCost)}`}
+      </div>
+      {!mine && <div style={{ color: '#8888a0', fontSize: 13 }}>You do not own this property.</div>}
+      {mine && (
+        <div style={grid}>
+          <button style={btn} disabled={!canMortgage} onClick={() => emit(EVENTS.MORTGAGE_APPLY)}>Mortgage</button>
+          <button style={btn} disabled={!canLift} onClick={() => emit(EVENTS.MORTGAGE_LIFT)}>Unmortgage</button>
+          {canBuild && <>
+            <button style={btn} disabled={!canBuyHouse} onClick={() => emit(EVENTS.BUILD_BUY_HOUSE)}>Buy House</button>
+            <button style={btn} disabled={!canSellHouse} onClick={() => emit(EVENTS.BUILD_SELL_HOUSE)}>Sell House</button>
+            <button style={btn} disabled={!canBuyHotel} onClick={() => emit(EVENTS.BUILD_BUY_HOTEL)}>Buy Hotel</button>
+            <button style={btn} disabled={!canSellHotel} onClick={() => emit(EVENTS.BUILD_SELL_HOTEL)}>Sell Hotel</button>
+          </>}
+        </div>
+      )}
+    </>
+  );
+
+  if (isMobile) {
+    return (
+      <div style={wrapMobile}>
+        <div style={sheetMobile}>{inner}</div>
+      </div>
+    );
+  }
+
   return (
     <div style={wrap}>
-      <div style={card}>
-        <div style={hdr}>
-          <span style={{ ...strip, background: accent }} />
-          <span style={{ flex: 1, fontWeight: 800, fontSize: 18 }}>{space.name}</span>
-          <button onClick={() => selectProperty(null)} aria-label="Close" style={x}>×</button>
-        </div>
-        <div style={meta}>
-          {prop.hasHotel ? 'Hotel' : `${prop.houses} house${prop.houses === 1 ? '' : 's'}`}
-          {prop.isMortgaged && ' · Mortgaged'}
-          {houseCost > 0 && ` · House ${formatMoney(houseCost)}`}
-        </div>
-        {!mine && <div style={{ color: '#8888a0', fontSize: 13 }}>You do not own this property.</div>}
-        {mine && (
-          <div style={grid}>
-            <button style={btn} disabled={!canMortgage} onClick={() => emit(EVENTS.MORTGAGE_APPLY)}>Mortgage</button>
-            <button style={btn} disabled={!canLift} onClick={() => emit(EVENTS.MORTGAGE_LIFT)}>Unmortgage</button>
-            {canBuild && <>
-              <button style={btn} disabled={!canBuyHouse} onClick={() => emit(EVENTS.BUILD_BUY_HOUSE)}>Buy House</button>
-              <button style={btn} disabled={!canSellHouse} onClick={() => emit(EVENTS.BUILD_SELL_HOUSE)}>Sell House</button>
-              <button style={btn} disabled={!canBuyHotel} onClick={() => emit(EVENTS.BUILD_BUY_HOTEL)}>Buy Hotel</button>
-              <button style={btn} disabled={!canSellHotel} onClick={() => emit(EVENTS.BUILD_SELL_HOTEL)}>Sell Hotel</button>
-            </>}
-          </div>
-        )}
-      </div>
+      <div style={card}>{inner}</div>
     </div>
   );
 }
 
+// ── Desktop styles (unchanged) ──
 const wrap: React.CSSProperties = { position: 'fixed', inset: 0, display: 'grid', placeItems: 'center', background: 'rgba(0,0,0,.5)', zIndex: 40, fontFamily: 'ui-rounded, system-ui, sans-serif' };
 const card: React.CSSProperties = { background: '#12121e', color: '#e8e8f0', borderRadius: 16, padding: 20, width: 340, boxShadow: '0 24px 60px -20px rgba(0,0,0,.7)' };
 const hdr: React.CSSProperties = { display: 'flex', alignItems: 'center', gap: 10, marginBottom: 8 };
@@ -73,3 +88,13 @@ const x: React.CSSProperties = { background: 'none', border: 'none', color: '#88
 const meta: React.CSSProperties = { color: '#8888a0', fontSize: 13, marginBottom: 16 };
 const grid: React.CSSProperties = { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 };
 const btn: React.CSSProperties = { fontFamily: 'inherit', fontWeight: 800, fontSize: 13, border: 'none', borderRadius: 12, padding: '11px 12px', cursor: 'pointer', background: '#2a2a40', color: '#e8e8f0' };
+
+// ── Mobile bottom-sheet styles ──
+const wrapMobile: React.CSSProperties = { position: 'fixed', inset: 0, background: 'rgba(0,0,0,.5)', zIndex: 40, fontFamily: 'ui-rounded, system-ui, sans-serif', display: 'flex', alignItems: 'flex-end' };
+const sheetMobile: React.CSSProperties = {
+  background: '#12121e', color: '#e8e8f0',
+  borderRadius: '20px 20px 0 0', padding: 20,
+  width: '100vw', maxHeight: '85vh', overflowY: 'auto',
+  boxShadow: '0 -8px 40px -8px rgba(0,0,0,.7)',
+  paddingBottom: 'calc(20px + env(safe-area-inset-bottom))',
+};
