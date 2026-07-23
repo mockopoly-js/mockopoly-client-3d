@@ -7,6 +7,7 @@ import { TOKEN_HEX } from '../constants/theme';
 import type { TokenType } from '../types/GameState';
 import type { S_RoomCreated, S_RoomJoined, S_RoomRejected } from '../types/SocketEvents';
 import { FONT_FAMILY } from '../constants/fonts';
+import { useIsMobile } from '../ui/useIsMobile';
 
 const TOKENS = Object.keys(TOKEN_HEX) as TokenType[];
 
@@ -15,6 +16,7 @@ export function MainMenu() {
   const [token, setToken] = useState<TokenType>('red');
   const [code, setCode] = useState('');
   const [error, setError] = useState<string | null>(null);
+  const isMobile = useIsMobile();
 
   useEffect(() => {
     const applyJoined = (state: S_RoomJoined['state']) => {
@@ -69,6 +71,49 @@ export function MainMenu() {
     });
   };
 
+  if (isMobile) {
+    return (
+      <div style={wrapMobile}>
+        <h1 style={{ fontFamily: FONT, color: '#3b3224', margin: 0, fontSize: 32 }}>Mockopoly</h1>
+        <input
+          placeholder="Enter your name..."
+          maxLength={16}
+          value={name}
+          onChange={(e) => setName(e.target.value)}
+          style={inputMobile}
+        />
+        <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', justifyContent: 'center', width: '100%', maxWidth: 360 }}>
+          {TOKENS.map((t) => (
+            <button
+              key={t}
+              aria-label={t}
+              onClick={() => setToken(t)}
+              style={{
+                width: 42, height: 42, borderRadius: '50%', cursor: 'pointer',
+                background: TOKEN_HEX[t],
+                border: token === t ? '3px solid #3b3224' : '3px solid transparent',
+                transform: token === t ? 'scale(1.15)' : 'scale(1)',
+                touchAction: 'manipulation',
+              }}
+            />
+          ))}
+        </div>
+        <button onClick={create} disabled={!canCreate} style={primaryBtnMobile}>Create Room</button>
+        <div style={{ display: 'flex', gap: 10, width: '100%', maxWidth: 360 }}>
+          <input
+            placeholder="ABCDEF"
+            maxLength={6}
+            value={code}
+            onChange={(e) => setCode(e.target.value.toUpperCase())}
+            style={{ ...inputMobile, flex: 1, textTransform: 'uppercase', letterSpacing: '0.2em' }}
+          />
+          <button onClick={join} disabled={!canJoin} style={{ ...primaryBtnMobile, flexShrink: 0 }}>Join</button>
+        </div>
+        {error && <div role="alert" style={{ color: '#c53a26', fontFamily: FONT, fontSize: 14 }}>{error}</div>}
+      </div>
+    );
+  }
+
   return (
     <div style={wrap}>
       <h1 style={{ fontFamily: FONT, color: '#3b3224', margin: 0 }}>Mockopoly</h1>
@@ -111,6 +156,8 @@ export function MainMenu() {
 }
 
 const FONT = FONT_FAMILY;
+
+// ── Desktop styles (unchanged) ──
 const wrap: React.CSSProperties = {
   position: 'fixed', inset: 0, display: 'flex', flexDirection: 'column', gap: 16,
   alignItems: 'center', justifyContent: 'center', background: '#eaf7fc', fontFamily: FONT,
@@ -121,4 +168,49 @@ const input: React.CSSProperties = {
 const primaryBtn: React.CSSProperties = {
   fontFamily: FONT, fontWeight: 800, fontSize: 15, color: '#fff', background: '#e07d0a',
   border: 'none', borderRadius: 14, padding: '12px 22px', cursor: 'pointer',
+};
+
+// ── Mobile styles ──
+const wrapMobile: React.CSSProperties = {
+  position: 'fixed',
+  inset: 0,
+  display: 'flex',
+  flexDirection: 'column',
+  gap: 14,
+  alignItems: 'center',
+  justifyContent: 'center',
+  background: '#eaf7fc',
+  fontFamily: FONT,
+  padding: '20px 16px',
+  paddingTop: 'calc(20px + env(safe-area-inset-top))',
+  paddingBottom: 'calc(20px + env(safe-area-inset-bottom))',
+  boxSizing: 'border-box',
+  overflowY: 'auto',
+};
+const inputMobile: React.CSSProperties = {
+  fontFamily: FONT,
+  fontSize: 16,
+  padding: '13px 16px',
+  borderRadius: 14,
+  border: '2px solid #e7dcbf',
+  outline: 'none',
+  width: '100%',
+  maxWidth: 360,
+  boxSizing: 'border-box',
+  minHeight: 50,
+};
+const primaryBtnMobile: React.CSSProperties = {
+  fontFamily: FONT,
+  fontWeight: 800,
+  fontSize: 16,
+  color: '#fff',
+  background: '#e07d0a',
+  border: 'none',
+  borderRadius: 14,
+  padding: '14px 22px',
+  cursor: 'pointer',
+  width: '100%',
+  maxWidth: 360,
+  minHeight: 50,
+  touchAction: 'manipulation',
 };
