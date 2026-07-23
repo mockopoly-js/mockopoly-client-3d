@@ -89,7 +89,7 @@ export function MainMenu() {
               aria-label={t}
               onClick={() => setToken(t)}
               style={{
-                width: 42, height: 42, borderRadius: '50%', cursor: 'pointer',
+                width: 44, height: 44, borderRadius: '50%', cursor: 'pointer',
                 background: TOKEN_HEX[t],
                 border: token === t ? '3px solid #3b3224' : '3px solid transparent',
                 transform: token === t ? 'scale(1.15)' : 'scale(1)',
