@@ -86,14 +86,14 @@ function buildPips(): PipSpec[] {
   return pips;
 }
 
-/** A single die: beveled white cube + 21 dark pip discs on the standard faces. */
+/** A single die: plain white box + 21 dark pip discs on the standard faces. */
 function DieMesh({ groupRef }: { groupRef: (g: THREE.Group | null) => void }) {
   const pips = useMemo(buildPips, []);
   return (
     <group ref={groupRef}>
       <mesh castShadow>
-        {/* Slight bevel via a rounded-ish box: a plain box with a subtle scale
-            keeps geometry cheap; the material sheen sells "toy die". */}
+        {/* Plain boxGeometry — material sheen (low roughness, slight metalness)
+            sells the "toy die" look without extra geometry cost. */}
         <boxGeometry args={[DIE_SIZE, DIE_SIZE, DIE_SIZE]} />
         <meshStandardMaterial color="#fffdf8" roughness={0.35} metalness={0.05} />
       </mesh>
@@ -117,6 +117,24 @@ interface DieAnim {
   targetQuat: THREE.Quaternion;
 }
 
+// ---- Die animation factory (module-scope — no per-render allocation) ---------
+/** Create a fresh DieAnim for a given server-resolved face value. */
+function makeAnim(value: number): DieAnim {
+  return {
+    value,
+    elapsed: 0,
+    spinAxis: new THREE.Vector3(
+      Math.random() * 2 - 1,
+      Math.random() * 2 - 1,
+      Math.random() * 2 - 1,
+    ).normalize(),
+    spinSpeed: 14 + Math.random() * 8, // rad/s
+    startQuat: new THREE.Quaternion(),
+    captured: false,
+    targetQuat: resolveQuaternion(value),
+  };
+}
+
 /**
  * Procedural 3D dice. Idle → hidden. On `dice-rolled` (server-authoritative
  * `dice` tuple) both dice tumble for TUMBLE_MS, slerp to the orientation that
@@ -129,26 +147,10 @@ export function Dice3D() {
   const rootRef = useRef<THREE.Group | null>(null);
   const dieGroups = useRef<Array<THREE.Group | null>>([null, null]);
   const anims = useRef<[DieAnim | null, DieAnim | null]>([null, null]);
-  const activeUntil = useRef<number>(0); // ms timeline value after which we hide
-
-  const makeAnim = (value: number): DieAnim => ({
-    value,
-    elapsed: 0,
-    spinAxis: new THREE.Vector3(
-      Math.random() * 2 - 1,
-      Math.random() * 2 - 1,
-      Math.random() * 2 - 1,
-    ).normalize(),
-    spinSpeed: 14 + Math.random() * 8, // rad/s
-    startQuat: new THREE.Quaternion(),
-    captured: false,
-    targetQuat: resolveQuaternion(value),
-  });
 
   useGameBusEvent('dice-rolled', (d: { dice: [number, number] }) => {
     if (!d?.dice) return;
     anims.current = [makeAnim(d.dice[0]), makeAnim(d.dice[1])];
-    activeUntil.current = RESOLVE_MS + HOLD_MS;
     // Reset any static resting orientation so the tumble starts clean.
     for (const g of dieGroups.current) {
       if (g) {
