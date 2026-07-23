@@ -28,6 +28,7 @@
  * mounting since it has no side-effects at the module level.
  */
 
+import React from 'react';
 import { useGameStore } from '../state/gameStore';
 import { tileToWorld, BOARD_WORLD_SIZE } from './positions';
 import { ModelMesh } from './ModelMesh';
@@ -43,11 +44,12 @@ const HOTEL_URL = '/models/buildings/hotel.glb';
 const TILE_SURFACE_Y = 0.02;
 
 /**
- * Fractional tile size in world units.
- * The board spans BOARD_WORLD_SIZE units across 11 cells (9 regular + 2 corners).
- * A regular tile's center-to-center spacing is BOARD_WORLD_SIZE / 11 ≈ 0.909.
+ * Actual regular-tile width in world units.
+ * Derived from positions.ts: CORNER=0.134, SW = (1 - 2*CORNER) / 9,
+ * so TILE_WIDTH = SW * BOARD_WORLD_SIZE ≈ 0.813.
+ * (Using BOARD_WORLD_SIZE / 11 ≈ 0.909 overestimates by ~12%.)
  */
-const TILE_WIDTH = BOARD_WORLD_SIZE / 11;
+const TILE_WIDTH = ((1 - 2 * 0.134) / 9) * BOARD_WORLD_SIZE;
 
 /** Push buildings this far inward (toward origin) from the tile center. */
 const INWARD_OFFSET = TILE_WIDTH * 0.35;
@@ -158,7 +160,7 @@ ModelMesh.preload(HOTEL_URL);
  * Models carry baked COLOR_0 (green/red + dark roof), so tint stays '#ffffff'.
  * Mounted by GameScene (Task 4) inside a `<Suspense fallback={null}>`.
  */
-export function Buildings(): JSX.Element {
+export function Buildings(): React.JSX.Element {
   const properties = useGameStore((s) => s.state?.properties) ?? [];
 
   return (

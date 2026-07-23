@@ -74,17 +74,16 @@ def add_box(bm, cx, cy, cz, sx, sy, sz):
 
 def add_hip_roof(bm, cx, cy, z_base, z_peak, hx, hy):
     """
-    Build a hip roof (4-sided) centered at (cx,cy) above z_base with peak at z_peak.
-    hx/hy are the half-extents of the base rectangle.
-    Forward axis (+y) is the ridge direction. The ridge runs along y so the
-    gable faces are on the x sides.
+    Build a pyramid roof (single apex) centered at (cx,cy) above z_base with
+    apex at z_peak.  hx/hy are the half-extents of the rectangular base.
+    All four triangular faces meet at the single apex point.
     """
     # 4 base corners
     bl = bm.verts.new((cx - hx, cy - hy, z_base))
     br = bm.verts.new((cx + hx, cy - hy, z_base))
     fr = bm.verts.new((cx + hx, cy + hy, z_base))
     fl = bm.verts.new((cx - hx, cy + hy, z_base))
-    # Peak (single point for a pyramid; we keep both shapes supported)
+    # Single apex — pyramid roof (not a hip/ridge roof)
     apex = bm.verts.new((cx, cy, z_peak))
     bm.faces.new((bl, br, apex))          # -y face
     bm.faces.new((br, fr, apex))          # +x face
@@ -100,7 +99,7 @@ def add_hip_roof(bm, cx, cy, z_base, z_peak, hx, hy):
 
 def build_house() -> bpy.types.Object:
     """
-    Small toy house: rectangular box body + hip-roof pyramid on top.
+    Small toy house: rectangular box body + single-apex pyramid roof on top.
     Green walls, dark green roof — both baked as COLOR_0.
     Footprint: 0.22 x 0.22 in x/y, total height 0.28, base at z=0.
     Forward axis: +Y (three.js +Z after Y-up export).
@@ -144,7 +143,7 @@ def build_house() -> bpy.types.Object:
 
 def build_hotel() -> bpy.types.Object:
     """
-    Larger toy hotel: wide rectangular body + flat-ish hip roof.
+    Larger toy hotel: wide rectangular body + flat-ish pyramid roof.
     Red walls, dark roof — both baked as COLOR_0.
     Footprint: 0.50 (x) x 0.30 (y), total height 0.35, base at z=0.
     Forward axis: +Y (three.js +Z after Y-up export).

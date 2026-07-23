@@ -5,7 +5,7 @@
 
 import { describe, it, expect } from 'vitest';
 import { houseSlots, hotelSlot } from './Buildings';
-import { tileToWorld, BOARD_WORLD_SIZE } from './positions';
+import { tileToWorld } from './positions';
 
 // Helpers
 const near = (a: number, b: number, eps = 1e-6) => Math.abs(a - b) < eps;
@@ -57,31 +57,21 @@ describe('houseSlots', () => {
     expect(cz).toBeCloseTo(s1.z, 5);
   });
 
-  it('rotationY for tile 1 (bottom row) is approximately 0 or PI (inward = toward +z)', () => {
-    // Tile 1 is on the bottom row: cz > 0, cx varies.
-    // Inward direction points toward z=0 from the bottom, i.e., negative z => rotY ~= PI.
+  it('rotationY for tile 1 (bottom row) is ~-2.4972 rad (~-143 deg, pointing toward board center)', () => {
+    // Tile 1 is on the bottom-right area: cx > 0, cz > 0.
+    // Inward direction points toward origin (-cx, -cz direction).
+    // rotationY = atan2(inwardX, inwardZ) ≈ -2.4972 rad (~-143°).
     const [s] = houseSlots(1, 1);
-    const [cx, , cz] = tileToWorld(1);
-    const len = Math.sqrt(cx * cx + cz * cz);
-    const inwardX = -cx / len;
-    const inwardZ = -cz / len;
-    const expected = Math.atan2(inwardX, inwardZ);
-    expect(s.rotationY).toBeCloseTo(expected, 5);
+    expect(s.rotationY).toBeCloseTo(-2.4972, 3);
   });
 
-  it('slots on tile 21 (top row) have coords with actual computed values', () => {
-    // Tile 21 is top-row first: x < 0, z < 0.
-    const [cx, , cz] = tileToWorld(21);
-    const TILE_WIDTH = BOARD_WORLD_SIZE / 11;
-    const INWARD_OFFSET = TILE_WIDTH * 0.35;
-    const len = Math.sqrt(cx * cx + cz * cz);
-    const inwardX = -cx / len;
-    const inwardZ = -cz / len;
-    const expectedX = cx + inwardX * INWARD_OFFSET;
-    const expectedZ = cz + inwardZ * INWARD_OFFSET;
+  it('slots on tile 21 (top row) have coords matching pinned numeric values', () => {
+    // Tile 21 is top-row first: cx < 0, cz < 0.
+    // Pinned from actual output with corrected TILE_WIDTH = ((1 - 2*0.134)/9)*10 ≈ 0.813:
+    //   x ≈ -3.0823, z ≈ -4.1024
     const [slot] = houseSlots(21, 1);
-    expect(slot.x).toBeCloseTo(expectedX, 5);
-    expect(slot.z).toBeCloseTo(expectedZ, 5);
+    expect(slot.x).toBeCloseTo(-3.0823, 3);
+    expect(slot.z).toBeCloseTo(-4.1024, 3);
   });
 });
 
