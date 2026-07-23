@@ -1,6 +1,7 @@
 import { useGameStore } from '../state/gameStore';
 import { useIsMobile } from './useIsMobile';
 import type { GameLogEntry } from '../types/GameState';
+import { FONT_FAMILY } from '../constants/fonts';
 
 export function GameLog() {
   const log: GameLogEntry[] = useGameStore((s) => s.state?.log) ?? [];
@@ -35,7 +36,7 @@ export function GameLog() {
 // ── Desktop styles (unchanged) ──
 const wrap: React.CSSProperties = {
   position: 'fixed', bottom: 14, right: 14, width: 240, background: '#12121e', color: '#8888a0',
-  borderRadius: 12, padding: 12, fontFamily: 'ui-rounded, system-ui, sans-serif', zIndex: 30,
+  borderRadius: 12, padding: 12, fontFamily: FONT_FAMILY, zIndex: 30,
   boxShadow: '0 8px 22px -12px rgba(0,0,0,.6)',
 };
 const hdr: React.CSSProperties = { fontSize: 10, letterSpacing: '.12em', textTransform: 'uppercase', color: '#555570', fontWeight: 800, marginBottom: 6 };
@@ -51,7 +52,7 @@ const wrapMobile: React.CSSProperties = {
   color: '#8888a0',
   borderRadius: 8,
   padding: '5px 8px',
-  fontFamily: 'ui-rounded, system-ui, sans-serif',
+  fontFamily: FONT_FAMILY,
   zIndex: 29,
 };
 const entryMobile: React.CSSProperties = { fontSize: 11, fontWeight: 500, padding: '2px 0', lineHeight: 1.3 };

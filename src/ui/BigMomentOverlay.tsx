@@ -3,6 +3,7 @@ import { useGameStore } from '../state/gameStore';
 import { useGameBusEvent } from '../state/useGameBus';
 import { formatMoney } from '../utils/format';
 import type { Player } from '../types/GameState';
+import { FONT_FAMILY } from '../constants/fonts';
 
 interface Moment { text: string; tone: 'rent' | 'jail' | 'bankrupt' | 'parking'; id: number }
 const TONE: Record<Moment['tone'], string> = { rent: '#e5533d', jail: '#e0a30a', bankrupt: '#c53a26', parking: '#46b16a' };
@@ -39,7 +40,7 @@ export function BigMomentOverlay() {
 
 const wrap: React.CSSProperties = {
   position: 'fixed', top: '32%', left: '50%', transform: 'translateX(-50%)', zIndex: 50, pointerEvents: 'none',
-  fontFamily: 'ui-rounded, system-ui, sans-serif',
+  fontFamily: FONT_FAMILY,
 };
 const banner: React.CSSProperties = {
   background: '#12121e', border: '2px solid', borderRadius: 14, padding: '14px 26px',

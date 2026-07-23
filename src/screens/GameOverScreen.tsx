@@ -2,6 +2,7 @@ import { useGameStore } from '../state/gameStore';
 import { TOKEN_HEX } from '../constants/theme';
 import { formatMoney } from '../utils/format';
 import type { Player, TokenType } from '../types/GameState';
+import { FONT_FAMILY } from '../constants/fonts';
 
 export function GameOverScreen() {
   const gameOver = useGameStore((s) => s.gameOver);
@@ -39,7 +40,7 @@ export function GameOverScreen() {
 const wrap: React.CSSProperties = {
   position: 'fixed', inset: 0, display: 'flex', flexDirection: 'column', gap: 22,
   alignItems: 'center', justifyContent: 'center', background: '#08080f', color: '#e8e8f0',
-  fontFamily: 'ui-rounded, system-ui, sans-serif', zIndex: 60,
+  fontFamily: FONT_FAMILY, zIndex: 60,
 };
 const card: React.CSSProperties = { background: '#12121e', borderRadius: 16, padding: 20, width: 340, display: 'flex', flexDirection: 'column', gap: 6 };
 const row: React.CSSProperties = { display: 'flex', alignItems: 'center', gap: 10, padding: '6px 0' };

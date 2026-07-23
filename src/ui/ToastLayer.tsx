@@ -1,6 +1,7 @@
 import { useEffect, useRef } from 'react';
 import { useGameStore } from '../state/gameStore';
 import type { ToastType } from '../types/ui';
+import { FONT_FAMILY } from '../constants/fonts';
 
 const COLOR: Record<ToastType, string> = {
   info: '#3fb6c9', success: '#46b16a', warning: '#e0a30a', error: '#e5533d',
@@ -37,7 +38,7 @@ export function ToastLayer() {
 const wrap: React.CSSProperties = {
   position: 'fixed', top: 60, left: '50%', transform: 'translateX(-50%)',
   display: 'flex', flexDirection: 'column', gap: 8, zIndex: 45, pointerEvents: 'none',
-  fontFamily: 'ui-rounded, system-ui, sans-serif', alignItems: 'center',
+  fontFamily: FONT_FAMILY, alignItems: 'center',
 };
 const toast: React.CSSProperties = {
   background: '#12121e', color: '#e8e8f0', padding: '8px 16px', borderRadius: 10,

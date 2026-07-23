@@ -2,6 +2,7 @@ import { useGameStore } from '../state/gameStore';
 import { socketManager } from '../network/SocketManager';
 import { EVENTS } from '../types/SocketEvents';
 import type { DevHacks } from '../types/GameState';
+import { FONT_FAMILY } from '../constants/fonts';
 
 const HACKS: { key: keyof DevHacks; label: string }[] = [
   { key: 'unlimitedMoney', label: 'Set all players to £999M' },
@@ -44,7 +45,7 @@ export function DevHacksPanel() {
   );
 }
 
-const wrap: React.CSSProperties = { position: 'fixed', inset: 0, display: 'grid', placeItems: 'center', background: 'rgba(0,0,0,.5)', zIndex: 40, fontFamily: 'ui-rounded, system-ui, sans-serif' };
+const wrap: React.CSSProperties = { position: 'fixed', inset: 0, display: 'grid', placeItems: 'center', background: 'rgba(0,0,0,.5)', zIndex: 40, fontFamily: FONT_FAMILY };
 const card: React.CSSProperties = { background: '#12121e', color: '#e8e8f0', borderRadius: 16, padding: 20, width: 340, boxShadow: '0 24px 60px -20px rgba(0,0,0,.7)' };
 const hdr: React.CSSProperties = { display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontWeight: 800, fontSize: 18, marginBottom: 14 };
 const x: React.CSSProperties = { background: 'none', border: 'none', color: '#8888a0', fontSize: 22, cursor: 'pointer', lineHeight: 1 };

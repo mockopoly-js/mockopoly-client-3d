@@ -4,6 +4,7 @@ import { socketManager } from '../network/SocketManager';
 import { EVENTS } from '../types/SocketEvents';
 import { formatMoney } from '../utils/format';
 import { useIsMobile } from './useIsMobile';
+import { FONT_FAMILY } from '../constants/fonts';
 
 export function TurnHud() {
   const me = useGameStore(selectMyPlayer);
@@ -66,7 +67,7 @@ export function TurnHud() {
   );
 }
 
-const FONT = "ui-rounded, system-ui, sans-serif";
+const FONT = FONT_FAMILY;
 
 // ── Desktop styles (unchanged) ──
 const topBar: React.CSSProperties = {

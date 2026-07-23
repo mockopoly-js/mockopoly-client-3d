@@ -1,7 +1,8 @@
 import React, { useState } from 'react';
 import { setMuted, isMuted } from '../audio/sfx';
+import { FONT_FAMILY } from '../constants/fonts';
 
-const FONT = "ui-rounded, system-ui, sans-serif";
+const FONT = FONT_FAMILY;
 
 const style: React.CSSProperties = {
   position: 'fixed',
