@@ -6,8 +6,11 @@ import { gameBus } from './state/gameBus';
 
 // Lazy-import of GameScene: mock at the module level so React.lazy resolves
 // synchronously in jsdom without spinning up a real WebGL canvas.
+// Distinct testid (not "canvas") so the assertion genuinely proves the lazy
+// GameScene chunk resolved — the R3F Canvas mock below also renders
+// data-testid="canvas", which would otherwise pass even if lazy never resolved.
 vi.mock('./screens/GameScene', () => ({
-  GameScene: () => <div data-testid="canvas" />,
+  GameScene: () => <div data-testid="game-scene" />,
 }));
 
 // stub the R3F Canvas so jsdom doesn't try to init WebGL
@@ -54,8 +57,10 @@ describe('App routing', () => {
     useGameStore.getState().setScreen('game');
     render(<App />);
     // React.lazy resolves on the next microtask even with vi.mock; waitFor
-    // lets Suspense flush and the mocked GameScene appear.
-    await waitFor(() => expect(screen.getByTestId('canvas')).toBeTruthy());
+    // lets Suspense flush and the lazily-loaded GameScene appear. Asserting on
+    // the distinct "game-scene" testid proves the lazy chunk actually resolved
+    // (the R3F Canvas mock only renders "canvas", so it can't false-pass here).
+    await waitFor(() => expect(screen.getByTestId('game-scene')).toBeTruthy());
   });
 
   it('renders the turn HUD on the game screen', async () => {
@@ -63,7 +68,7 @@ describe('App routing', () => {
     render(<App />);
     // TurnHud returns null without a turn; set a minimal in-progress state
     // (see below — this assertion is completed once App renders TurnHud)
-    await waitFor(() => expect(screen.getByTestId('canvas')).toBeTruthy());
+    await waitFor(() => expect(screen.getByTestId('game-scene')).toBeTruthy());
   });
 
   it('opens DevHacksPanel via the keyboard chord on the game screen', () => {

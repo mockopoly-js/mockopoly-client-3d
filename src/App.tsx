@@ -7,10 +7,6 @@ import { ConnectionStatus } from './ui/ConnectionStatus';
 import { MainMenu } from './screens/MainMenu';
 import { Lobby } from './screens/Lobby';
 import { LoadingScreen } from './ui/LoadingScreen';
-
-const GameScene = lazy(() =>
-  import('./screens/GameScene').then((m) => ({ default: m.GameScene })),
-);
 import { TurnHud } from './ui/TurnHud';
 import { BuyPrompt } from './ui/BuyPrompt';
 import { useGameBusEvent } from './state/useGameBus';
@@ -30,6 +26,13 @@ import { MuteButton } from './ui/MuteButton';
 import { useSfx } from './audio/useSfx';
 import { initAudioOnGesture } from './audio/sfx';
 import type { S_GameOver } from './types/SocketEvents';
+
+// Lazy-load the 3D GameScene so three/drei/postprocessing land in an async
+// chunk fetched only when the game starts — kept off the initial (menu/lobby)
+// critical path. Declared after all imports (ordering only; behavior identical).
+const GameScene = lazy(() =>
+  import('./screens/GameScene').then((m) => ({ default: m.GameScene })),
+);
 
 export default function App() {
   const screen = useGameStore((s) => s.screen);
