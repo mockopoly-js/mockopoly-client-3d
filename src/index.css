@@ -1,2 +1,11 @@
 html, body, #root { margin: 0; height: 100%; overflow: hidden; }
 body { background: #cbe8f5; }
+
+/* --- Mobile touch hardening ---
+   touch-action:none on #root and canvas hands ALL touch gestures to
+   the WebGL canvas / OrbitControls, preventing accidental page scroll.
+   overscroll-behavior:none stops pull-to-refresh and edge-swipe navigation.
+   -webkit-text-size-adjust stops iOS from inflating font sizes.
+*/
+html, body { overscroll-behavior: none; -webkit-text-size-adjust: 100%; }
+#root, canvas { touch-action: none; }
