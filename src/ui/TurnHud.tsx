@@ -89,7 +89,9 @@ const topBarMobile: React.CSSProperties = {
   position: 'fixed', top: 0, left: 0, right: 0,
   display: 'flex', justifyContent: 'space-between', alignItems: 'center',
   fontFamily: FONT, background: '#12121e', color: '#e8e8f0',
-  padding: '8px 16px', zIndex: 30,
+  padding: '8px 16px',
+  paddingTop: 'calc(8px + env(safe-area-inset-top))',
+  zIndex: 30,
 };
 const hotbarMobile: React.CSSProperties = {
   position: 'fixed', bottom: 0, left: 0, right: 0,

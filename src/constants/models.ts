@@ -17,8 +17,11 @@ export const TOKEN_MODEL: Record<TokenType, string> = {
   pink: '/models/tokens/cat.glb',
 };
 
-// Warm drei's GLTF cache for every token model so the first player render has
-// no per-shape load hitch.
-for (const url of Object.values(TOKEN_MODEL)) {
-  useGLTF.preload(url);
+/**
+ * Preload a single token model to warm drei's GLTF cache.
+ * Call this only for tokens that are actually in the current game,
+ * not all 8 tokens upfront.
+ */
+export function preloadToken(token: TokenType): void {
+  useGLTF.preload(TOKEN_MODEL[token]);
 }

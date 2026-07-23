@@ -1,4 +1,4 @@
-import { useRef } from 'react';
+import { useRef, useEffect } from 'react';
 import { useFrame } from '@react-three/fiber';
 import * as THREE from 'three';
 import { useGameStore } from '../state/gameStore';
@@ -6,7 +6,7 @@ import { useGameBusEvent } from '../state/useGameBus';
 import { tileToWorld } from './positions';
 import { hopPath, stackOffset } from './hopPath';
 import { TOKEN_HEX } from '../constants/theme';
-import { TOKEN_MODEL } from '../constants/models';
+import { TOKEN_MODEL, preloadToken } from '../constants/models';
 import { ModelMesh } from './ModelMesh';
 import type { Player, TokenType } from '../types/GameState';
 
@@ -55,6 +55,13 @@ function restOffset(player: Player, players: Player[]): [number, number] {
  */
 export function PlayerTokens() {
   const players = (useGameStore((s) => s.state?.players) ?? []).filter((p) => !p.isBankrupt);
+
+  // Preload only the tokens that are actually in the current game.
+  useEffect(() => {
+    for (const p of players) {
+      preloadToken(p.token as TokenType);
+    }
+  }, [players.map((p) => p.token).join(',')]);
 
   // Live refs read inside useFrame (avoids stale closures on re-render).
   const playersRef = useRef<Player[]>(players);

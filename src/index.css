@@ -5,7 +5,13 @@
   font-display: swap;
 }
 
-html, body, #root { margin: 0; height: 100%; overflow: hidden; }
+/* --- Viewport height ---
+   Use 100dvh (dynamic viewport) so the UI is not clipped by mobile browser
+   chrome (address bar, nav bar). 100vh line first as progressive-enhancement
+   fallback for browsers that don't support dvh yet.
+*/
+html, body, #root { margin: 0; height: 100vh; overflow: hidden; }
+html, body, #root { height: 100dvh; }
 body { background: #cbe8f5; font-family: 'Baloo 2', ui-rounded, system-ui, sans-serif; }
 
 /* --- Mobile touch hardening ---
@@ -18,3 +24,20 @@ body { background: #cbe8f5; font-family: 'Baloo 2', ui-rounded, system-ui, sans-
 */
 html, body { overscroll-behavior: none; -webkit-text-size-adjust: 100%; }
 canvas { touch-action: none; }
+
+/* --- Touch feel ---
+   Remove tap highlight flash on all elements (iOS Safari blue flash).
+   Give interactive controls manipulation so double-tap-zoom doesn't trigger.
+*/
+* { -webkit-tap-highlight-color: transparent; }
+button, a, input, select, textarea, label { touch-action: manipulation; }
+
+/* --- Button :active pressed feedback ---
+   Subtle scale-down + brightness reduction on press, matching mobile conventions.
+   Disabled buttons skip the feedback.
+*/
+button:active:not(:disabled) {
+  transform: scale(0.96);
+  filter: brightness(0.9);
+  transition: transform 60ms ease, filter 60ms ease;
+}

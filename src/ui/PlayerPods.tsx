@@ -76,7 +76,8 @@ const dot: React.CSSProperties = { width: 20, height: 20, borderRadius: '50%', f
 // ── Mobile styles: slim top strip ──
 const wrapMobile: React.CSSProperties = {
   position: 'fixed',
-  top: 36, // below the TurnHud topBarMobile (~36px)
+  // Sit below TurnHud topBarMobile (~36px) + safe-area-inset-top (notch).
+  top: 'calc(36px + env(safe-area-inset-top))',
   left: 0,
   right: 0,
   display: 'flex',

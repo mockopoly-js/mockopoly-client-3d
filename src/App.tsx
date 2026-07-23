@@ -23,6 +23,7 @@ import { DealPanel } from './ui/DealPanel';
 import { HudButtons } from './ui/HudButtons';
 import { BigMomentOverlay } from './ui/BigMomentOverlay';
 import { MuteButton } from './ui/MuteButton';
+import { RotateHint } from './ui/RotateHint';
 import { useSfx } from './audio/useSfx';
 import { initAudioOnGesture } from './audio/sfx';
 import type { S_GameOver } from './types/SocketEvents';
@@ -108,6 +109,7 @@ export default function App() {
       <ConnectionStatus connected={connected} playerId={playerId} />
       <ToastLayer />
       <MuteButton />
+      <RotateHint />
       {screen === 'menu' && <MainMenu />}
       {screen === 'lobby' && <Lobby />}
       {screen === 'game' && (
