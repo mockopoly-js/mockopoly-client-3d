@@ -1,6 +1,7 @@
 import type React from 'react';
 import { useGameStore } from '../state/gameStore';
 import { useIsMobile } from './useIsMobile';
+import { FONT_FAMILY } from '../constants/fonts';
 
 export function HudButtons() {
   const trade = useGameStore((s) => s.toggleTradePanel);
@@ -29,7 +30,7 @@ export function HudButtons() {
   );
 }
 
-const F = 'ui-rounded, system-ui, sans-serif';
+const F = FONT_FAMILY;
 
 // ── Desktop styles (unchanged) ──
 const wrap: React.CSSProperties = {

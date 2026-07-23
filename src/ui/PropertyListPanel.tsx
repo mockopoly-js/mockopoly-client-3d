@@ -4,6 +4,7 @@ import { BOARD_SPACES } from '../constants/board';
 import { COLOR_GROUP_HEX } from '../constants/theme';
 import { useIsMobile } from './useIsMobile';
 import type { PropertyState, Partnership } from '../types/GameState';
+import { FONT_FAMILY } from '../constants/fonts';
 
 export function PropertyListPanel() {
   const properties: PropertyState[] = useGameStore((s) => s.state?.properties) ?? [];
@@ -91,14 +92,14 @@ export function PropertyListPanel() {
 // ── Desktop styles (unchanged) ──
 const wrap: React.CSSProperties = {
   position: 'fixed', top: 14, left: 14, width: 190, background: '#12121e', color: '#e8e8f0',
-  borderRadius: 12, padding: 12, fontFamily: 'ui-rounded, system-ui, sans-serif', zIndex: 30,
+  borderRadius: 12, padding: 12, fontFamily: FONT_FAMILY, zIndex: 30,
   maxHeight: '55vh', overflowY: 'auto', boxShadow: '0 8px 22px -12px rgba(0,0,0,.6)',
 };
 const hdr: React.CSSProperties = { fontSize: 10, letterSpacing: '.12em', textTransform: 'uppercase', color: '#8888a0', fontWeight: 800, marginBottom: 8 };
 const row: React.CSSProperties = { display: 'flex', alignItems: 'center', gap: 8, fontSize: 12, fontWeight: 700, padding: '5px 0' };
 
 // ── Mobile styles ──
-const F = 'ui-rounded, system-ui, sans-serif';
+const F = FONT_FAMILY;
 const toggleBtn: React.CSSProperties = {
   position: 'fixed',
   left: 8,

@@ -5,6 +5,7 @@ import { EVENTS } from '../types/SocketEvents';
 import { COLOR_GROUPS } from '../constants/board';
 import { useIsMobile } from './useIsMobile';
 import type { Player, PropertyState, Partnership, PartnershipProposal, PartnershipDissolutionRequest, ColorGroup } from '../types/GameState';
+import { FONT_FAMILY } from '../constants/fonts';
 
 const HOUSEABLE = ['brown', 'light-blue', 'pink', 'orange', 'red', 'yellow', 'green', 'dark-blue'];
 
@@ -184,7 +185,7 @@ export function PartnershipPanel() {
   );
 }
 
-const F = 'ui-rounded, system-ui, sans-serif';
+const F = FONT_FAMILY;
 // ── Desktop styles (unchanged) ──
 const wrap: React.CSSProperties = {
   position: 'fixed', inset: 0, display: 'grid', placeItems: 'center',

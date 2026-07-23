@@ -5,6 +5,7 @@ import { BOARD_SPACES } from '../constants/board';
 import { COLOR_GROUP_HEX } from '../constants/theme';
 import { formatMoney } from '../utils/format';
 import { useIsMobile } from './useIsMobile';
+import { FONT_FAMILY } from '../constants/fonts';
 
 export function MortgagePanel() {
   const idx = useGameStore((s) => s.selectedPropertyIndex);
@@ -80,7 +81,7 @@ export function MortgagePanel() {
 }
 
 // ── Desktop styles (unchanged) ──
-const wrap: React.CSSProperties = { position: 'fixed', inset: 0, display: 'grid', placeItems: 'center', background: 'rgba(0,0,0,.5)', zIndex: 40, fontFamily: 'ui-rounded, system-ui, sans-serif' };
+const wrap: React.CSSProperties = { position: 'fixed', inset: 0, display: 'grid', placeItems: 'center', background: 'rgba(0,0,0,.5)', zIndex: 40, fontFamily: FONT_FAMILY };
 const card: React.CSSProperties = { background: '#12121e', color: '#e8e8f0', borderRadius: 16, padding: 20, width: 340, boxShadow: '0 24px 60px -20px rgba(0,0,0,.7)' };
 const hdr: React.CSSProperties = { display: 'flex', alignItems: 'center', gap: 10, marginBottom: 8 };
 const strip: React.CSSProperties = { width: 14, height: 14, borderRadius: 4 };
@@ -90,7 +91,7 @@ const grid: React.CSSProperties = { display: 'grid', gridTemplateColumns: '1fr 1
 const btn: React.CSSProperties = { fontFamily: 'inherit', fontWeight: 800, fontSize: 13, border: 'none', borderRadius: 12, padding: '11px 12px', cursor: 'pointer', background: '#2a2a40', color: '#e8e8f0' };
 
 // ── Mobile bottom-sheet styles ──
-const wrapMobile: React.CSSProperties = { position: 'fixed', inset: 0, background: 'rgba(0,0,0,.5)', zIndex: 40, fontFamily: 'ui-rounded, system-ui, sans-serif', display: 'flex', alignItems: 'flex-end' };
+const wrapMobile: React.CSSProperties = { position: 'fixed', inset: 0, background: 'rgba(0,0,0,.5)', zIndex: 40, fontFamily: FONT_FAMILY, display: 'flex', alignItems: 'flex-end' };
 const sheetMobile: React.CSSProperties = {
   background: '#12121e', color: '#e8e8f0',
   borderRadius: '20px 20px 0 0', padding: 20,

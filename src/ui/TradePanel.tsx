@@ -6,6 +6,7 @@ import { BOARD_SPACES } from '../constants/board';
 import { formatMoney } from '../utils/format';
 import { useIsMobile } from './useIsMobile';
 import type { Player, PropertyState, TradeOffer } from '../types/GameState';
+import { FONT_FAMILY } from '../constants/fonts';
 
 const tradeable = (props: PropertyState[], ownerId: string) =>
   props.filter((p) => p.ownerId === ownerId && !p.isMortgaged && p.houses === 0 && !p.hasHotel);
@@ -224,7 +225,7 @@ function Cols({ giveLabel, getLabel, gives, gets }: { giveLabel: string; getLabe
   );
 }
 
-const F = 'ui-rounded, system-ui, sans-serif';
+const F = FONT_FAMILY;
 // ── Desktop styles (unchanged) ──
 const wrap: React.CSSProperties = { position: 'fixed', inset: 0, display: 'grid', placeItems: 'center', background: 'rgba(0,0,0,.5)', zIndex: 40, fontFamily: F };
 const card: React.CSSProperties = { background: '#12121e', color: '#e8e8f0', borderRadius: 16, padding: 20, width: 420, maxWidth: '92vw', boxShadow: '0 24px 60px -20px rgba(0,0,0,.7)' };

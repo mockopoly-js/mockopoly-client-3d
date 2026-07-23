@@ -3,6 +3,7 @@ import { TOKEN_HEX } from '../constants/theme';
 import { formatMoney } from '../utils/format';
 import { useIsMobile } from './useIsMobile';
 import type { Player, TokenType } from '../types/GameState';
+import { FONT_FAMILY } from '../constants/fonts';
 
 export function PlayerPods() {
   const players: Player[] = useGameStore((s) => s.state?.players) ?? [];
@@ -64,7 +65,7 @@ export function PlayerPods() {
 // ── Desktop styles (unchanged) ──
 const wrap: React.CSSProperties = {
   position: 'fixed', top: 14, right: 14, display: 'flex', flexDirection: 'column', gap: 8,
-  fontFamily: 'ui-rounded, system-ui, sans-serif', zIndex: 30, width: 200,
+  fontFamily: FONT_FAMILY, zIndex: 30, width: 200,
 };
 const pod: React.CSSProperties = {
   display: 'flex', alignItems: 'center', gap: 9, background: '#12121e', color: '#e8e8f0',
@@ -82,7 +83,7 @@ const wrapMobile: React.CSSProperties = {
   flexDirection: 'row',
   gap: 6,
   padding: '4px 8px',
-  fontFamily: 'ui-rounded, system-ui, sans-serif',
+  fontFamily: FONT_FAMILY,
   zIndex: 29,
   overflowX: 'auto',
 };

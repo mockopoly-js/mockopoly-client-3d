@@ -6,6 +6,7 @@ import { EVENTS } from '../types/SocketEvents';
 import { TOKEN_HEX } from '../constants/theme';
 import type { TokenType } from '../types/GameState';
 import type { S_RoomCreated, S_RoomJoined, S_RoomRejected } from '../types/SocketEvents';
+import { FONT_FAMILY } from '../constants/fonts';
 
 const TOKENS = Object.keys(TOKEN_HEX) as TokenType[];
 
@@ -109,7 +110,7 @@ export function MainMenu() {
   );
 }
 
-const FONT = "ui-rounded, system-ui, sans-serif";
+const FONT = FONT_FAMILY;
 const wrap: React.CSSProperties = {
   position: 'fixed', inset: 0, display: 'flex', flexDirection: 'column', gap: 16,
   alignItems: 'center', justifyContent: 'center', background: '#eaf7fc', fontFamily: FONT,

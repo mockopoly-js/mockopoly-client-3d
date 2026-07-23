@@ -5,6 +5,7 @@ import { useGameStore, selectMyPlayer } from '../state/gameStore';
 import { EVENTS } from '../types/SocketEvents';
 import { TOKEN_HEX } from '../constants/theme';
 import type { Player, TokenType } from '../types/GameState';
+import { FONT_FAMILY } from '../constants/fonts';
 
 export function Lobby() {
   const state = useGameStore((s) => s.state);
@@ -78,7 +79,7 @@ export function Lobby() {
   );
 }
 
-const FONT = "ui-rounded, system-ui, sans-serif";
+const FONT = FONT_FAMILY;
 const wrap: React.CSSProperties = {
   position: 'fixed', inset: 0, display: 'flex', flexDirection: 'column', gap: 18,
   alignItems: 'center', justifyContent: 'center', background: '#eaf7fc', fontFamily: FONT, color: '#3b3224',

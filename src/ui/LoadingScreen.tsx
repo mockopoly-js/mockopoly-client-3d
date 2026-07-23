@@ -1,3 +1,5 @@
+import { FONT_FAMILY } from '../constants/fonts';
+
 export function LoadingScreen() {
   return (
     <>
@@ -32,7 +34,7 @@ export function LoadingScreen() {
         <span
           style={{
             color: '#d4af37',
-            fontFamily: "'ITC Kabel Std', sans-serif",
+            fontFamily: FONT_FAMILY,
             fontSize: 18,
             letterSpacing: 2,
           }}

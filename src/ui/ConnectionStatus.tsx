@@ -1,3 +1,5 @@
+import { FONT_FAMILY } from '../constants/fonts';
+
 interface Props {
   connected: boolean;
   playerId: string | null;
@@ -12,7 +14,7 @@ export function ConnectionStatus({ connected, playerId }: Props) {
         left: 12,
         padding: '8px 14px',
         borderRadius: 999,
-        fontFamily: 'ui-rounded, system-ui, sans-serif',
+        fontFamily: FONT_FAMILY,
         fontWeight: 700,
         fontSize: 13,
         color: '#fffdf8',

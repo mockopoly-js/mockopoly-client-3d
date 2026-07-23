@@ -5,6 +5,7 @@ import { EVENTS } from '../types/SocketEvents';
 import { formatMoney } from '../utils/format';
 import { useIsMobile } from './useIsMobile';
 import type { Player, RentDeal } from '../types/GameState';
+import { FONT_FAMILY } from '../constants/fonts';
 
 export function DealPanel() {
   const open = useGameStore((s) => s.showDealPanel);
@@ -100,7 +101,7 @@ function Hdr({ title, onClose }: { title: string; onClose: () => void }) {
     <button aria-label="Close" onClick={onClose} style={x}>×</button></div>;
 }
 
-const F = 'ui-rounded, system-ui, sans-serif';
+const F = FONT_FAMILY;
 // ── Desktop styles (unchanged) ──
 const wrap: React.CSSProperties = { position: 'fixed', inset: 0, display: 'grid', placeItems: 'center', background: 'rgba(0,0,0,.5)', zIndex: 40, fontFamily: F };
 const card: React.CSSProperties = { background: '#12121e', color: '#e8e8f0', borderRadius: 16, padding: 20, width: 400, maxWidth: '92vw', boxShadow: '0 24px 60px -20px rgba(0,0,0,.7)' };

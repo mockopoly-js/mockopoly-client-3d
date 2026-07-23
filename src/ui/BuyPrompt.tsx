@@ -6,6 +6,7 @@ import { BOARD_SPACES } from '../constants/board';
 import { COLOR_GROUP_HEX } from '../constants/theme';
 import { formatMoney } from '../utils/format';
 import { useIsMobile } from './useIsMobile';
+import { FONT_FAMILY } from '../constants/fonts';
 
 const BUYABLE = ['property', 'railroad', 'utility'];
 
@@ -61,7 +62,7 @@ export function BuyPrompt() {
   );
 }
 
-const FONT = "ui-rounded, system-ui, sans-serif";
+const FONT = FONT_FAMILY;
 // ── Desktop styles (unchanged) ──
 const wrap: React.CSSProperties = {
   position: 'fixed', inset: 0, display: 'grid', placeItems: 'center', fontFamily: FONT, zIndex: 40, pointerEvents: 'none',
