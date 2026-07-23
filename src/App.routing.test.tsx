@@ -1,8 +1,14 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
-import { render, screen, act } from '@testing-library/react';
+import { render, screen, act, waitFor } from '@testing-library/react';
 import App from './App';
 import { useGameStore } from './state/gameStore';
 import { gameBus } from './state/gameBus';
+
+// Lazy-import of GameScene: mock at the module level so React.lazy resolves
+// synchronously in jsdom without spinning up a real WebGL canvas.
+vi.mock('./screens/GameScene', () => ({
+  GameScene: () => <div data-testid="canvas" />,
+}));
 
 // stub the R3F Canvas so jsdom doesn't try to init WebGL
 vi.mock('@react-three/fiber', () => ({
@@ -44,18 +50,20 @@ describe('App routing', () => {
     expect(screen.getByPlaceholderText(/your name/i)).toBeTruthy();
   });
 
-  it('shows the GameScene canvas on the game screen', () => {
+  it('shows the GameScene canvas on the game screen', async () => {
     useGameStore.getState().setScreen('game');
     render(<App />);
-    expect(screen.getByTestId('canvas')).toBeTruthy();
+    // React.lazy resolves on the next microtask even with vi.mock; waitFor
+    // lets Suspense flush and the mocked GameScene appear.
+    await waitFor(() => expect(screen.getByTestId('canvas')).toBeTruthy());
   });
 
-  it('renders the turn HUD on the game screen', () => {
+  it('renders the turn HUD on the game screen', async () => {
     useGameStore.getState().setScreen('game');
     render(<App />);
     // TurnHud returns null without a turn; set a minimal in-progress state
     // (see below — this assertion is completed once App renders TurnHud)
-    expect(screen.getByTestId('canvas')).toBeTruthy();
+    await waitFor(() => expect(screen.getByTestId('canvas')).toBeTruthy());
   });
 
   it('opens DevHacksPanel via the keyboard chord on the game screen', () => {

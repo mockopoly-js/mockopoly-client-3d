@@ -26,7 +26,14 @@ import { CameraRig } from '../board/CameraRig';
  */
 export function GameScene() {
   return (
-    <Canvas style={{ position: 'fixed', inset: 0 }} camera={{ position: [0, 9, 11], fov: 50 }} shadows>
+    <Canvas
+      style={{ position: 'fixed', inset: 0 }}
+      camera={{ position: [0, 9, 11], fov: 50 }}
+      shadows
+      dpr={[1, 2]}
+      performance={{ min: 0.5 }}
+      gl={{ powerPreference: 'high-performance' }}
+    >
       <color attach="background" args={['#cbe8f5']} />
       {/* Soft shadow injection (must be early in the scene, no assets). */}
       <SoftShadows size={12} samples={16} />

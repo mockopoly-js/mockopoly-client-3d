@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { lazy, Suspense, useEffect, useState } from 'react';
 import { socketManager } from './network/SocketManager';
 import { gameStateSync } from './network/GameStateSync';
 import { useGameStore } from './state/gameStore';
@@ -6,7 +6,11 @@ import { EVENTS } from './types/SocketEvents';
 import { ConnectionStatus } from './ui/ConnectionStatus';
 import { MainMenu } from './screens/MainMenu';
 import { Lobby } from './screens/Lobby';
-import { GameScene } from './screens/GameScene';
+import { LoadingScreen } from './ui/LoadingScreen';
+
+const GameScene = lazy(() =>
+  import('./screens/GameScene').then((m) => ({ default: m.GameScene })),
+);
 import { TurnHud } from './ui/TurnHud';
 import { BuyPrompt } from './ui/BuyPrompt';
 import { useGameBusEvent } from './state/useGameBus';
@@ -105,7 +109,9 @@ export default function App() {
       {screen === 'lobby' && <Lobby />}
       {screen === 'game' && (
         <>
-          <GameScene />
+          <Suspense fallback={<LoadingScreen />}>
+            <GameScene />
+          </Suspense>
           <TurnHud />
           <BuyPrompt />
           <PropertyListPanel />
