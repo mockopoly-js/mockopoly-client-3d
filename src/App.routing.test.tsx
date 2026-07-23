@@ -11,6 +11,9 @@ vi.mock('@react-three/fiber', () => ({
 }));
 vi.mock('./board/BoardTiles', () => ({ BoardTiles: () => null }));
 vi.mock('./board/PlayerTokens', () => ({ PlayerTokens: () => null }));
+// Dice3D (now mounted in GameScene) drives three via useFrame; stub it out so
+// jsdom never exercises the R3F frame loop — the tumble is browser-only.
+vi.mock('./board/Dice3D', () => ({ Dice3D: () => null }));
 // ModelMesh calls drei useGLTF, which tries to fetch a .glb over jsdom's
 // (broken) FileLoader — stub it out; the .glb load is exercised in the browser.
 // Buildings + CityDressing (now mounted in GameScene) call `ModelMesh.preload`

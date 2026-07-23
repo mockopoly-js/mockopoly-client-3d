@@ -8,7 +8,6 @@ import { MainMenu } from './screens/MainMenu';
 import { Lobby } from './screens/Lobby';
 import { GameScene } from './screens/GameScene';
 import { TurnHud } from './ui/TurnHud';
-import { DiceDisplay } from './ui/DiceDisplay';
 import { BuyPrompt } from './ui/BuyPrompt';
 import { useGameBusEvent } from './state/useGameBus';
 import { ToastLayer } from './ui/ToastLayer';
@@ -83,7 +82,6 @@ export default function App() {
         <>
           <GameScene />
           <TurnHud />
-          <DiceDisplay />
           <BuyPrompt />
           <PropertyListPanel />
           <PlayerPods />

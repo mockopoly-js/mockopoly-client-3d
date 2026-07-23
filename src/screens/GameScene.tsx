@@ -5,6 +5,7 @@ import { BoardTiles } from '../board/BoardTiles';
 import { PlayerTokens } from '../board/PlayerTokens';
 import { Buildings } from '../board/Buildings';
 import { CityDressing } from '../board/CityDressing';
+import { Dice3D } from '../board/Dice3D';
 
 /**
  * Game screen: renders the static 3D board in a daylight scene plus the
@@ -29,6 +30,9 @@ export function GameScene() {
         <orthographicCamera attach="shadow-camera" args={[-8, 8, 8, -8, 0.1, 30]} />
       </directionalLight>
       <BoardTiles />
+      {/* Procedural 3D dice: loads no glb, so it sits outside the model
+          Suspense boundary alongside BoardTiles. Idle = hidden. */}
+      <Dice3D />
       <Suspense fallback={null}>
         <PlayerTokens />
         <Buildings />
