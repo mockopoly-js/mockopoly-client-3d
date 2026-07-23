@@ -45,59 +45,33 @@ SEG = 24  # radial segment budget for round parts
 
 
 # --------------------------------------------------------------------------- #
-# Low-level box helper (adds a solid box to an existing bmesh)
+# Low-level box helper — canonical impl lives in lib.py; alias so the token
+# builders keep calling the bare `add_box(...)` (shared with gen_buildings.py /
+# gen_city.py via lib.add_box).
 # --------------------------------------------------------------------------- #
 
-def add_box(bm, cx, cy, cz, sx, sy, sz):
-    """Add an axis-aligned box centered at (cx,cy,cz) with full sizes (sx,sy,sz)."""
-    hx, hy, hz = sx / 2.0, sy / 2.0, sz / 2.0
-    verts = [
-        bm.verts.new((cx - hx, cy - hy, cz - hz)),
-        bm.verts.new((cx + hx, cy - hy, cz - hz)),
-        bm.verts.new((cx + hx, cy + hy, cz - hz)),
-        bm.verts.new((cx - hx, cy + hy, cz - hz)),
-        bm.verts.new((cx - hx, cy - hy, cz + hz)),
-        bm.verts.new((cx + hx, cy - hy, cz + hz)),
-        bm.verts.new((cx + hx, cy + hy, cz + hz)),
-        bm.verts.new((cx - hx, cy + hy, cz + hz)),
+add_box = lib.add_box
+
+
+def add_cylinder(bm, cx, cy, z0, z1, radius, segments=SEG):
+    """
+    Add a closed cylinder spanning z0..z1 around (cx, cy), with `segments`
+    radial sides. Bottom and top are fan-capped.
+    """
+    lower = [
+        bm.verts.new(
+            (cx + radius * math.cos(2 * math.pi * i / segments),
+             cy + radius * math.sin(2 * math.pi * i / segments), z0)
+        )
+        for i in range(segments)
     ]
-    f = bm.faces.new
-    f((verts[0], verts[1], verts[2], verts[3]))  # bottom
-    f((verts[7], verts[6], verts[5], verts[4]))  # top
-    f((verts[0], verts[4], verts[5], verts[1]))  # -y
-    f((verts[1], verts[5], verts[6], verts[2]))  # +x
-    f((verts[2], verts[6], verts[7], verts[3]))  # +y
-    f((verts[3], verts[7], verts[4], verts[0]))  # -x
-    return verts
-
-
-def add_cylinder(bm, cx, cy, z0, z1, radius, segments=SEG, axis="z"):
-    """
-    Add a closed cylinder. For axis='z' it spans z0..z1 around (cx,cy).
-    For axis='y' it spans y0..y1 (passed as z0..z1) at height cz=cx? — we keep
-    it simple and only support 'z' and 'x' here.
-    """
-    if axis == "z":
-        lower = [
-            bm.verts.new(
-                (cx + radius * math.cos(2 * math.pi * i / segments),
-                 cy + radius * math.sin(2 * math.pi * i / segments), z0)
-            )
-            for i in range(segments)
-        ]
-        upper = [
-            bm.verts.new(
-                (cx + radius * math.cos(2 * math.pi * i / segments),
-                 cy + radius * math.sin(2 * math.pi * i / segments), z1)
-            )
-            for i in range(segments)
-        ]
-    elif axis == "x":
-        # Wheel lying on the x-axis: circle in (y,z), extruded along x from cx-? .
-        # Here z0,z1 are the x extents; cx is unused, cy is center y, and the
-        # circle is centered at (cy, height) — we pass height via a closure below,
-        # so implement a dedicated wheel helper instead. Not used generically.
-        raise NotImplementedError
+    upper = [
+        bm.verts.new(
+            (cx + radius * math.cos(2 * math.pi * i / segments),
+             cy + radius * math.sin(2 * math.pi * i / segments), z1)
+        )
+        for i in range(segments)
+    ]
     lib.bridge(bm, lower, upper)
     lib.cap(bm, lower, z0, flip=True)
     lib.cap(bm, upper, z1, flip=False)

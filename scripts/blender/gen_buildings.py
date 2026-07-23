@@ -46,30 +46,12 @@ HOTEL_ROOF   = (0.12, 0.04, 0.04)   # near-black dark red
 
 
 # --------------------------------------------------------------------------- #
-# Low-level box primitive (same idiom as gen_tokens.py)
+# Low-level box primitive — canonical impl lives in lib.py; alias so the
+# building builders keep calling the bare `add_box(...)` (shared with
+# gen_tokens.py / gen_city.py via lib.add_box).
 # --------------------------------------------------------------------------- #
 
-def add_box(bm, cx, cy, cz, sx, sy, sz):
-    """Add an axis-aligned box centered at (cx, cy, cz) with full sizes (sx,sy,sz)."""
-    hx, hy, hz = sx / 2.0, sy / 2.0, sz / 2.0
-    verts = [
-        bm.verts.new((cx - hx, cy - hy, cz - hz)),
-        bm.verts.new((cx + hx, cy - hy, cz - hz)),
-        bm.verts.new((cx + hx, cy + hy, cz - hz)),
-        bm.verts.new((cx - hx, cy + hy, cz - hz)),
-        bm.verts.new((cx - hx, cy - hy, cz + hz)),
-        bm.verts.new((cx + hx, cy - hy, cz + hz)),
-        bm.verts.new((cx + hx, cy + hy, cz + hz)),
-        bm.verts.new((cx - hx, cy + hy, cz + hz)),
-    ]
-    f = bm.faces.new
-    f((verts[0], verts[1], verts[2], verts[3]))  # bottom
-    f((verts[7], verts[6], verts[5], verts[4]))  # top
-    f((verts[0], verts[4], verts[5], verts[1]))  # -y
-    f((verts[1], verts[5], verts[6], verts[2]))  # +x
-    f((verts[2], verts[6], verts[7], verts[3]))  # +y
-    f((verts[3], verts[7], verts[4], verts[0]))  # -x
-    return verts
+add_box = lib.add_box
 
 
 def add_hip_roof(bm, cx, cy, z_base, z_peak, hx, hy):

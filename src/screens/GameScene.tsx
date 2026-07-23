@@ -1,9 +1,22 @@
+import { Suspense } from 'react';
 import { Canvas } from '@react-three/fiber';
 import { EffectComposer, Bloom, ToneMapping } from '@react-three/postprocessing';
 import { BoardTiles } from '../board/BoardTiles';
 import { PlayerTokens } from '../board/PlayerTokens';
+import { Buildings } from '../board/Buildings';
+import { CityDressing } from '../board/CityDressing';
 
-/** Phase 1 placeholder game screen: renders the static 3D board in a daylight scene. */
+/**
+ * Game screen: renders the static 3D board in a daylight scene plus the
+ * Blender-authored asset layers (player tokens, houses/hotels, city dressing).
+ *
+ * PlayerTokens, Buildings, and CityDressing all render `ModelMesh`, which loads
+ * `.glb` models via drei `useGLTF` and therefore suspends until the model
+ * arrives. They are grouped under a single `<Suspense fallback={null}>` so a
+ * still-loading model shows nothing instead of throwing. BoardTiles, the lights,
+ * and the EffectComposer/Bloom/ToneMapping post-FX load no models and stay
+ * outside the boundary (camera/post-FX unchanged from Phase 1).
+ */
 export function GameScene() {
   return (
     <Canvas style={{ position: 'fixed', inset: 0 }} camera={{ position: [0, 9, 11], fov: 50 }} shadows>
@@ -16,7 +29,11 @@ export function GameScene() {
         <orthographicCamera attach="shadow-camera" args={[-8, 8, 8, -8, 0.1, 30]} />
       </directionalLight>
       <BoardTiles />
-      <PlayerTokens />
+      <Suspense fallback={null}>
+        <PlayerTokens />
+        <Buildings />
+        <CityDressing />
+      </Suspense>
       <EffectComposer>
         <Bloom intensity={0.35} luminanceThreshold={0.9} luminanceSmoothing={0.3} mipmapBlur />
         <ToneMapping />

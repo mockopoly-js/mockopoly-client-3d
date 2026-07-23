@@ -68,6 +68,34 @@ def reset_scene() -> None:
 # bmesh primitives
 # --------------------------------------------------------------------------- #
 
+def add_box(bm: bmesh.types.BMesh, cx, cy, cz, sx, sy, sz):
+    """
+    Add an axis-aligned box to `bm`, centered at (cx, cy, cz) with full sizes
+    (sx, sy, sz). Returns the 8 new corner verts. Canonical version shared by
+    every category generator (was duplicated in gen_tokens.py / gen_buildings.py
+    / gen_city.py).
+    """
+    hx, hy, hz = sx / 2.0, sy / 2.0, sz / 2.0
+    verts = [
+        bm.verts.new((cx - hx, cy - hy, cz - hz)),
+        bm.verts.new((cx + hx, cy - hy, cz - hz)),
+        bm.verts.new((cx + hx, cy + hy, cz - hz)),
+        bm.verts.new((cx - hx, cy + hy, cz - hz)),
+        bm.verts.new((cx - hx, cy - hy, cz + hz)),
+        bm.verts.new((cx + hx, cy - hy, cz + hz)),
+        bm.verts.new((cx + hx, cy + hy, cz + hz)),
+        bm.verts.new((cx - hx, cy + hy, cz + hz)),
+    ]
+    f = bm.faces.new
+    f((verts[0], verts[1], verts[2], verts[3]))  # bottom
+    f((verts[7], verts[6], verts[5], verts[4]))  # top
+    f((verts[0], verts[4], verts[5], verts[1]))  # -y
+    f((verts[1], verts[5], verts[6], verts[2]))  # +x
+    f((verts[2], verts[6], verts[7], verts[3]))  # +y
+    f((verts[3], verts[7], verts[4], verts[0]))  # -x
+    return verts
+
+
 def add_ring(bm: bmesh.types.BMesh, radius: float, z: float, segments: int):
     """Return a list of new verts forming a horizontal ring at height z."""
     verts = []
