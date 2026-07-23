@@ -22,12 +22,18 @@ import { PartnershipPanel } from './ui/PartnershipPanel';
 import { DealPanel } from './ui/DealPanel';
 import { HudButtons } from './ui/HudButtons';
 import { BigMomentOverlay } from './ui/BigMomentOverlay';
+import { MuteButton } from './ui/MuteButton';
+import { useSfx } from './audio/useSfx';
+import { initAudioOnGesture } from './audio/sfx';
 import type { S_GameOver } from './types/SocketEvents';
 
 export default function App() {
   const screen = useGameStore((s) => s.screen);
   const toggleDevHacks = useGameStore((s) => s.toggleDevHacks);
   const toggleDealPanel = useGameStore((s) => s.toggleDealPanel);
+
+  // Wire gameBus events → synthesized SFX.
+  useSfx();
   const mustPay = useGameStore(
     (s) =>
       !!(s.state?.turn?.mustPayRent && s.state?.turn?.currentPlayerId === s.myPlayerId),
@@ -45,6 +51,24 @@ export default function App() {
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
   }, [toggleDevHacks]);
+
+  // Start the WebAudio context on the first user gesture (browser autoplay policy).
+  useEffect(() => {
+    let removed = false;
+    const onGesture = () => {
+      if (removed) return;
+      removed = true;
+      initAudioOnGesture();
+      window.removeEventListener('pointerdown', onGesture);
+      window.removeEventListener('keydown', onGesture);
+    };
+    window.addEventListener('pointerdown', onGesture);
+    window.addEventListener('keydown', onGesture);
+    return () => {
+      window.removeEventListener('pointerdown', onGesture);
+      window.removeEventListener('keydown', onGesture);
+    };
+  }, []);
 
   useEffect(() => {
     const socket = socketManager.connect();
@@ -76,6 +100,7 @@ export default function App() {
     <>
       <ConnectionStatus connected={connected} playerId={playerId} />
       <ToastLayer />
+      <MuteButton />
       {screen === 'menu' && <MainMenu />}
       {screen === 'lobby' && <Lobby />}
       {screen === 'game' && (
