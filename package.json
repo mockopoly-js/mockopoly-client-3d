@@ -11,7 +11,10 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "sync-contract": "node scripts/sync-contract.mjs",
-    "models:build": "/Applications/Blender.app/Contents/MacOS/Blender --background --python scripts/blender/gen_models.py"
+    "models:tokens": "/Applications/Blender.app/Contents/MacOS/Blender --background --python scripts/blender/gen_tokens.py",
+    "models:buildings": "/Applications/Blender.app/Contents/MacOS/Blender --background --python scripts/blender/gen_buildings.py",
+    "models:city": "/Applications/Blender.app/Contents/MacOS/Blender --background --python scripts/blender/gen_city.py",
+    "models:build": "npm run models:tokens && npm run models:buildings && npm run models:city"
   },
   "keywords": [],
   "author": "",

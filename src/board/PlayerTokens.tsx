@@ -6,6 +6,8 @@ import { useGameBusEvent } from '../state/useGameBus';
 import { tileToWorld } from './positions';
 import { hopPath, stackOffset } from './hopPath';
 import { TOKEN_HEX } from '../constants/theme';
+import { TOKEN_MODEL } from '../constants/models';
+import { ModelMesh } from './ModelMesh';
 import type { Player, TokenType } from '../types/GameState';
 
 const BASE_Y = 0.15;
@@ -32,16 +34,24 @@ function restOffset(player: Player, players: Player[]): [number, number] {
 /**
  * Renders one token per non-bankrupt player and animates tile-by-tile hops.
  *
- * Coordinate space: every token mesh is a *direct child of the top-level group*
- * (which sits at the origin), so each mesh's local position IS world position.
- * `useFrame` drives `mesh.position` directly in that single world space — the
- * meshes carry NO React `position` prop, so a store re-render never fights the
- * animation. The white base ring is a child of the mesh, so it follows for free.
+ * Coordinate space: every player's token is a *direct child of the top-level
+ * group* (which sits at the origin) as a `THREE.Group`, so each group's local
+ * position IS world position. `useFrame` drives `group.position` / `group.scale`
+ * directly in that single world space — the groups carry NO React `position`
+ * prop, so a store re-render never fights the animation. Inside each group sits
+ * the tinted token model (a `<ModelMesh>`) plus a subtle white base disc; both
+ * are static children offset down so the model's base (local y=0) rests on the
+ * tile when the group is at BASE_Y, and both inherit the group's animated
+ * transform (position + squash/stretch scale) for free — exactly as the ring
+ * used to inherit the cylinder mesh's transform.
  *
  * On a `player-moved` event we enqueue `hopPath(from, to)` and lerp across each
  * tile in exactly HOP_MS. While a hop is queued the store snapshot (which already
  * holds the final tile) is ignored; when the queue drains we reconcile to
  * `tileToWorld(position)` + stack offset so any drift is corrected.
+ *
+ * Only the animated object changed from a `THREE.Mesh` (cylinder) to a
+ * `THREE.Group` (wrapping the glb) — the drive math below is unchanged.
  */
 export function PlayerTokens() {
   const players = (useGameStore((s) => s.state?.players) ?? []).filter((p) => !p.isBankrupt);
@@ -49,7 +59,7 @@ export function PlayerTokens() {
   // Live refs read inside useFrame (avoids stale closures on re-render).
   const playersRef = useRef<Player[]>(players);
   playersRef.current = players;
-  const meshes = useRef<Record<string, THREE.Mesh | null>>({});
+  const groups = useRef<Record<string, THREE.Group | null>>({});
   const anims = useRef<Record<string, Anim>>({});
   const seeded = useRef<Record<string, boolean>>({});
 
@@ -57,14 +67,14 @@ export function PlayerTokens() {
   useGameBusEvent('player-moved', (d: { playerId: string; from: number; to: number }) => {
     const queue = hopPath(d.from, d.to);
     if (queue.length === 0) return;
-    // Seed the hop start from the mesh's current world position when available
+    // Seed the hop start from the group's current world position when available
     // (handles rapid consecutive moves); otherwise from the `from` tile.
-    const mesh = meshes.current[d.playerId];
+    const group = groups.current[d.playerId];
     let fromX: number;
     let fromZ: number;
-    if (mesh) {
-      fromX = mesh.position.x;
-      fromZ = mesh.position.z;
+    if (group) {
+      fromX = group.position.x;
+      fromZ = group.position.z;
     } else {
       const [x, , z] = tileToWorld(d.from);
       fromX = x;
@@ -77,22 +87,22 @@ export function PlayerTokens() {
     const dtMs = delta * 1000;
     const current = playersRef.current;
     for (const p of current) {
-      const mesh = meshes.current[p.id];
-      if (!mesh) continue;
+      const group = groups.current[p.id];
+      if (!group) continue;
 
       const anim = anims.current[p.id];
       if (anim && anim.queue.length > 0) {
         anim.elapsed += dtMs;
         const t = Math.min(anim.elapsed / HOP_MS, 1);
         const [tx, , tz] = tileToWorld(anim.queue[0]);
-        // World-space lerp: mesh is a direct child of the origin group.
-        mesh.position.x = THREE.MathUtils.lerp(anim.fromX, tx, t);
-        mesh.position.z = THREE.MathUtils.lerp(anim.fromZ, tz, t);
-        mesh.position.y = BASE_Y + Math.sin(t * Math.PI) * HOP_H;
+        // World-space lerp: group is a direct child of the origin group.
+        group.position.x = THREE.MathUtils.lerp(anim.fromX, tx, t);
+        group.position.z = THREE.MathUtils.lerp(anim.fromZ, tz, t);
+        group.position.y = BASE_Y + Math.sin(t * Math.PI) * HOP_H;
         // juice: squash toward the top of the arc, pop on arrival
         const arc = Math.sin(t * Math.PI);           // 0→1→0 over the hop
         const s = 1 + arc * 0.12;                     // stretch up mid-hop
-        mesh.scale.set(1 + (1 - arc) * 0.06, s, 1 + (1 - arc) * 0.06);
+        group.scale.set(1 + (1 - arc) * 0.06, s, 1 + (1 - arc) * 0.06);
         seeded.current[p.id] = true;
         if (t >= 1) {
           // Advance to the next tile; carry over overshoot so we stay in lockstep.
@@ -106,8 +116,8 @@ export function PlayerTokens() {
         // Reconcile to the authoritative tile + stack offset (world space).
         const [x, , z] = tileToWorld(p.position);
         const [ox, oz] = restOffset(p, current);
-        mesh.position.set(x + ox, BASE_Y, z + oz);
-        mesh.scale.set(1, 1, 1);
+        group.position.set(x + ox, BASE_Y, z + oz);
+        group.scale.set(1, 1, 1);
         seeded.current[p.id] = true;
       }
     }
@@ -119,32 +129,30 @@ export function PlayerTokens() {
         // Initial placement only (before the first useFrame tick paints it).
         const [x, , z] = tileToWorld(p.position);
         const [ox, oz] = restOffset(p, players);
+        const hex = TOKEN_HEX[p.token as TokenType];
         return (
-          <mesh
+          <group
             key={p.id}
-            ref={(m) => {
-              meshes.current[p.id] = m;
+            ref={(g) => {
+              groups.current[p.id] = g;
               // Seed world position once so the token appears on its tile even
               // if the very first frame hasn't fired yet.
-              if (m && !seeded.current[p.id]) {
-                m.position.set(x + ox, BASE_Y, z + oz);
+              if (g && !seeded.current[p.id]) {
+                g.position.set(x + ox, BASE_Y, z + oz);
               }
             }}
-            castShadow
           >
-            <cylinderGeometry args={[0.26, 0.26, 0.3, 24]} />
-            <meshStandardMaterial
-              color={TOKEN_HEX[p.token as TokenType]}
-              emissive={TOKEN_HEX[p.token as TokenType]}
-              emissiveIntensity={0.15}
-            />
-            {/* White base ring for legibility on colored tiles — child of the
-                token mesh, so it follows the animated world position for free. */}
-            <mesh position={[0, -0.12, 0]}>
+            {/* Tinted token model. Base at local y=0, so offset down by BASE_Y
+                to rest on the tile when the group sits at BASE_Y. */}
+            <ModelMesh url={TOKEN_MODEL[p.token as TokenType]} tint={hex} position={[0, -BASE_Y, 0]} />
+            {/* Subtle white base disc for legibility on colored tiles — a child
+                of the group, so it follows the animated transform for free
+                (same role the ring played as a child of the old cylinder mesh). */}
+            <mesh position={[0, -0.12, 0]} castShadow>
               <cylinderGeometry args={[0.32, 0.32, 0.04, 24]} />
               <meshStandardMaterial color="#ffffff" />
             </mesh>
-          </mesh>
+          </group>
         );
       })}
     </group>
