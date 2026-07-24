@@ -64,7 +64,6 @@ export function useScreenRouting(): void {
 
   // Previous values so we can tell which side (URL or store) initiated a change.
   const prevPathRef = useRef(pathname);
-  const prevScreenRef = useRef(screen);
 
   useEffect(() => {
     const store = useGameStore.getState();
@@ -74,7 +73,6 @@ export function useScreenRouting(): void {
 
     const pathChanged = pathname !== prevPathRef.current;
     prevPathRef.current = pathname;
-    prevScreenRef.current = screen;
 
     // (1) Refresh / deep-link guard — highest priority. An in-room URL with no
     // room state can never be honored (no reconnect-on-load), so bounce to menu.

@@ -189,7 +189,8 @@ describe('router ↔ screen sync', () => {
       expect(useGameStore.getState().screen).toBe('menu');
       expect(useGameStore.getState().state).toBe(null);
     });
-    expect(emitSpy).toHaveBeenCalledWith(EVENTS.ROOM_LEAVE);
+    const leaveCalls = (emitSpy.mock.calls as any[]).filter((c: any[]) => c[0] === EVENTS.ROOM_LEAVE);
+    expect(leaveCalls.length).toBe(1);
   });
 
   it('redirects a stateless deep-link/refresh to /game back to / (menu)', async () => {
