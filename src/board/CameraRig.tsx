@@ -3,11 +3,16 @@ import { useFrame, useThree } from '@react-three/fiber';
 import { OrbitControls } from '@react-three/drei';
 import * as THREE from 'three';
 import type { OrbitControls as OrbitControlsImpl } from 'three-stdlib';
-import { useGameStore, selectCurrentPlayer } from '../state/gameStore';
+import { useGameStore, selectCurrentPlayer, selectMyPlayer } from '../state/gameStore';
 import type { CameraReadout } from '../state/gameStore';
+import { thirdPersonPose } from './positions';
 
 // Re-export so callers can assert the shared constant is wired in.
 export { BOARD_ROTATION } from './positions';
+
+// Frame-rate-aware smoothing rate for the follow lerp. Higher = snappier.
+// alpha = 1 - exp(-RATE * delta) → ease-out, no snapping, stable at any FPS.
+const FOLLOW_LERP_RATE = 6;
 
 // ── Tunable initial-framing constants ─────────────────────────────────────────
 // These values were dialed in live via the debug overlay.
@@ -62,8 +67,26 @@ export function CameraRig() {
   // Access the R3F camera for the initial snap (sets camera position too).
   const camera = useThree((s) => s.camera);
 
-  // Read active player only to know when store is hydrated (needed for the snap guard).
+  // Active player = whose turn it is (NOT socket.id). Doubles as the store-hydration
+  // guard for the initial snap below.
   const activePlayer = useGameStore(selectCurrentPlayer);
+  // Fall back to MY player token when there is no active/current player.
+  const myPlayer = useGameStore(selectMyPlayer);
+
+  // ── Follow-mode state ────────────────────────────────────────────────────
+  // cameraMode drives whether the useFrame loop follows a token or stays hands-off.
+  const cameraMode = useGameStore((s) => s.cameraMode);
+
+  // Refs mirror the reactive values so the single useFrame closure never goes stale.
+  const cameraModeRef = useRef(cameraMode);
+  cameraModeRef.current = cameraMode;
+  const followTileRef = useRef<number | null>(null);
+  followTileRef.current =
+    activePlayer?.position ?? myPlayer?.position ?? null;
+
+  // Reusable scratch vectors so the follow lerp allocates nothing per frame.
+  const scratchCamPos = useRef(new THREE.Vector3());
+  const scratchTarget = useRef(new THREE.Vector3());
 
   // Initial snap: on first mount, snap the OrbitControls target to the fixed
   // INITIAL_CAM_TARGET and place the camera at target + INITIAL_CAM_OFFSET.
@@ -96,11 +119,14 @@ export function CameraRig() {
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
       if (e.key !== 'Shift') return;
+      // While the camera is locked in third-person follow, Shift-pan is inert.
+      if (cameraModeRef.current === 'thirdPerson') return;
       const controls = controlsRef.current;
       if (controls) controls.mouseButtons.LEFT = THREE.MOUSE.PAN;
     };
     const onKeyUp = (e: KeyboardEvent) => {
       if (e.key !== 'Shift') return;
+      if (cameraModeRef.current === 'thirdPerson') return;
       const controls = controlsRef.current;
       if (controls) controls.mouseButtons.LEFT = THREE.MOUSE.ROTATE;
     };
@@ -112,9 +138,43 @@ export function CameraRig() {
     };
   }, []);
 
+  // Orbit-lock toggle: when third-person follow is ON, disable the LEFT mouse
+  // rotate/pan so manual orbit cannot fight the follow; when returning to free,
+  // restore LEFT=ROTATE. The mode button (a React onClick) is unaffected. The
+  // camera keeps whatever position the follow left it in — free orbit resumes
+  // from there rather than snapping back to the fixed initial view.
+  useEffect(() => {
+    const controls = controlsRef.current;
+    if (!controls) return;
+    controls.mouseButtons.LEFT =
+      cameraMode === 'thirdPerson' ? undefined : THREE.MOUSE.ROTATE;
+  }, [cameraMode]);
+
   useFrame((_state, delta) => {
     const controls = controlsRef.current;
     if (!controls) return;
+
+    // ── Third-person follow (only when the mode is on) ───────────────────────
+    // When 'free' we do NO work here and never touch the camera/target, so the
+    // user's manual orbit/pan/zoom is never overridden. When 'thirdPerson' we
+    // ease the camera + target toward the over-the-shoulder pose behind the
+    // active player's token every frame. The pose is world-space (already
+    // BOARD_ROTATION-applied via tileToWorldRotated), matching the camera space.
+    if (cameraModeRef.current === 'thirdPerson') {
+      const tile = followTileRef.current;
+      if (tile != null) {
+        const pose = thirdPersonPose(tile);
+        // Frame-rate-aware ease-out: alpha grows with delta, capped at 1.
+        const alpha = 1 - Math.exp(-FOLLOW_LERP_RATE * delta);
+        const cam = controls.object;
+        scratchCamPos.current.copy(pose.cameraPos);
+        scratchTarget.current.copy(pose.target);
+        cam.position.lerp(scratchCamPos.current, alpha);
+        controls.target.lerp(scratchTarget.current, alpha);
+        controls.update();
+      }
+      // If tile is null (no active/my player), no-op: stay put (effectively free).
+    }
 
     // ── Throttled camera debug readout (~8x/sec, not every frame) ────────────
     readoutAccum.current += delta;

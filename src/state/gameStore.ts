@@ -30,6 +30,13 @@ export interface CameraReadout {
   dist: number;
 }
 
+/**
+ * Camera view mode:
+ * - 'free'        — default free-orbit navigation (Blender-style), unchanged.
+ * - 'thirdPerson' — over-the-shoulder view locked behind the active player token.
+ */
+export type CameraMode = 'free' | 'thirdPerson';
+
 interface GameStore {
   // ── durable mirror of server state (was LocalGameState) ──
   state: GameState | null;
@@ -51,6 +58,11 @@ interface GameStore {
   // ── camera debug readout (written throttled from CameraRig.useFrame) ──
   cameraReadout: CameraReadout | null;
   setCameraReadout: (v: CameraReadout) => void;
+
+  // ── camera view mode (free-orbit vs over-the-shoulder follow) ──
+  cameraMode: CameraMode;
+  setCameraMode: (m: CameraMode) => void;
+  toggleCameraMode: () => void;
 
   // ── read-only deed-card inspect (board tile click) ──
   // Separate from selectedPropertyIndex/showPropertyCard which drive MortgagePanel.
@@ -119,6 +131,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
   gameOver: null,
   deedCardIndex: null,
   cameraReadout: null,
+  cameraMode: 'free',
 
   selectedCharacter: getStoredCharacter(),
   selectedCharacterColor: getStoredCharacterColor(),
@@ -165,6 +178,9 @@ export const useGameStore = create<GameStore>((set, get) => ({
   selectProperty: (index) =>
     set({ selectedPropertyIndex: index, showPropertyCard: index !== null }),
   setCameraReadout: (v) => set({ cameraReadout: v }),
+  setCameraMode: (m) => set({ cameraMode: m }),
+  toggleCameraMode: () =>
+    set((s) => ({ cameraMode: s.cameraMode === 'free' ? 'thirdPerson' : 'free' })),
   openDeedCard: (index) => set({ deedCardIndex: index }),
   closeDeedCard: () => set({ deedCardIndex: null }),
   toggleTradePanel: (show) =>
@@ -195,6 +211,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
       gameOver: null,
       deedCardIndex: null,
       cameraReadout: null,
+      cameraMode: 'free',
     });
   },
 }));
