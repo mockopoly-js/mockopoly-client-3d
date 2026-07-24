@@ -73,6 +73,34 @@ describe('buildTilePath', () => {
     expect(buildTilePath(40, 42)).toEqual([0, 1, 2]);
     expect(buildTilePath(-1, 1)).toEqual([39, 0, 1]);
   });
+
+  // ── Backward (counter-clockwise) walks — "Go back N spaces" cards ────────────
+  it('walks BACKWARD (counter-clockwise) when backward=true', () => {
+    // "Go back 3 spaces" from 7 → 4: 3 tiles the short way, NOT 37 the long way.
+    expect(buildTilePath(7, 4, true)).toEqual([7, 6, 5, 4]);
+  });
+  it('backward walk wraps 0 → 39 (never cuts across)', () => {
+    // from 1 back to 38: 1,0,39,38 — rounds the GO corner counter-clockwise.
+    expect(buildTilePath(1, 38, true)).toEqual([1, 0, 39, 38]);
+  });
+  it('backward step count equals the actual spaces moved (timing parity)', () => {
+    // 7→4 backward is 3 segments (4 vertices) → matches the server's 3-space move
+    // gate, unlike the 37-segment clockwise path (38 vertices) the un-directed
+    // helper would return, which is what caused the mid-walk snap.
+    expect(buildTilePath(7, 4, true)).toHaveLength(4);  // 3 segments
+    expect(buildTilePath(7, 4)).toHaveLength(38);        // forward = 37 segments (the bug)
+  });
+  it('from === to is a no-op single vertex regardless of direction', () => {
+    expect(buildTilePath(7, 7, true)).toEqual([7]);
+    expect(buildTilePath(7, 7, false)).toEqual([7]);
+  });
+  it('forward direction is unchanged when backward is omitted or false', () => {
+    // Regression guard: default and explicit-false must match the original
+    // clockwise behavior byte-for-byte, including the wrap-past-GO case.
+    expect(buildTilePath(38, 2)).toEqual([38, 39, 0, 1, 2]);
+    expect(buildTilePath(38, 2, false)).toEqual([38, 39, 0, 1, 2]);
+    expect(buildTilePath(12, 20, false)).toEqual([12, 13, 14, 15, 16, 17, 18, 19, 20]);
+  });
 });
 
 describe('thirdPersonPose', () => {

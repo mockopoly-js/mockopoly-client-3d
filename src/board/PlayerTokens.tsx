@@ -39,8 +39,15 @@ const YAW_TURN_PER_FRAME = 0.55;
 const YAW_SNAP_EPSILON = 0.03;
 
 interface Anim {
-  /** World-space vertices of the walk polyline (tile centers), from A..B. */
+  /** World-space vertices of the walk polyline (RAW tile centers), from A..B.
+   *  These stay un-offset so lerp/tangent (facing) math is computed from true
+   *  tile centers — the destination stack offset is applied SEPARATELY below. */
   pts: { x: number; z: number }[];
+  /** Fixed planar bias (destination stack slot) added to the lerped position so
+   *  the token rests exactly on its stack slot WITHOUT skewing the last segment's
+   *  tangent. Facing is derived from the raw (un-offset) centers; only the final
+   *  rendered position carries this bias, ramped in over the walk. */
+  destOffset: { x: number; z: number };
   /** Index of the segment currently being walked (pts[seg] → pts[seg+1]). */
   seg: number;
   /** ms elapsed into the current segment. */
@@ -162,52 +169,78 @@ export function PlayerTokens() {
   const chars = useRef<Record<string, CharacterTokenHandle | null>>({});
 
   // Server says a token moved → build the walk polyline + flag it moving.
-  useGameBusEvent('player-moved', (d: { playerId: string; from: number; to: number }) => {
-    const tiles = buildTilePath(d.from, d.to);
-    // A single-vertex path means no actual move (from === to) → stay Idle.
-    if (tiles.length < 2) return;
+  // `passedGo` rides along on the S_PlayerMoved contract event and is already
+  // forwarded verbatim by GameStateSync (gameBus.emit('player-moved', data)),
+  // so we can read it directly here without touching the socket contract.
+  useGameBusEvent(
+    'player-moved',
+    (d: { playerId: string; from: number; to: number; passedGo?: boolean }) => {
+      // DIRECTION of travel. The reliable signal is passedGo (the server credits
+      // it whenever a forward move wrapped past GO). So a move is FORWARD when the
+      // server passed GO, OR when the index simply increased; it is BACKWARD only
+      // when the index decreased AND GO was not passed ("Go back N spaces" from a
+      // non-corner tile decrements position without passing GO).
+      //
+      // Known negligible corner (do NOT over-engineer): a backward-3 from tiles
+      // {0,1,2} lands on {37,38,39} with to>from and !passedGo, indistinguishable
+      // from an "advance to Boardwalk"-type forward move → treated as forward.
+      // Cosmetic + ultra-rare; left as-is intentionally.
+      const forward = !!d.passedGo || d.to >= d.from;
+      const tiles = buildTilePath(d.from, d.to, !forward);
+      // A single-vertex path means no actual move (from === to) → stay Idle.
+      if (tiles.length < 2) return;
 
-    // Vertices are the tile centers to glide through, in order.
-    const pts = tiles.map((idx) => {
-      const [x, , z] = tileToWorld(idx);
-      return { x, z };
-    });
+      // Vertices are the RAW tile centers to glide through, in order. Stack
+      // offset is NOT baked in here (see destOffset below) so segment tangents
+      // — and therefore facing — stay true to the ring, un-skewed by the slot.
+      const pts = tiles.map((idx) => {
+        const [x, , z] = tileToWorld(idx);
+        return { x, z };
+      });
 
-    // Seed the first vertex from the group's current world position when
-    // available (handles rapid consecutive moves so the walk starts exactly
-    // where the token is, with no visible jump); otherwise the `from` center.
-    const group = groups.current[d.playerId];
-    if (group) {
-      pts[0] = { x: group.position.x, z: group.position.z };
-    }
+      // Seed the first vertex from the group's current world position when
+      // available (handles rapid consecutive moves so the walk starts exactly
+      // where the token is, with no visible jump); otherwise the `from` center.
+      const group = groups.current[d.playerId];
+      if (group) {
+        pts[0] = { x: group.position.x, z: group.position.z };
+      }
 
-    // Land the FINAL vertex on the destination tile's resting stack offset so
-    // the walk ends exactly where the rest-reconcile will place the token —
-    // avoids a sub-frame pop of the stack offset when co-located tokens share
-    // the destination tile. Intermediate vertices stay on raw tile centers.
-    //
-    // NOTE: at event time the store positions are still stale (the authoritative
-    // GAME_STATE_UPDATE that moves this player to `d.to` arrives AFTER the anim
-    // window). We therefore predict the destination offset from `d.to` directly,
-    // reproducing the same index rule the rest-reconcile uses, so the walk ends
-    // exactly where the token will rest.
-    const [dox, doz] = destOffset(d.playerId, d.to, playersRef.current);
-    const last = pts[pts.length - 1];
-    pts[pts.length - 1] = { x: last.x + dox, z: last.z + doz };
+      // Destination stack slot. Applied as a FIXED positional bias added AFTER
+      // the lerp (see useFrame), NOT baked into the final vertex — so the last
+      // segment's tangent (facing) is computed from raw centers and never skews
+      // toward the slot, while the token still comes to rest exactly on its slot.
+      //
+      // NOTE: at event time the store positions are still stale (the authoritative
+      // GAME_STATE_UPDATE that moves this player to `d.to` arrives AFTER the anim
+      // window). We predict the destination offset from `d.to` directly,
+      // reproducing the same index rule the rest-reconcile uses, so the walk ends
+      // exactly where the token will rest.
+      const [dox, doz] = destOffset(d.playerId, d.to, playersRef.current);
 
-    const steps = pts.length - 1; // number of segments (tiles walked)
-    // Clamp per-tile time to the server sync window so the whole walk finishes
-    // before the next GAME_STATE_UPDATE arrives (never snapped mid-stride).
-    const windowMs = SERVER_MOVE_WINDOW_PER_TILE_MS * steps;
-    const perTile = Math.min(WALK_MS_PER_TILE, windowMs / steps);
+      const steps = pts.length - 1; // number of segments (tiles walked)
+      // Clamp per-tile time to the server sync window so the whole walk finishes
+      // before the next GAME_STATE_UPDATE arrives (never snapped mid-stride).
+      // With the directed path, `steps` now equals the server's ACTUAL moved-space
+      // count in BOTH directions, so windowMs/steps lines the walk up with the
+      // server's ANIMATION_TOKEN_MOVE_PER_SPACE_MS × actualSpaces gate again.
+      const windowMs = SERVER_MOVE_WINDOW_PER_TILE_MS * steps;
+      const perTile = Math.min(WALK_MS_PER_TILE, windowMs / steps);
 
-    anims.current[d.playerId] = { pts, seg: 0, segElapsed: 0, perTile };
+      anims.current[d.playerId] = {
+        pts,
+        destOffset: { x: dox, z: doz },
+        seg: 0,
+        segElapsed: 0,
+        perTile,
+      };
 
-    // Flip to 'Walk' (only if not already flagged — avoids a redundant render).
-    if (!movingRef.current[d.playerId]) {
-      setMoving((m) => ({ ...m, [d.playerId]: true }));
-    }
-  });
+      // Flip to 'Walk' (only if not already flagged — avoids a redundant render).
+      if (!movingRef.current[d.playerId]) {
+        setMoving((m) => ({ ...m, [d.playerId]: true }));
+      }
+    },
+  );
 
   // One-shot Victory for the winner on game over.
   useGameBusEvent('game-over', (d: { winnerId: string }) => {
@@ -242,15 +275,26 @@ export function PlayerTokens() {
         const b = anim.pts[anim.seg + 1];
         const t = Math.min(anim.segElapsed / anim.perTile, 1);
 
+        // Position lerp uses RAW tile centers (a, b), so the resulting tangent
+        // below is un-skewed. The destination stack offset is a FIXED positional
+        // bias added on TOP of the lerp — ramped in only over the FINAL segment so
+        // (a) intermediate segments ride the true ring centerline and (b) the
+        // token still arrives exactly on its resting slot with no end-of-walk pop.
+        const isLastSeg = anim.seg >= anim.pts.length - 2;
+        const offX = isLastSeg ? anim.destOffset.x * t : 0;
+        const offZ = isLastSeg ? anim.destOffset.z * t : 0;
+
         // Constant-speed glide along the current segment, feet flat on the board.
-        group.position.x = THREE.MathUtils.lerp(a.x, b.x, t);
-        group.position.z = THREE.MathUtils.lerp(a.z, b.z, t);
+        group.position.x = THREE.MathUtils.lerp(a.x, b.x, t) + offX;
+        group.position.z = THREE.MathUtils.lerp(a.z, b.z, t) + offZ;
         group.position.y = BASE_Y; // NO hop arc — walk at ground level.
 
-        // FACING follows the CURRENT segment tangent, so the target heading flips
-        // discretely at each corner vertex. A fast, delta-scaled yaw lerp (with an
-        // epsilon snap) closes that error within a frame or two, so the turn reads
-        // as completing AT the corner, not one tile later.
+        // FACING follows the CURRENT segment tangent, computed from the RAW tile
+        // centers (offset excluded) so the last segment's heading points straight
+        // down the ring rather than angling toward the stack slot. The target
+        // heading flips discretely at each corner vertex; a fast, delta-scaled yaw
+        // lerp (with an epsilon snap) closes that error within a frame or two, so
+        // the turn reads as completing AT the corner, not one tile later.
         const dx = b.x - a.x;
         const dz = b.z - a.z;
         if (Math.abs(dx) > 1e-6 || Math.abs(dz) > 1e-6) {
@@ -268,9 +312,11 @@ export function PlayerTokens() {
 
         // Reached the final vertex → walk done.
         if (anim.seg >= anim.pts.length - 2 && anim.segElapsed >= anim.perTile) {
-          // Snap to the exact final vertex to kill sub-pixel drift, then clear.
-          group.position.x = b.x;
-          group.position.z = b.z;
+          // Snap to the exact final vertex + full stack offset to kill sub-pixel
+          // drift and land precisely on the resting slot, then clear. (b is a raw
+          // tile center, so the full destOffset is added here.)
+          group.position.x = b.x + anim.destOffset.x;
+          group.position.z = b.z + anim.destOffset.z;
           delete anims.current[p.id];
           // Path complete → back to 'Idle'. Guard so we setState only on the
           // transition, never every frame.

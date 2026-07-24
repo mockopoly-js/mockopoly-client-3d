@@ -54,15 +54,24 @@ export function tileToWorld(index: number): [number, number, number] {
 
 /**
  * Ordered list of tile indices a token WALKS through moving `from` → `to`,
- * INCLUSIVE of both endpoints and following the ring clockwise (index+1),
- * wrapping past 39 → 0 so the token rounds corners and passes GO along the
- * track — it NEVER cuts diagonally across the board.
+ * INCLUSIVE of both endpoints and following the ring, wrapping around 39↔0 so
+ * the token rounds corners and passes GO along the track — it NEVER cuts
+ * diagonally across the board.
  *
- * Result shape: `[from, from+1, …, to]` (all mod 40). This is the polyline of
- * tile centers the walk animation glides along; consecutive entries are always
- * adjacent tiles on the ring, so segment tangents give clean per-segment facing.
+ * Direction:
+ * - `backward === false` (default): clockwise (index+1), shape
+ *   `[from, from+1, …, to]` — the normal direction of travel for rolls,
+ *   "advance to" cards, and forward moves that wrap past GO. Byte-for-byte
+ *   the original behavior.
+ * - `backward === true`: counter-clockwise (index-1), shape
+ *   `[from, from-1, …, to]` — for "Go back N spaces" style moves where the
+ *   server DECREMENTED the position. Wraps 0 → 39.
  *
- * - `from === to` → `[from]` (a single vertex; no movement, token stays put).
+ * All indices are mod 40. Consecutive entries are always adjacent tiles on the
+ * ring, so segment tangents give clean per-segment facing in either direction.
+ *
+ * - `from === to` → `[from]` (a single vertex; no movement, token stays put),
+ *   regardless of `backward`.
  * - A full lap (`from === to` is treated as no-op, NOT a 40-tile loop) — the
  *   server sends distinct from/to for real moves, so a same-tile event means
  *   "already there". Callers that want a full lap must pass distinct indices.
@@ -73,14 +82,15 @@ export function tileToWorld(index: number): [number, number, number] {
  *
  * Exported + pure so it can be unit-tested independently of Three.js.
  */
-export function buildTilePath(from: number, to: number): number[] {
+export function buildTilePath(from: number, to: number, backward = false): number[] {
   const a = ((from % 40) + 40) % 40;
   const b = ((to % 40) + 40) % 40;
   const path: number[] = [a];
   if (a === b) return path;
+  const step = backward ? -1 : 1;
   let i = a;
   do {
-    i = (i + 1) % 40;
+    i = ((i + step) % 40 + 40) % 40;
     path.push(i);
   } while (i !== b);
   return path;
