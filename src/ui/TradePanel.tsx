@@ -29,7 +29,9 @@ export function TradePanel() {
   const [countering, setCountering] = useState(false);
 
   const incoming = activeTrade && activeTrade.toPlayerId === myId;
-  const isOpen = open || !!activeTrade;
+  // Only auto-open for the two involved parties, not spectators
+  const isParty = activeTrade && (activeTrade.fromPlayerId === myId || activeTrade.toPlayerId === myId);
+  const isOpen = open || !!isParty;
 
   if (!isOpen) return null;
 

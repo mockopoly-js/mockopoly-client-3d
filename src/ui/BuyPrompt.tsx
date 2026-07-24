@@ -7,6 +7,7 @@ import { COLOR_GROUP_HEX } from '../constants/theme';
 import { formatMoney } from '../utils/format';
 import { useIsMobile } from './useIsMobile';
 import { FONT_FAMILY } from '../constants/fonts';
+import { DeedCard } from './DeedCard';
 
 const BUYABLE = ['property', 'railroad', 'utility'];
 
@@ -28,6 +29,9 @@ export function BuyPrompt() {
 
   const canAfford = me.money >= price;
   const accent = space.colorGroup ? COLOR_GROUP_HEX[space.colorGroup] : '#d4af37';
+  const cardFrame = space.cardFrame;
+  const mortgaged = !!owned?.isMortgaged;
+  const deedW = isMobile ? 128 : 150;
 
   const buy = () => socketManager.emit(EVENTS.TURN_BUY_PROPERTY);
   const decline = () => socketManager.emit(EVENTS.TURN_END);
@@ -35,6 +39,11 @@ export function BuyPrompt() {
   const inner = (
     <>
       <div style={{ height: 10, borderRadius: 6, background: accent, marginBottom: 12 }} />
+      {cardFrame != null && (
+        <div style={{ display: 'grid', placeItems: 'center', marginBottom: 14 }}>
+          <DeedCard cardFrame={cardFrame} mortgaged={mortgaged} width={deedW} aria-label={`${space.name} deed`} />
+        </div>
+      )}
       <div style={{ fontWeight: 800, fontSize: 20 }}>{space.name}</div>
       <div style={{ color: '#9a8f7c', margin: '4px 0 16px', fontVariantNumeric: 'tabular-nums' }}>
         Price {formatMoney(price)}

@@ -35,6 +35,10 @@ describe('BuyPrompt', () => {
     const emit = vi.spyOn(socketManager, 'emit').mockImplementation(() => {});
     render(<BuyPrompt />);
     expect(screen.getByText(prop.name)).toBeTruthy();
+    // Deed sprite renders (front face) from the space's cardFrame.
+    const deed = screen.getByTestId('deed-card');
+    expect(deed.getAttribute('data-card-frame')).toBe(String(prop.cardFrame));
+    expect(deed.getAttribute('data-face')).toBe('front');
     fireEvent.click(screen.getByRole('button', { name: /buy/i }));
     expect(emit).toHaveBeenCalledWith(EVENTS.TURN_BUY_PROPERTY);
   });

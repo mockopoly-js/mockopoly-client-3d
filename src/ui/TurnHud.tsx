@@ -11,15 +11,23 @@ export function TurnHud() {
   const isMyTurn = useGameStore(selectIsMyTurn);
   const current = useGameStore(selectCurrentPlayer);
   const turn = useGameStore((s) => s.state?.turn);
+  const freeParkingPool = useGameStore((s) => s.state?.freeParkingPool ?? 0);
   const isMobile = useIsMobile();
 
   if (!turn) return null;
 
+  const isJailed = me?.isJailed ?? false;
+  const jailCardCount = me?.jailCardCount ?? 0;
+
   const canRoll = isMyTurn && turn.phase === 'waiting' && !turn.hasRolled;
   const canEnd = isMyTurn && (turn.phase === 'action' || turn.phase === 'end');
+  const showJailActions = isMyTurn && isJailed && turn.phase === 'waiting';
 
+  // Server handles jailed-roll logic internally inside the TURN_ROLL_DICE handler.
   const roll = () => socketManager.emit(EVENTS.TURN_ROLL_DICE);
   const end = () => socketManager.emit(EVENTS.TURN_END);
+  const payFine = () => socketManager.emit(EVENTS.JAIL_PAY_FINE);
+  const useCard = () => socketManager.emit(EVENTS.JAIL_USE_CARD);
 
   if (isMobile) {
     return (
@@ -28,12 +36,27 @@ export function TurnHud() {
           <span style={{ fontWeight: 800, color: isMyTurn ? '#d4af37' : '#e8e8f0' }}>
             {isMyTurn ? 'Your turn' : `${current?.name ?? '…'}'s turn`}
           </span>
+          {freeParkingPool > 0 && (
+            <span style={fpPill}>
+              FP: {formatMoney(freeParkingPool)}
+            </span>
+          )}
           <span style={{ fontWeight: 800, fontVariantNumeric: 'tabular-nums' }}>
             {me ? formatMoney(me.money) : ''}
           </span>
         </div>
         {/* Mobile action buttons are rendered inside the bottom bar — see hotbarMobile */}
         <div style={hotbarMobile}>
+          {showJailActions && (
+            <button onClick={payFine} style={{ ...btnMobile, ...primary }}>
+              Pay Fine (£500K)
+            </button>
+          )}
+          {showJailActions && (
+            <button onClick={useCard} disabled={jailCardCount === 0} style={{ ...btnMobile, ...(jailCardCount > 0 ? primary : disabledStyle) }}>
+              Use Card
+            </button>
+          )}
           <button onClick={roll} disabled={!canRoll} style={{ ...btnMobile, ...(canRoll ? primary : disabledStyle) }}>
             Roll
           </button>
@@ -51,11 +74,26 @@ export function TurnHud() {
         <span style={{ fontWeight: 800, color: isMyTurn ? '#d4af37' : '#e8e8f0' }}>
           {isMyTurn ? 'Your turn' : `${current?.name ?? '…'}'s turn`}
         </span>
+        {freeParkingPool > 0 && (
+          <span style={fpPill}>
+            FP: {formatMoney(freeParkingPool)}
+          </span>
+        )}
         <span style={{ fontWeight: 800, fontVariantNumeric: 'tabular-nums' }}>
           {me ? formatMoney(me.money) : ''}
         </span>
       </div>
       <div style={hotbar}>
+        {showJailActions && (
+          <button onClick={payFine} style={{ ...btn, ...primary }}>
+            Pay Fine (£500K)
+          </button>
+        )}
+        {showJailActions && (
+          <button onClick={useCard} disabled={jailCardCount === 0} style={{ ...btn, ...(jailCardCount > 0 ? primary : disabledStyle) }}>
+            Use Card
+          </button>
+        )}
         <button onClick={roll} disabled={!canRoll} style={{ ...btn, ...(canRoll ? primary : disabledStyle) }}>
           Roll
         </button>
@@ -104,6 +142,13 @@ const btnMobile: React.CSSProperties = {
   fontFamily: FONT, fontWeight: 800, fontSize: 16, border: 'none',
   borderRadius: 14, padding: '14px 0', cursor: 'pointer', flex: 1,
   minHeight: 44,
+};
+
+// ── Free Parking pill ──
+const fpPill: React.CSSProperties = {
+  fontSize: 11, fontWeight: 800, background: '#1a3020', color: '#46b16a',
+  border: '1px solid #46b16a', borderRadius: 999, padding: '2px 8px',
+  fontVariantNumeric: 'tabular-nums',
 };
 
 // ── Shared state styles ──

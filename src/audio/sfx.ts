@@ -2,7 +2,7 @@
 // ALL public functions are jsdom/SSR-safe: they guard every AudioContext access
 // and never throw when AudioContext is absent.
 
-export type SfxName = 'roll' | 'hop' | 'buy' | 'rent' | 'jail' | 'bankrupt' | 'win';
+export type SfxName = 'roll' | 'hop' | 'buy' | 'rent' | 'jail' | 'bankrupt' | 'win' | 'card';
 
 const MUTE_KEY = 'mockopoly_muted';
 
@@ -324,6 +324,19 @@ const SYNTHS: Record<SfxName, () => void> = {
     // Final bright chime ring: two close sine frequencies (beating shimmer)
     osc('sine', 2093, t + 0.32, 0.15, 0.1, 0.003, 0.01, 0.0);
     osc('sine', 2101, t + 0.32, 0.15, 0.1, 0.003, 0.01, 0.0);
+  },
+
+  /**
+   * Card flip (Chance / Community Chest reveal, ~180ms).
+   * Papery high-pass noise "swish" + a soft rising pluck — a card turning over.
+   */
+  card() {
+    const t = now();
+    // Papery swish: brief high-pass noise as the card flips
+    noiseBurst(t, 0.11, 0.14, 4200, 0.8, 'highpass');
+    // Soft rising pluck: card settling face-up
+    osc('triangle', 520, t + 0.03, 0.12, 0.16, 0.004, 0.02, 0.0);
+    osc('sine', 1040, t + 0.03, 0.08, 0.08, 0.003, 0.01, 0.0);
   },
 };
 

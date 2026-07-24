@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import React, { useState } from 'react';
 import { useGameStore } from '../state/gameStore';
 import { socketManager } from '../network/SocketManager';
 import { EVENTS } from '../types/SocketEvents';
@@ -35,11 +35,19 @@ export function PartnershipPanel() {
   const name = (id: string) => players.find((p) => p.id === id)?.name ?? id;
   const emit = (ev: string, payload: object) => socketManager.emit(ev, payload);
 
-  const owns = (idx: number) => properties.find((p) => p.spaceIndex === idx)?.ownerId === myId;
-  const eligibleGroups = HOUSEABLE.filter((g) =>
-    !partnerships.some((pt) => pt.colorGroup === g) &&
-    (COLOR_GROUPS[g] ?? []).some(owns)
-  );
+  const ownerOf = (idx: number) => properties.find((p) => p.spaceIndex === idx)?.ownerId ?? null;
+  const eligibleGroups = HOUSEABLE.filter((g) => {
+    const groupIndices = COLOR_GROUPS[g] ?? [];
+    // No active partnership already exists for this group
+    if (partnerships.some((pt) => pt.colorGroup === g)) return false;
+    // All group members must be owned (no unowned spaces)
+    if (!groupIndices.every((idx) => ownerOf(idx) !== null)) return false;
+    // Must have ≥2 distinct owners across the group (a partnership requires co-owners)
+    const owners = new Set(groupIndices.map(ownerOf));
+    if (owners.size < 2) return false;
+    // I must own at least one property in the group
+    return groupIndices.some((idx) => ownerOf(idx) === myId);
+  });
 
   const groupOwners = group
     ? Array.from(new Set(

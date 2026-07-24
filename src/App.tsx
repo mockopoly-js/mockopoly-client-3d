@@ -23,6 +23,7 @@ import { PartnershipPanel } from './ui/PartnershipPanel';
 import { DealPanel } from './ui/DealPanel';
 import { HudButtons } from './ui/HudButtons';
 import { BigMomentOverlay } from './ui/BigMomentOverlay';
+import { CardDrawnOverlay } from './ui/CardDrawnOverlay';
 import { MuteButton } from './ui/MuteButton';
 import { RotateHint } from './ui/RotateHint';
 import { useSfx } from './audio/useSfx';
@@ -114,6 +115,7 @@ export default function App() {
       <ToastLayer />
       <MuteButton />
       <RotateHint />
+      <DevHacksPanel />
       {screen === 'menu' && <MainMenu />}
       {screen === 'lobby' && <Lobby />}
       {screen === 'game' && (
@@ -127,12 +129,12 @@ export default function App() {
           <PlayerPods />
           <GameLog />
           <MortgagePanel />
-          <DevHacksPanel />
           <HudButtons />
           <TradePanel />
           <PartnershipPanel />
           <DealPanel />
           <BigMomentOverlay />
+          <CardDrawnOverlay />
         </>
       )}
       {screen === 'game-over' && <GameOverScreen />}

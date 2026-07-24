@@ -4,8 +4,55 @@ import { socketManager } from '../network/SocketManager';
 import { EVENTS } from '../types/SocketEvents';
 import { formatMoney } from '../utils/format';
 import { useIsMobile } from './useIsMobile';
-import type { Player, RentDeal } from '../types/GameState';
+import type { Player, RentDeal, PropertyState } from '../types/GameState';
+import { BOARD_SPACES } from '../constants/board';
 import { FONT_FAMILY } from '../constants/fonts';
+
+// ── Property Picker ────────────────────────────────────────────────────────────
+// Shared checklist of the debtor's eligible properties (owned, not mortgaged,
+// no buildings). Used in both the initial offer and the counter edit mode.
+
+interface PropertyPickerProps {
+  eligibleProps: PropertyState[];
+  selected: Set<number>;
+  onToggle: (idx: number) => void;
+}
+
+function PropertyPicker({ eligibleProps, selected, onToggle }: PropertyPickerProps) {
+  if (eligibleProps.length === 0) {
+    return <div style={{ fontSize: 12, color: '#555570', fontStyle: 'italic', margin: '4px 0 8px' }}>No eligible properties to offer</div>;
+  }
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 4, marginBottom: 8 }}>
+      {eligibleProps.map((p) => {
+        const space = BOARD_SPACES.find((s) => s.index === p.spaceIndex);
+        const name = space?.name ?? `Space #${p.spaceIndex}`;
+        const isSelected = selected.has(p.spaceIndex);
+        return (
+          <button
+            key={p.spaceIndex}
+            onClick={() => onToggle(p.spaceIndex)}
+            style={{
+              fontFamily: FONT_FAMILY,
+              display: 'flex', alignItems: 'center', gap: 8,
+              background: isSelected ? 'rgba(212,175,55,0.15)' : '#1a1a2e',
+              border: isSelected ? '1px solid #d4af37' : '1px solid #333350',
+              borderRadius: 8, padding: '6px 10px', cursor: 'pointer',
+              color: isSelected ? '#d4af37' : '#e8e8f0', fontSize: 12, textAlign: 'left',
+            }}
+          >
+            <span style={{ width: 14, height: 14, borderRadius: 3, border: isSelected ? 'none' : '1px solid #555570', background: isSelected ? '#d4af37' : 'transparent', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', fontSize: 10, color: '#08080f', flexShrink: 0 }}>
+              {isSelected ? '✓' : ''}
+            </span>
+            {name}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+// ── DealPanel ──────────────────────────────────────────────────────────────────
 
 export function DealPanel() {
   const open = useGameStore((s) => s.showDealPanel);
@@ -13,6 +60,7 @@ export function DealPanel() {
   const deal: RentDeal | null = useGameStore((s) => s.state?.activeRentDeal) ?? null;
   const turn = useGameStore((s) => s.state?.turn);
   const players: Player[] = useGameStore((s) => s.state?.players) ?? [];
+  const allProperties: PropertyState[] = useGameStore((s) => s.state?.properties) ?? [];
   const myId = useGameStore((s) => s.myPlayerId) ?? '';
 
   const me = players.find((p) => p.id === myId);
@@ -23,6 +71,14 @@ export function DealPanel() {
   // Hooks MUST be before early return to avoid conditional hook errors
   const [offerMoney, setOfferMoney] = useState(0);
   const [exemption, setExemption] = useState(0);
+  // Property selection for initial offer
+  const [selectedOfferProps, setSelectedOfferProps] = useState<Set<number>>(new Set());
+  // Counter edit mode
+  const [counterMode, setCounterMode] = useState(false);
+  const [counterMoney, setCounterMoney] = useState(0);
+  const [counterExemption, setCounterExemption] = useState(0);
+  const [selectedCounterProps, setSelectedCounterProps] = useState<Set<number>>(new Set());
+
   const isMobile = useIsMobile();
 
   if (!isOpen || !turn) return null;
@@ -33,10 +89,80 @@ export function DealPanel() {
   const outerWrap = isMobile ? wrapMobile : wrap;
   const innerCard = isMobile ? sheetMobile : card;
 
+  // Helper: compute eligible properties for a given player id
+  const eligibleProps = (ownerId: string): PropertyState[] =>
+    allProperties.filter(
+      (p) => p.ownerId === ownerId && !p.isMortgaged && p.houses === 0 && !p.hasHotel
+    );
+
+  // Toggle helpers
+  const toggleOfferProp = (idx: number) => {
+    const next = new Set(selectedOfferProps);
+    if (next.has(idx)) next.delete(idx); else next.add(idx);
+    setSelectedOfferProps(next);
+  };
+  const toggleCounterProp = (idx: number) => {
+    const next = new Set(selectedCounterProps);
+    if (next.has(idx)) next.delete(idx); else next.add(idx);
+    setSelectedCounterProps(next);
+  };
+
   // ── active deal negotiation ──
   if (deal) {
     const iAmLast = deal.lastOfferBy === myId;
     const amDebtor = deal.debtorId === myId;
+    const debtorEligible = eligibleProps(deal.debtorId);
+
+    // Counter edit mode: pre-fill from deal when first entered
+    const enterCounterMode = () => {
+      setCounterMoney(deal.offeredMoney);
+      setCounterExemption(deal.requestedExemption);
+      setSelectedCounterProps(new Set(deal.offeredProperties));
+      setCounterMode(true);
+    };
+
+    const sendCounter = () => {
+      emit(EVENTS.DEAL_COUNTER, {
+        dealId: deal.dealId,
+        offeredProperties: Array.from(selectedCounterProps),
+        offeredMoney: counterMoney,
+        requestedExemption: counterExemption,
+      });
+      setCounterMode(false);
+    };
+
+    if (counterMode) {
+      return (
+        <div style={outerWrap}><div style={innerCard}>
+          <Hdr title="Counter Offer" onClose={() => { setCounterMode(false); close(false); }} />
+          <div style={line}>{name(deal.debtorId)} owes {formatMoney(deal.totalRentOwed)} total</div>
+
+          <div style={sect}>
+            <div style={sh}>Properties to offer</div>
+            <PropertyPicker
+              eligibleProps={debtorEligible}
+              selected={selectedCounterProps}
+              onToggle={toggleCounterProp}
+            />
+          </div>
+
+          <div style={sect}>
+            <label style={item}>Cash to offer
+              <input type="number" min={0} value={counterMoney} aria-label="counter money"
+                onChange={(e) => setCounterMoney(Math.max(0, +e.target.value))} style={inp} /></label>
+            <label style={item}>Exemption requested
+              <input type="number" min={0} max={deal.totalRentOwed} value={counterExemption} aria-label="counter exemption"
+                onChange={(e) => setCounterExemption(Math.max(0, Math.min(deal.totalRentOwed, +e.target.value)))} style={inp} /></label>
+          </div>
+
+          <div style={row}>
+            <button style={btnP} onClick={sendCounter}>Send Counter</button>
+            <button style={btn} onClick={() => setCounterMode(false)}>Back</button>
+          </div>
+        </div></div>
+      );
+    }
+
     return (
       <div style={outerWrap}><div style={innerCard}>
         <Hdr title="Rent Deal" onClose={() => close(false)} />
@@ -48,7 +174,7 @@ export function DealPanel() {
         <div style={row}>
           {!iAmLast && <>
             <button style={btnP} onClick={() => emit(EVENTS.DEAL_ACCEPT, { dealId: deal.dealId })}>Accept</button>
-            <button style={btn} onClick={() => emit(EVENTS.DEAL_COUNTER, { dealId: deal.dealId, offeredProperties: deal.offeredProperties, offeredMoney: deal.offeredMoney, requestedExemption: deal.requestedExemption })}>Counter</button>
+            <button style={btn} onClick={enterCounterMode}>Counter</button>
             <button style={btn} onClick={() => emit(EVENTS.DEAL_REJECT, { dealId: deal.dealId })}>Reject</button>
           </>}
           {amDebtor && <button style={btn} onClick={() => emit(EVENTS.DEAL_CANCEL, { dealId: deal.dealId })}>Cancel</button>}
@@ -61,10 +187,16 @@ export function DealPanel() {
   const owed = turn.rentAmount ?? 0;
   const creditorIds = turn.rentOwnerId ? [turn.rentOwnerId] : [];
   const goUsed = me?.goDeductionsUsed ?? 0;
+  const goSkips = me?.goSkipsRemaining ?? 0;
   const canGo = (n: number) => goUsed + n <= 5;
+
+  // Eligible properties for the initial offer (debtor = me)
+  const myEligibleProps = eligibleProps(myId);
+
   const sendOffer = () => emit(EVENTS.DEAL_OFFER, {
     creditorIds, spaceIndex: me?.position ?? 0, totalRentOwed: owed,
-    offeredProperties: [], offeredMoney: offerMoney, requestedExemption: exemption || owed,
+    offeredProperties: Array.from(selectedOfferProps), offeredMoney: offerMoney,
+    requestedExemption: exemption || owed,
   });
 
   return (
@@ -82,10 +214,19 @@ export function DealPanel() {
           ))}
         </div>
         <div style={{ fontSize: 11, color: '#8888a0', marginTop: 4 }}>Used {goUsed}/5 lifetime.</div>
+        {goSkips > 0 && (
+          <div style={{ fontSize: 11, color: '#8888a0', marginTop: 2 }}>GO passes to skip: {goSkips}</div>
+        )}
       </div>
 
       <div style={sect}>
         <div style={sh}>Propose a rent deal</div>
+        <div style={{ fontSize: 12, color: '#8888a0', marginBottom: 6 }}>Properties to offer:</div>
+        <PropertyPicker
+          eligibleProps={myEligibleProps}
+          selected={selectedOfferProps}
+          onToggle={toggleOfferProp}
+        />
         <label style={item}>Offer cash
           <input type="number" min={0} value={offerMoney} aria-label="offer money" onChange={(e) => setOfferMoney(Math.max(0, +e.target.value))} style={inp} /></label>
         <label style={item}>Request exemption
