@@ -38,9 +38,11 @@ vi.mock('@react-three/drei', async (importOriginal) => {
 });
 // ModelMesh calls drei useGLTF, which tries to fetch a .glb over jsdom's
 // (broken) FileLoader — stub it out; the .glb load is exercised in the browser.
-// Buildings + CityDressing (now mounted in GameScene) call `ModelMesh.preload`
-// at module-eval time, so the stub must also expose a no-op `preload`, not just
-// the component.
+// Buildings (mounted in GameScene) calls `ModelMesh.preload` at module-eval
+// time, so the stub must also expose a no-op `preload`, not just the component.
+// (CityDressing + ForestEnvironment now call drei's `useGLTF` directly, not
+// ModelMesh — but they only load inside GameScene, which is fully mocked above,
+// so their glb fetches never run in jsdom.)
 vi.mock('./board/ModelMesh', () => {
   const ModelMesh = () => null;
   ModelMesh.preload = () => {};

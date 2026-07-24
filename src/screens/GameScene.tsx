@@ -6,6 +6,7 @@ import { BoardTiles } from '../board/BoardTiles';
 import { PlayerTokens } from '../board/PlayerTokens';
 import { Buildings } from '../board/Buildings';
 import { CityDressing } from '../board/CityDressing';
+import { ForestEnvironment } from '../board/ForestEnvironment';
 import { Dice3D } from '../board/Dice3D';
 import { CameraRig } from '../board/CameraRig';
 
@@ -94,11 +95,15 @@ export function GameScene() {
           Suspense boundary. Idle = hidden. */}
       <Dice3D />
       <Suspense fallback={null}>
+        {/* ForestEnvironment (forest.glb) surrounds the board — the diorama
+            ground/treeline. Loads via useGLTF, so it must be inside Suspense. */}
+        <ForestEnvironment />
         {/* BoardTiles now streams board.webp via useTexture (suspends) — must
             live inside a Suspense boundary. */}
         <BoardTiles />
         <PlayerTokens />
         <Buildings />
+        {/* CityDressing (city.glb) is the low-poly city in the board center. */}
         <CityDressing />
       </Suspense>
       <EffectComposer>
