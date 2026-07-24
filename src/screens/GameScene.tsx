@@ -36,7 +36,10 @@ export function GameScene() {
   return (
     <Canvas
       style={{ position: 'fixed', inset: 0 }}
-      camera={{ position: [0, 8.5, 12], fov: 50 }}
+      // Default camera: rotated -90° about world-Y from [0,8.5,12] → [12,8.5,0].
+      // From [12,8.5,0] looking at origin, screen-right is +Z and screen-bottom
+      // is +X — so the GO corner (world +x,+z) renders at the BOTTOM-RIGHT.
+      camera={{ position: [12, 8.5, 0], fov: 50 }}
       shadows
       dpr={[1, 2]}
       performance={{ min: 0.5 }}

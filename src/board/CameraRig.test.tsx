@@ -14,23 +14,14 @@ import type { GameState } from '../types/GameState';
 // real drei <OrbitControls> hands back its imperative controls object (NOT a DOM
 // node). CameraRig passes a callback ref, so useImperativeHandle drives it.
 
-// useFrame receives (state, delta). Our tests drive it manually and may pass a
-// delta (seconds) to advance the per-turn rotation.
+// useFrame receives (state, delta). Our tests drive it manually.
 let frameCallback: ((state?: unknown, delta?: number) => void) | null = null;
 vi.mock('@react-three/fiber', () => ({
   useFrame: (cb: (state?: unknown, delta?: number) => void) => { frameCallback = cb; },
 }));
 
-// Minimal fake camera mirroring OrbitControls.object: a position we can inspect
-// and a lookAt spy. CameraRig reads controls.object to drive the azimuth sweep.
-type FakeCamera = {
-  position: THREE.Vector3;
-  lookAt: ReturnType<typeof vi.fn>;
-};
-
 // The fake OrbitControls instance. Fresh per render via beforeEach reset.
 type FakeControls = {
-  object: FakeCamera;
   target: THREE.Vector3;
   mouseButtons: { LEFT: number; MIDDLE: number; RIGHT: number };
   update: ReturnType<typeof vi.fn>;
@@ -46,9 +37,6 @@ vi.mock('@react-three/drei', () => ({
     // Start mouseButtons at sentinel values to prove CameraRig sets them on mount.
     useImperativeHandle(ref, (): FakeControls => {
       const controls: FakeControls = {
-        // Camera starts offset from the target so it has a defined radius/theta
-        // for the spherical azimuth sweep to rotate around.
-        object: { position: new THREE.Vector3(10, 8, 10), lookAt: vi.fn() },
         target: new THREE.Vector3(0, 0, 0),
         mouseButtons: { LEFT: -1, MIDDLE: -1, RIGHT: -1 },
         update: vi.fn(),
@@ -158,71 +146,5 @@ describe('CameraRig', () => {
     // Target unchanged and update() not called — the free camera is not yanked back.
     expect(lastControls!.target.distanceTo(before)).toBe(0);
     expect(lastControls!.update).not.toHaveBeenCalled();
-  });
-
-  it('does NOT rotate on the first render (no prior currentPlayerId)', () => {
-    render(<CameraRig />);
-    const camBefore = lastControls!.object.position.clone();
-    // A frame right after mount: only auto-focus should run, no azimuth sweep.
-    act(() => { frameCallback!(undefined, 0.016); });
-    // Camera position is unchanged by any rotation (auto-focus only moves target).
-    expect(lastControls!.object.position.distanceTo(camBefore)).toBe(0);
-    expect(lastControls!.object.lookAt).not.toHaveBeenCalled();
-  });
-
-  it('arms a 90° LEFT azimuth sweep when currentPlayerId changes, preserving distance and pitch', () => {
-    render(<CameraRig />); // seeds prevPlayerId = 'p1', no rotation
-    // A frame before the turn change must not rotate.
-    const camBefore = lastControls!.object.position.clone();
-    act(() => { frameCallback!(undefined, 0.016); });
-    expect(lastControls!.object.lookAt).not.toHaveBeenCalled();
-    expect(lastControls!.object.position.distanceTo(camBefore)).toBe(0);
-
-    // Capture the camera's spherical coords before the sweep.
-    const target = lastControls!.target;
-    const beforeOffset = lastControls!.object.position.clone().sub(target);
-    const beforeSph = new THREE.Spherical().setFromVector3(beforeOffset);
-
-    // Turn passes to p2 → arms the rotation.
-    act(() => { useGameStore.getState().update(fakeState(0, 'p2')); });
-    // Drive a full frame (delta ≥ TURN_ROTATE_MS/1000 completes the ease).
-    act(() => { frameCallback!(undefined, 1); });
-
-    // lookAt(target) was called and the camera moved (azimuth rotated).
-    expect(lastControls!.object.lookAt).toHaveBeenCalled();
-    const afterOffset = lastControls!.object.position.clone().sub(target);
-    const afterSph = new THREE.Spherical().setFromVector3(afterOffset);
-
-    // Distance (radius) and pitch (phi) are preserved.
-    expect(afterSph.radius).toBeCloseTo(beforeSph.radius, 5);
-    expect(afterSph.phi).toBeCloseTo(beforeSph.phi, 5);
-    // Azimuth (theta) advanced by +90° (LEFT).
-    expect(afterSph.theta - beforeSph.theta).toBeCloseTo(Math.PI / 2, 4);
-  });
-
-  it('pauses the eased sweep while the user is actively dragging', () => {
-    render(<CameraRig />);
-    // Turn change arms the sweep.
-    act(() => { useGameStore.getState().update(fakeState(0, 'p2')); });
-    // First frame captures the live spherical start (partial advance).
-    act(() => { frameCallback!(undefined, 0.1); });
-    const midOffset = lastControls!.object.position.clone().sub(lastControls!.target);
-    const midTheta = new THREE.Spherical().setFromVector3(midOffset).theta;
-
-    // User grabs the camera → sweep must freeze (elapsed frozen).
-    act(() => { (lastProps!.onStart as () => void)(); });
-    act(() => { frameCallback!(undefined, 1); });
-    const heldOffset = lastControls!.object.position.clone().sub(lastControls!.target);
-    const heldTheta = new THREE.Spherical().setFromVector3(heldOffset).theta;
-    // Theta did not advance while interacting.
-    expect(heldTheta).toBeCloseTo(midTheta, 5);
-
-    // Release → sweep resumes and completes.
-    act(() => { (lastProps!.onEnd as () => void)(); });
-    act(() => { frameCallback!(undefined, 1); });
-    const doneOffset = lastControls!.object.position.clone().sub(lastControls!.target);
-    const doneTheta = new THREE.Spherical().setFromVector3(doneOffset).theta;
-    // Theta advanced past where it was frozen → the sweep was not cancelled.
-    expect(doneTheta).toBeGreaterThan(heldTheta);
   });
 });
