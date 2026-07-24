@@ -17,6 +17,26 @@ import { FONT_FAMILY } from '../constants/fonts';
 import { GameButton } from '../ui/GameButton';
 import { useIsMobile } from '../ui/useIsMobile';
 
+/** Curated palette for skin base-color recoloring — 16 tasteful swatches. */
+const SKIN_COLOR_PALETTE = [
+  { label: 'Crimson',    hex: '#e53935' },
+  { label: 'Rose',       hex: '#e91e8c' },
+  { label: 'Cobalt',     hex: '#1565c0' },
+  { label: 'Sky',        hex: '#0288d1' },
+  { label: 'Teal',       hex: '#00897b' },
+  { label: 'Forest',     hex: '#2e7d32' },
+  { label: 'Lime',       hex: '#7cb342' },
+  { label: 'Amber',      hex: '#f59e0b' },
+  { label: 'Orange',     hex: '#e64a19' },
+  { label: 'Purple',     hex: '#7b1fa2' },
+  { label: 'Violet',     hex: '#5c35c1' },
+  { label: 'Gold',       hex: '#d4af37' },
+  { label: 'Slate',      hex: '#455a64' },
+  { label: 'Onyx',       hex: '#1a1a2e' },
+  { label: 'Snow',       hex: '#f0f0f0' },
+  { label: 'Blush',      hex: '#f48fb1' },
+] as const;
+
 // ── Lazy 3D preview — three/drei stay off the menu-screen entry bundle. This is
 //    the ONLY live WebGL canvas on the screen; the 52 grid cards use static
 //    thumbnail <img>. ──
@@ -28,6 +48,8 @@ const TOKENS = Object.keys(TOKEN_HEX) as TokenType[];
 const ALL_CAT = 'All' as const;
 type CatFilter = typeof ALL_CAT | CharacterCategory;
 
+type RightTab = 'skin' | 'color';
+
 export function CharacterSelect() {
   const navigate = useNavigate();
   const isMobile = useIsMobile();
@@ -35,14 +57,28 @@ export function CharacterSelect() {
   // Persisted selections from the store.
   const storeCharacter = useGameStore((s) => s.selectedCharacter);
   const setSelectedCharacter = useGameStore((s) => s.setSelectedCharacter);
+  const storeCharacterColor = useGameStore((s) => s.selectedCharacterColor);
+  const setSelectedCharacterColor = useGameStore((s) => s.setSelectedCharacterColor);
   const storeToken = useGameStore((s) => s.selectedToken);
   const setSelectedToken = useGameStore((s) => s.setSelectedToken);
 
   // Local drafts — committed on Equip.
   const [selectedId, setSelectedId] = useState(storeCharacter);
+  const [characterColor, setCharacterColor] = useState<string | null>(storeCharacterColor);
+  // hexDraft drives the hex text input so the user can type character-by-character.
+  // It is synced FROM characterColor whenever the color changes via swatch/wheel/reset.
+  const [hexDraft, setHexDraft] = useState<string>(storeCharacterColor ?? '');
+  // Use this instead of calling setCharacterColor directly from swatch/wheel/reset so
+  // hexDraft stays in sync. The hex text input manages hexDraft itself and only
+  // calls setCharacterColor when the typed value becomes a valid #RRGGBB.
+  const applyColor = useCallback((hex: string | null) => {
+    setCharacterColor(hex);
+    setHexDraft(hex ?? '');
+  }, []);
   const [token, setToken] = useState<TokenType>(storeToken);
   const [category, setCategory] = useState<CatFilter>(ALL_CAT);
   const [search, setSearch] = useState('');
+  const [rightTab, setRightTab] = useState<RightTab>('skin');
 
   const selectedDef = useMemo(() => resolveCharacter(selectedId), [selectedId]);
   const selectedMeta = useMemo(() => resolveSkinMeta(selectedDef.id), [selectedDef]);
@@ -65,9 +101,10 @@ export function CharacterSelect() {
 
   const equip = useCallback(() => {
     setSelectedCharacter(selectedDef.id);
+    setSelectedCharacterColor(characterColor);
     setSelectedToken(token);
     navigate('/');
-  }, [selectedDef.id, token, setSelectedCharacter, setSelectedToken, navigate]);
+  }, [selectedDef.id, characterColor, token, setSelectedCharacter, setSelectedCharacterColor, setSelectedToken, navigate]);
 
   const back = useCallback(() => navigate('/'), [navigate]);
 
@@ -77,7 +114,11 @@ export function CharacterSelect() {
     <div style={s.previewPanel}>
       <div style={s.canvasWrap(isMobile)}>
         <Suspense fallback={<div style={s.previewFallback}>Loading preview…</div>}>
-          <CharacterPreview url={selectedDef.url} accent={accent} />
+          <CharacterPreview
+            url={selectedDef.url}
+            accent={accent}
+            baseColor={characterColor ?? undefined}
+          />
         </Suspense>
       </div>
 
@@ -95,21 +136,103 @@ export function CharacterSelect() {
         <p style={s.skinDesc}>{selectedMeta.description}</p>
       </div>
 
-      {/* Board-identity color — labelled so it isn't confused with the skin. */}
-      <div style={s.colorBlock}>
-        <div style={s.colorLabel}>Your color</div>
-        <div style={s.swatchRow} role="group" aria-label="Your board color">
-          {TOKENS.map((t) => (
-            <button
-              key={t}
-              aria-label={t}
-              aria-pressed={t === token}
-              onClick={() => setToken(t)}
-              style={s.swatch(t === token, TOKEN_HEX[t])}
-            />
-          ))}
-        </div>
+      {/* TAB SWITCHER: Skin color vs Player color ─────────────────────── */}
+      <div style={s.tabBar} role="tablist" aria-label="Customization tabs">
+        <button
+          role="tab"
+          aria-selected={rightTab === 'skin'}
+          onClick={() => setRightTab('skin')}
+          style={s.tab(rightTab === 'skin')}
+          data-testid="tab-skin-color"
+        >
+          Skin color
+        </button>
+        <button
+          role="tab"
+          aria-selected={rightTab === 'color'}
+          onClick={() => setRightTab('color')}
+          style={s.tab(rightTab === 'color')}
+          data-testid="tab-player-color"
+        >
+          Player color
+        </button>
       </div>
+
+      {/* SKIN COLOR TAB ─ recolors the Skin/Face materials; outfit/hair/eyes untouched */}
+      {rightTab === 'skin' && (
+        <div style={s.colorBlock} data-testid="skin-color-panel">
+          <div style={s.colorLabel}>Skin color</div>
+          <div style={s.swatchRow} role="group" aria-label="Skin color palette">
+            {SKIN_COLOR_PALETTE.map(({ label, hex }) => (
+              <button
+                key={hex}
+                aria-label={label}
+                aria-pressed={characterColor === hex}
+                onClick={() => applyColor(hex)}
+                style={s.swatch(characterColor === hex, hex)}
+                title={label}
+              />
+            ))}
+          </div>
+          <div style={s.freeColorRow}>
+            <label style={s.freeColorLabel} htmlFor="skin-free-color">
+              Custom
+            </label>
+            <input
+              id="skin-free-color"
+              type="color"
+              value={characterColor ?? '#ffffff'}
+              onChange={(e) => applyColor(e.target.value)}
+              style={s.freeColorInput}
+              aria-label="Custom skin color"
+              data-testid="skin-free-color-input"
+            />
+            {/* hexDraft lets the user type freely character-by-character.
+                characterColor is only updated when a complete #RRGGBB is typed. */}
+            <input
+              type="text"
+              value={hexDraft}
+              placeholder="#rrggbb"
+              maxLength={7}
+              onChange={(e) => {
+                const v = e.target.value;
+                setHexDraft(v);
+                if (/^#[0-9a-fA-F]{6}$/.test(v)) setCharacterColor(v);
+                else if (v === '' || v === '#') setCharacterColor(null);
+              }}
+              style={s.freeColorHex}
+              aria-label="Hex color value"
+              data-testid="skin-color-hex-input"
+            />
+            <button
+              style={s.resetBtn}
+              onClick={() => applyColor(null)}
+              data-testid="skin-color-reset"
+              aria-label="Reset skin color to default"
+            >
+              Default
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* PLAYER COLOR TAB ─ board-identity puck color (separate from outfit) */}
+      {rightTab === 'color' && (
+        <div style={s.colorBlock} data-testid="player-color-panel">
+          <div style={s.colorLabel}>Player color</div>
+          <div style={s.swatchRow} role="group" aria-label="Your board color">
+            {TOKENS.map((t) => (
+              <button
+                key={t}
+                aria-label={t}
+                aria-pressed={t === token}
+                onClick={() => setToken(t)}
+                style={s.swatch(t === token, TOKEN_HEX[t])}
+              />
+            ))}
+          </div>
+        </div>
+      )}
 
       <div style={s.actions(isMobile)}>
         <GameButton variant="tertiary" fullWidth onClick={back}>
@@ -569,4 +692,93 @@ const s = {
     marginTop: m ? 4 : 'auto',
     justifyContent: 'stretch',
   }),
+
+  // ── Tab switcher ──
+  tabBar: {
+    display: 'flex',
+    gap: 0,
+    borderRadius: 10,
+    overflow: 'hidden',
+    border: `1px solid ${BORDER}`,
+    flexShrink: 0,
+  } as React.CSSProperties,
+
+  tab: (active: boolean): React.CSSProperties => ({
+    flex: 1,
+    fontFamily: FONT,
+    fontWeight: active ? 800 : 600,
+    fontSize: 13,
+    letterSpacing: '0.05em',
+    textTransform: 'uppercase',
+    padding: '10px 12px',
+    background: active ? glow(GOLD, 0.22) : PANEL_BG,
+    color: active ? GOLD : TEXT_SECONDARY,
+    border: 'none',
+    borderRight: `1px solid ${BORDER}`,
+    cursor: 'pointer',
+    minHeight: 44,
+    transition: 'background 0.12s ease, color 0.12s ease',
+  }),
+
+  // ── Free color row (custom picker + hex input + reset) ──
+  freeColorRow: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: 8,
+    flexWrap: 'wrap',
+    marginTop: 6,
+  } as React.CSSProperties,
+
+  freeColorLabel: {
+    fontFamily: FONT,
+    fontWeight: 700,
+    fontSize: 12,
+    color: TEXT_SECONDARY,
+    letterSpacing: '0.05em',
+    textTransform: 'uppercase',
+    flexShrink: 0,
+  } as React.CSSProperties,
+
+  freeColorInput: {
+    width: 44,
+    height: 44,
+    padding: 2,
+    border: `1px solid ${BORDER}`,
+    borderRadius: 8,
+    background: PANEL_BG,
+    cursor: 'pointer',
+    flexShrink: 0,
+  } as React.CSSProperties,
+
+  freeColorHex: {
+    fontFamily: "'Courier New', monospace",
+    fontSize: 13,
+    fontWeight: 600,
+    color: TEXT_PRIMARY,
+    background: PANEL_BG,
+    border: `1px solid ${BORDER}`,
+    borderRadius: 8,
+    padding: '8px 10px',
+    width: 90,
+    minHeight: 44,
+    boxSizing: 'border-box',
+    outline: 'none',
+    flexShrink: 0,
+  } as React.CSSProperties,
+
+  resetBtn: {
+    fontFamily: FONT,
+    fontWeight: 700,
+    fontSize: 12,
+    letterSpacing: '0.05em',
+    textTransform: 'uppercase',
+    color: TEXT_SECONDARY,
+    background: PANEL_BG,
+    border: `1px solid ${BORDER}`,
+    borderRadius: 8,
+    padding: '8px 12px',
+    cursor: 'pointer',
+    minHeight: 44,
+    flexShrink: 0,
+  } as React.CSSProperties,
 };
