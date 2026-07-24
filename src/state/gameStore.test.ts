@@ -130,4 +130,39 @@ describe('gameStore', () => {
     useGameStore.getState().setSelectedCharacter('Pirate_Female');
     expect(useGameStore.getState().selectedCharacter).toBe('Pirate_Female');
   });
+
+  // ── deedCardIndex (read-only tile inspect) ──────────────────────────────────
+
+  it('deedCardIndex starts null', () => {
+    expect(useGameStore.getState().deedCardIndex).toBe(null);
+  });
+
+  it('openDeedCard sets deedCardIndex without touching selectedPropertyIndex', () => {
+    useGameStore.getState().openDeedCard(5);
+    expect(useGameStore.getState().deedCardIndex).toBe(5);
+    // MortgagePanel state must be untouched
+    expect(useGameStore.getState().selectedPropertyIndex).toBe(null);
+    expect(useGameStore.getState().showPropertyCard).toBe(false);
+  });
+
+  it('closeDeedCard resets deedCardIndex to null', () => {
+    useGameStore.getState().openDeedCard(11);
+    expect(useGameStore.getState().deedCardIndex).toBe(11);
+    useGameStore.getState().closeDeedCard();
+    expect(useGameStore.getState().deedCardIndex).toBe(null);
+  });
+
+  it('openDeedCard does not collide with selectProperty — both can coexist', () => {
+    useGameStore.getState().selectProperty(3);
+    useGameStore.getState().openDeedCard(7);
+    expect(useGameStore.getState().selectedPropertyIndex).toBe(3);
+    expect(useGameStore.getState().showPropertyCard).toBe(true);
+    expect(useGameStore.getState().deedCardIndex).toBe(7);
+  });
+
+  it('reset clears deedCardIndex', () => {
+    useGameStore.getState().openDeedCard(39);
+    useGameStore.getState().reset();
+    expect(useGameStore.getState().deedCardIndex).toBe(null);
+  });
 });

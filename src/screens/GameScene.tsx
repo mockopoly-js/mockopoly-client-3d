@@ -9,6 +9,7 @@ import { CityDressing } from '../board/CityDressing';
 import { ForestEnvironment } from '../board/ForestEnvironment';
 import { Dice3D } from '../board/Dice3D';
 import { CameraRig } from '../board/CameraRig';
+import { BoardClickTargets } from '../board/BoardClickTargets';
 
 /**
  * Game screen: renders the static 3D board in a daylight diorama scene.
@@ -94,6 +95,10 @@ export function GameScene() {
       {/* Procedural 3D dice: loads no glb, so it sits outside the
           Suspense boundary. Idle = hidden. */}
       <Dice3D />
+      {/* Invisible click planes over the 28 purchasable tiles.
+          No assets — fine outside Suspense. y=0.03 is just above the board
+          top face (y=0.02) so raycasts hit these planes before the slab. */}
+      <BoardClickTargets />
       <Suspense fallback={null}>
         {/* ForestEnvironment (forest.glb) surrounds the board — the diorama
             ground/treeline. Loads via useGLTF, so it must be inside Suspense. */}

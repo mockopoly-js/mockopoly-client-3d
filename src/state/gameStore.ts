@@ -41,6 +41,10 @@ interface GameStore {
   screen: Screen;
   gameOver: S_GameOver | null;
 
+  // ── read-only deed-card inspect (board tile click) ──
+  // Separate from selectedPropertyIndex/showPropertyCard which drive MortgagePanel.
+  deedCardIndex: number | null;
+
   // ── character + token color selection (persisted) ──
   selectedCharacter: string;
   setSelectedCharacter: (id: string) => void;
@@ -60,6 +64,8 @@ interface GameStore {
   addToast: (message: string, type?: ToastType) => void;
   removeToast: (timestamp: number) => void;
   selectProperty: (index: number | null) => void;
+  openDeedCard: (index: number) => void;
+  closeDeedCard: () => void;
   toggleTradePanel: (show?: boolean) => void;
   togglePartnershipPanel: (show?: boolean) => void;
   toggleDealPanel: (show?: boolean) => void;
@@ -100,6 +106,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
   showDevHacks: false,
   screen: 'menu',
   gameOver: null,
+  deedCardIndex: null,
   selectedCharacter: getStoredCharacter(),
   selectedCharacterColor: getStoredCharacterColor(),
   selectedToken: getStoredToken(),
@@ -144,6 +151,8 @@ export const useGameStore = create<GameStore>((set, get) => ({
 
   selectProperty: (index) =>
     set({ selectedPropertyIndex: index, showPropertyCard: index !== null }),
+  openDeedCard: (index) => set({ deedCardIndex: index }),
+  closeDeedCard: () => set({ deedCardIndex: null }),
   toggleTradePanel: (show) =>
     set((s) => ({ showTradePanel: show ?? !s.showTradePanel })),
   togglePartnershipPanel: (show) =>
@@ -170,6 +179,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
       showDevHacks: false,
       screen: 'menu',
       gameOver: null,
+      deedCardIndex: null,
     });
   },
 }));
