@@ -15,11 +15,18 @@ export function TurnHud() {
 
   if (!turn) return null;
 
+  const isJailed = me?.isJailed ?? false;
+  const jailCardCount = me?.jailCardCount ?? 0;
+
   const canRoll = isMyTurn && turn.phase === 'waiting' && !turn.hasRolled;
   const canEnd = isMyTurn && (turn.phase === 'action' || turn.phase === 'end');
+  const showJailActions = isMyTurn && isJailed && turn.phase === 'waiting';
 
-  const roll = () => socketManager.emit(EVENTS.TURN_ROLL_DICE);
+  // Jailed players must emit jail:roll-doubles so the server routes through canJailRoll
+  const roll = () => socketManager.emit(isJailed ? EVENTS.JAIL_ROLL : EVENTS.TURN_ROLL_DICE);
   const end = () => socketManager.emit(EVENTS.TURN_END);
+  const payFine = () => socketManager.emit(EVENTS.JAIL_PAY_FINE);
+  const useCard = () => socketManager.emit(EVENTS.JAIL_USE_CARD);
 
   if (isMobile) {
     return (
@@ -34,6 +41,16 @@ export function TurnHud() {
         </div>
         {/* Mobile action buttons are rendered inside the bottom bar — see hotbarMobile */}
         <div style={hotbarMobile}>
+          {showJailActions && (
+            <button onClick={payFine} style={{ ...btnMobile, ...primary }}>
+              Pay Fine (£500K)
+            </button>
+          )}
+          {showJailActions && (
+            <button onClick={useCard} disabled={jailCardCount === 0} style={{ ...btnMobile, ...(jailCardCount > 0 ? primary : disabledStyle) }}>
+              Use Card
+            </button>
+          )}
           <button onClick={roll} disabled={!canRoll} style={{ ...btnMobile, ...(canRoll ? primary : disabledStyle) }}>
             Roll
           </button>
@@ -56,6 +73,16 @@ export function TurnHud() {
         </span>
       </div>
       <div style={hotbar}>
+        {showJailActions && (
+          <button onClick={payFine} style={{ ...btn, ...primary }}>
+            Pay Fine (£500K)
+          </button>
+        )}
+        {showJailActions && (
+          <button onClick={useCard} disabled={jailCardCount === 0} style={{ ...btn, ...(jailCardCount > 0 ? primary : disabledStyle) }}>
+            Use Card
+          </button>
+        )}
         <button onClick={roll} disabled={!canRoll} style={{ ...btn, ...(canRoll ? primary : disabledStyle) }}>
           Roll
         </button>
