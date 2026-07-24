@@ -13,8 +13,7 @@ import { tileToWorld } from './positions';
  * - LEFT-drag ORBITS the camera around the OrbitControls target ("rotate around
  *   an axis"). Holding SHIFT while left-dragging switches the drag to PAN, so the
  *   whole view (target + camera) slides across the diorama — travel anywhere.
- * - RIGHT-drag also PANS and MIDDLE-drag DOLLIES as sensible fallbacks for mice
- *   and trackpads that can't easily chord SHIFT.
+ * - RIGHT and MIDDLE buttons are DISABLED — all interaction is via LEFT + Shift.
  * - Scroll wheel zooms (dolly). Distance clamps are relaxed so the user can get
  *   right up to a token or pull way back over the whole forest diorama.
  * - Polar clamps are relaxed to allow near-top-down through near-horizon, but
@@ -93,14 +92,15 @@ export function CameraRig() {
   }, []);
   const handleEnd = useCallback(() => { interacting.current = false; }, []);
 
-  // Set the non-LEFT mouse button roles once the controls instance is available.
-  // (LEFT is toggled by the Shift listeners above; default ROTATE.)
+  // Set the mouse button roles once the controls instance is available.
+  // LEFT = ROTATE by default, toggled to PAN by Shift (see listeners above).
+  // MIDDLE and RIGHT are disabled (undefined) so only LEFT + optional Shift controls the camera.
   const handleMount = useCallback((controls: OrbitControlsImpl | null) => {
     controlsRef.current = controls;
     if (!controls) return;
     controls.mouseButtons.LEFT = THREE.MOUSE.ROTATE;
-    controls.mouseButtons.MIDDLE = THREE.MOUSE.DOLLY;
-    controls.mouseButtons.RIGHT = THREE.MOUSE.PAN;
+    controls.mouseButtons.MIDDLE = undefined;
+    controls.mouseButtons.RIGHT = undefined;
   }, []);
 
   return (

@@ -83,11 +83,11 @@ describe('CameraRig', () => {
     expect(maxPolar).toBeLessThan(Math.PI / 2); // stays above the horizon
   });
 
-  it('sets default mouse buttons: LEFT=ROTATE, RIGHT=PAN, MIDDLE=DOLLY', () => {
+  it('sets default mouse buttons: LEFT=ROTATE, RIGHT=disabled, MIDDLE=disabled', () => {
     render(<CameraRig />);
     expect(lastControls!.mouseButtons.LEFT).toBe(THREE.MOUSE.ROTATE);
-    expect(lastControls!.mouseButtons.RIGHT).toBe(THREE.MOUSE.PAN);
-    expect(lastControls!.mouseButtons.MIDDLE).toBe(THREE.MOUSE.DOLLY);
+    expect(lastControls!.mouseButtons.RIGHT).toBe(undefined);
+    expect(lastControls!.mouseButtons.MIDDLE).toBe(undefined);
   });
 
   it('swaps LEFT mouse button to PAN while Shift is held, back to ROTATE on release', () => {
