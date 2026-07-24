@@ -51,7 +51,7 @@ const EDGE_COLOR = '#c9a06a';
  * map_fragment so it is tunable without touching the source image or any other
  * material (edge, city, forest, tokens are all unaffected).
  */
-const BOARD_SATURATION = 1.3;
+const BOARD_SATURATION = 1.7;
 
 export function BoardTiles() {
   const texture = useTexture('/images/board.webp');
