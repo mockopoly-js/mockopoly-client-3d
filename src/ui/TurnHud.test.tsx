@@ -60,15 +60,15 @@ describe('TurnHud', () => {
 
   // ── Jailed roll branch ───────────────────────────────────────────────────────
 
-  it('emits JAIL_ROLL (not TURN_ROLL_DICE) when jailed player clicks Roll', () => {
+  it('emits TURN_ROLL_DICE (not JAIL_ROLL) when jailed player clicks Roll', () => {
     setState({ phase: 'waiting', hasRolled: false }, { isJailed: true, jailTurns: 1, jailCardCount: 0 });
     const emit = vi.spyOn(socketManager, 'emit').mockImplementation(() => {});
     render(<TurnHud />);
     const roll = screen.getByRole('button', { name: /roll/i });
     expect((roll as HTMLButtonElement).disabled).toBe(false);
     fireEvent.click(roll);
-    expect(emit).toHaveBeenCalledWith(EVENTS.JAIL_ROLL);
-    expect(emit).not.toHaveBeenCalledWith(EVENTS.TURN_ROLL_DICE);
+    expect(emit).toHaveBeenCalledWith(EVENTS.TURN_ROLL_DICE);
+    expect(emit).not.toHaveBeenCalledWith(EVENTS.JAIL_ROLL);
   });
 
   // ── Jail action buttons ──────────────────────────────────────────────────────

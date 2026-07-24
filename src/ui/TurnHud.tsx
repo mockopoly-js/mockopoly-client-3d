@@ -23,8 +23,8 @@ export function TurnHud() {
   const canEnd = isMyTurn && (turn.phase === 'action' || turn.phase === 'end');
   const showJailActions = isMyTurn && isJailed && turn.phase === 'waiting';
 
-  // Jailed players must emit jail:roll-doubles so the server routes through canJailRoll
-  const roll = () => socketManager.emit(isJailed ? EVENTS.JAIL_ROLL : EVENTS.TURN_ROLL_DICE);
+  // Server handles jailed-roll logic internally inside the TURN_ROLL_DICE handler.
+  const roll = () => socketManager.emit(EVENTS.TURN_ROLL_DICE);
   const end = () => socketManager.emit(EVENTS.TURN_END);
   const payFine = () => socketManager.emit(EVENTS.JAIL_PAY_FINE);
   const useCard = () => socketManager.emit(EVENTS.JAIL_USE_CARD);
