@@ -7,6 +7,9 @@ import { formatMoney } from '../utils/format';
 import { useIsMobile } from './useIsMobile';
 import { FONT_FAMILY } from '../constants/fonts';
 
+// Color groups that support building (exclude railroad and utility)
+const BUILDABLE_GROUPS = new Set(['brown', 'light-blue', 'pink', 'orange', 'red', 'yellow', 'green', 'dark-blue']);
+
 export function MortgagePanel() {
   const idx = useGameStore((s) => s.selectedPropertyIndex);
   const selectProperty = useGameStore((s) => s.selectProperty);
@@ -14,6 +17,7 @@ export function MortgagePanel() {
   const players = useGameStore((s) => s.state?.players);
   const currentId = useGameStore((s) => s.state?.turn.currentPlayerId);
   const myId = useGameStore((s) => s.myPlayerId);
+  const partnerships = useGameStore((s) => s.state?.partnerships);
   const isMobile = useIsMobile();
 
   if (idx == null) return null;
@@ -30,12 +34,48 @@ export function MortgagePanel() {
 
   const emit = (ev: string) => socketManager.emit(ev, { spaceIndex: idx });
 
+  // ── Partnership check: is there an ACTIVE partnership for this color group
+  // where I am a listed partner?
+  const isBuildableGroup = space.colorGroup != null && BUILDABLE_GROUPS.has(space.colorGroup);
+  const activePartnershipForGroup = isBuildableGroup && partnerships != null
+    ? (partnerships.find(
+        (p) =>
+          p.status === 'active' &&
+          p.colorGroup === space.colorGroup &&
+          p.partners.some((pe) => pe.playerId === myId),
+      ) ?? null)
+    : null;
+  const hasPartnershipForGroup = activePartnershipForGroup != null;
+
+  // ── Full color-group ownership check ──
+  // For buildable properties: every member of the same colorGroup must be
+  // owned by me (ownerId === myId) AND none can be mortgaged.
+  // Partnership override: if an active partnership exists for this group and I
+  // am a partner, treat it as owning the full group.
+  const groupMemberIndices = isBuildableGroup && space.colorGroup != null
+    ? BOARD_SPACES
+        .filter((s) => s.type === 'property' && s.colorGroup === space.colorGroup)
+        .map((s) => s.index)
+    : [];
+  const ownsFullGroup = hasPartnershipForGroup || (
+    groupMemberIndices.length > 0 &&
+    groupMemberIndices.every((gi) => {
+      const gp = properties?.find((p) => p.spaceIndex === gi);
+      return gp != null && gp.ownerId === myId && !gp.isMortgaged;
+    })
+  );
+
+  // ── canManage: I can interact with build/sell buttons if I own it OR I am a
+  // partner in an active partnership for this group.
+  // Mortgage apply/lift remain owner-only (mine).
+  const canManage = mine || hasPartnershipForGroup;
+
   const canMortgage = mine && !prop.isMortgaged && prop.houses === 0 && !prop.hasHotel;
   const canLift = mine && prop.isMortgaged;
-  const canBuyHouse = mine && isMyTurn && canBuild && !prop.isMortgaged && !prop.hasHotel && prop.houses < 4 && (me?.money ?? 0) >= houseCost;
-  const canBuyHotel = mine && isMyTurn && canBuild && !prop.isMortgaged && prop.houses === 4 && !prop.hasHotel && (me?.money ?? 0) >= houseCost;
-  const canSellHouse = mine && canBuild && prop.houses > 0 && !prop.hasHotel;
-  const canSellHotel = mine && canBuild && prop.hasHotel;
+  const canBuyHouse = canManage && isMyTurn && canBuild && ownsFullGroup && !prop.isMortgaged && !prop.hasHotel && prop.houses < 4 && (me?.money ?? 0) >= houseCost;
+  const canBuyHotel = canManage && isMyTurn && canBuild && ownsFullGroup && !prop.isMortgaged && prop.houses === 4 && !prop.hasHotel && (me?.money ?? 0) >= houseCost;
+  const canSellHouse = canManage && isMyTurn && canBuild && prop.houses > 0 && !prop.hasHotel;
+  const canSellHotel = canManage && isMyTurn && canBuild && prop.hasHotel;
 
   const inner = (
     <>
@@ -49,17 +89,19 @@ export function MortgagePanel() {
         {prop.isMortgaged && ' · Mortgaged'}
         {houseCost > 0 && ` · House ${formatMoney(houseCost)}`}
       </div>
-      {!mine && <div style={{ color: '#8888a0', fontSize: 13 }}>You do not own this property.</div>}
+      {!canManage && <div style={{ color: '#8888a0', fontSize: 13 }}>You do not own this property.</div>}
       {mine && (
         <div style={grid}>
           <button style={btn} disabled={!canMortgage} onClick={() => emit(EVENTS.MORTGAGE_APPLY)}>Mortgage</button>
           <button style={btn} disabled={!canLift} onClick={() => emit(EVENTS.MORTGAGE_LIFT)}>Unmortgage</button>
-          {canBuild && <>
-            <button style={btn} disabled={!canBuyHouse} onClick={() => emit(EVENTS.BUILD_BUY_HOUSE)}>Buy House</button>
-            <button style={btn} disabled={!canSellHouse} onClick={() => emit(EVENTS.BUILD_SELL_HOUSE)}>Sell House</button>
-            <button style={btn} disabled={!canBuyHotel} onClick={() => emit(EVENTS.BUILD_BUY_HOTEL)}>Buy Hotel</button>
-            <button style={btn} disabled={!canSellHotel} onClick={() => emit(EVENTS.BUILD_SELL_HOTEL)}>Sell Hotel</button>
-          </>}
+        </div>
+      )}
+      {canManage && canBuild && (
+        <div style={grid}>
+          <button style={btn} disabled={!canBuyHouse} onClick={() => emit(EVENTS.BUILD_BUY_HOUSE)}>Buy House</button>
+          <button style={btn} disabled={!canSellHouse} onClick={() => emit(EVENTS.BUILD_SELL_HOUSE)}>Sell House</button>
+          <button style={btn} disabled={!canBuyHotel} onClick={() => emit(EVENTS.BUILD_BUY_HOTEL)}>Buy Hotel</button>
+          <button style={btn} disabled={!canSellHotel} onClick={() => emit(EVENTS.BUILD_SELL_HOTEL)}>Sell Hotel</button>
         </div>
       )}
     </>
