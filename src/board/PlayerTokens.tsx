@@ -15,6 +15,9 @@ const HOP_H = 0.3;
 const HOP_MS = 150; // ANIMATION_TOKEN_MOVE_PER_SPACE_MS — keeps lockstep with server
 const CHAR_SCALE = 0.2; // matches CharacterToken's board-token default
 const ROT_LERP = 0.35; // how quickly the character swings to face travel each frame
+const FACING_OFFSET = 0; // radians — single knob: set to Math.PI if model faces backward
+const RING_INNER = 0.26; // inner radius of the identity ring
+const RING_OUTER = 0.32; // outer radius (~0.06 band — thin, not fat)
 
 interface Anim {
   queue: number[];   // remaining tiles to visit, in order
@@ -169,7 +172,7 @@ export function PlayerTokens() {
           dz = tz - anim.fromZ;
         }
         if (Math.abs(dx) > 1e-5 || Math.abs(dz) > 1e-5) {
-          const target = Math.atan2(dx, dz); // three's +z is "forward" for atan2(x,z)
+          const target = Math.atan2(dx, dz) + FACING_OFFSET; // three's +z is "forward" for atan2(x,z)
           const cur = facing.current[p.id] ?? target;
           // Shortest-arc lerp toward the target heading.
           let diff = target - cur;
@@ -243,6 +246,14 @@ export function PlayerTokens() {
               // if the very first frame hasn't fired yet.
               if (g && !seeded.current[p.id]) {
                 g.position.set(x + ox, BASE_Y, z + oz);
+                // Seed rest rotation: face direction of travel toward the next tile
+                // using the same convention as the hop code so rest and hop agree.
+                const [nx, , nz] = tileToWorld((p.position + 1) % 40);
+                const [cx, , cz] = tileToWorld(p.position);
+                const rdx = nx - cx, rdz = nz - cz;
+                const seedRot = Math.atan2(rdx, rdz) + FACING_OFFSET;
+                g.rotation.y = seedRot;
+                facing.current[p.id] = seedRot;
               }
             }}
           >
@@ -261,24 +272,21 @@ export function PlayerTokens() {
               y={-BASE_Y}
               baseColor={p.characterColor ?? undefined}
             />
-            {/* IDENTITY RING — the character stands on a prominent puck in the
-                player's TOKEN_HEX color. Since the character is no longer tinted,
-                THIS is how you tell whose token is whose at a glance (and it
-                matches the color the pods/ownership use). A child of the group,
-                so it inherits the animated hop transform for free. A thin darker
-                rim disc under it lifts the ring off the tile for contrast. */}
-            <mesh position={[0, -BASE_Y + 0.015, 0]}>
-              <cylinderGeometry args={[0.34, 0.34, 0.02, 32]} />
-              <meshStandardMaterial color="#0a0a12" transparent opacity={0.5} />
-            </mesh>
-            <mesh position={[0, -BASE_Y + 0.045, 0]}>
-              <cylinderGeometry args={[0.3, 0.3, 0.05, 32]} />
+            {/* IDENTITY RING — a thin hollow annulus in the player's TOKEN_HEX
+                color. Since the character is no longer tinted, THIS is how you
+                tell whose token is whose at a glance (matches the color the
+                pods/ownership use). ringGeometry lies in the XY plane; the
+                rotation lays it flat on the board facing up. DoubleSide ensures
+                it shows from grazing/below angles. */}
+            <mesh position={[0, -BASE_Y + 0.02, 0]} rotation={[-Math.PI / 2, 0, 0]}>
+              <ringGeometry args={[RING_INNER, RING_OUTER, 48]} />
               <meshStandardMaterial
                 color={hex}
                 emissive={hex}
-                emissiveIntensity={0.35}
+                emissiveIntensity={0.4}
                 roughness={0.4}
                 metalness={0.1}
+                side={THREE.DoubleSide}
               />
             </mesh>
           </group>
