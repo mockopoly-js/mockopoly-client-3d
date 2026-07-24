@@ -15,7 +15,7 @@ const HOP_H = 0.3;
 const HOP_MS = 150; // ANIMATION_TOKEN_MOVE_PER_SPACE_MS — keeps lockstep with server
 const CHAR_SCALE = 0.2; // matches CharacterToken's board-token default
 const ROT_LERP = 0.35; // how quickly the character swings to face travel each frame
-const FACING_OFFSET = 0; // radians — single knob: set to Math.PI if model faces backward
+const FACING_OFFSET = -Math.PI / 2; // radians — single knob: set to Math.PI if model faces backward
 const RING_INNER = 0.26; // inner radius of the identity ring
 const RING_OUTER = 0.32; // outer radius (~0.06 band — thin, not fat)
 
