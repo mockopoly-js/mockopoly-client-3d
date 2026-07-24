@@ -181,6 +181,7 @@ export interface Player {
   name: string;
   token: TokenType;
   character?: string;         // character id, e.g. "Suit_Male" — see constants/characters.ts
+  characterColor?: string;    // hex color for the primary outfit material, e.g. "#e53935"
   position: number;           // 0–39 board space index
   money: number;
   properties: number[];       // owned space indices

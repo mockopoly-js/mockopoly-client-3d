@@ -259,6 +259,7 @@ export function PlayerTokens() {
               scale={CHAR_SCALE}
               clip={clip}
               y={-BASE_Y}
+              baseColor={p.characterColor ?? undefined}
             />
             {/* IDENTITY RING — the character stands on a prominent puck in the
                 player's TOKEN_HEX color. Since the character is no longer tinted,

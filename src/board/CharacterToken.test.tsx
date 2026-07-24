@@ -59,7 +59,7 @@ vi.mock('three/examples/jsm/utils/SkeletonUtils.js', () => ({
 }));
 
 // Import AFTER mocks are registered.
-import { CharacterToken, type CharacterTokenHandle } from './CharacterToken';
+import { CharacterToken, type CharacterTokenHandle, pickPrimaryMaterialName } from './CharacterToken';
 
 describe('CHARACTERS catalog', () => {
   it('has 52 entries with unique ids and well-formed urls', () => {
@@ -159,5 +159,63 @@ describe('CharacterToken', () => {
 
   it('exposes a preload helper', () => {
     expect(typeof CharacterToken.preload).toBe('function');
+  });
+
+  it('accepts baseColor prop without throwing (recolor is applied after clone)', () => {
+    expect(() =>
+      render(<CharacterToken url="/models/characters/Wizard.glb" baseColor="#e53935" />),
+    ).not.toThrow();
+  });
+
+  it('renders with undefined baseColor (native colors) without throwing', () => {
+    expect(() =>
+      render(<CharacterToken url="/models/characters/Suit_Male.glb" baseColor={undefined} />),
+    ).not.toThrow();
+  });
+});
+
+// ── pickPrimaryMaterialName heuristic ─────────────────────────────────────────
+
+describe('pickPrimaryMaterialName (material heuristic)', () => {
+  it('picks an allowlisted outfit material over others', () => {
+    expect(pickPrimaryMaterialName(['Skin', 'Hair', 'Shirt', 'Pants'])).toBe('Shirt');
+    expect(pickPrimaryMaterialName(['Skin', 'Face', 'Clothes', 'Belt'])).toBe('Clothes');
+    expect(pickPrimaryMaterialName(['Skin', 'Jacket', 'Hair'])).toBe('Jacket');
+    expect(pickPrimaryMaterialName(['Armor', 'Skin', 'Face', 'Hair'])).toBe('Armor');
+    expect(pickPrimaryMaterialName(['Skin', 'Main', 'Hair'])).toBe('Main');
+  });
+
+  it('is case-insensitive for both allowlist and blocklist', () => {
+    expect(pickPrimaryMaterialName(['SKIN', 'HAIR', 'SHIRT'])).toBe('SHIRT');
+    expect(pickPrimaryMaterialName(['skin.001', 'Main_Cloth'])).toBe('Main_Cloth');
+  });
+
+  it('falls back to first non-skin material when no allowlist match', () => {
+    expect(pickPrimaryMaterialName(['Skin', 'Hair', 'Pants', 'Belt'])).toBe('Pants');
+  });
+
+  it('returns null when all materials are skin/face/hair/eye', () => {
+    expect(pickPrimaryMaterialName(['Skin', 'Face', 'Hair', 'Eye'])).toBe(null);
+  });
+
+  it('returns null for an empty list', () => {
+    expect(pickPrimaryMaterialName([])).toBe(null);
+  });
+
+  it('handles partial name matches (e.g. "eye" inside "eyebrow")', () => {
+    // "eyebrow" contains "eye" so it is blocked — falls through to "Cloth".
+    expect(pickPrimaryMaterialName(['eyebrow', 'Cloth'])).toBe('Cloth');
+  });
+
+  it('returns the first allowlist-matching material in the names array', () => {
+    // Both Clothes and Shirt are in the allowlist; the first matching name in
+    // the input array wins (linear scan of nonSkin names).
+    expect(pickPrimaryMaterialName(['Clothes', 'Shirt'])).toBe('Clothes');
+    expect(pickPrimaryMaterialName(['Shirt', 'Clothes'])).toBe('Shirt');
+  });
+
+  it('never recolors Skin/Face/Hair/Eye materials (blocklist)', () => {
+    // Only blocklist materials present → null.
+    expect(pickPrimaryMaterialName(['skin_base', 'face_mesh', 'hair_strand', 'eye_left'])).toBe(null);
   });
 });

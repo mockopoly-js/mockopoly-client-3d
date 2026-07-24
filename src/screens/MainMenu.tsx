@@ -21,6 +21,7 @@ export function MainMenu() {
   const isMobile = useIsMobile();
   const navigate = useNavigate();
   const selectedCharacter = useGameStore((s) => s.selectedCharacter);
+  const selectedCharacterColor = useGameStore((s) => s.selectedCharacterColor);
   // Board-identity color persists in the store so the CharacterSelect "locker"
   // (Equip) and this menu stay in sync. The swatch row still lets you tweak it.
   const token = useGameStore((s) => s.selectedToken);
@@ -67,7 +68,12 @@ export function MainMenu() {
   const create = () => {
     if (!canCreate) return;
     setError(null);
-    socketManager.emit(EVENTS.ROOM_CREATE, { playerName: trimmedName, token, character: selectedCharacter });
+    socketManager.emit(EVENTS.ROOM_CREATE, {
+      playerName: trimmedName,
+      token,
+      character: selectedCharacter,
+      characterColor: selectedCharacterColor ?? undefined,
+    });
   };
   const join = () => {
     if (!canJoin) return;
@@ -77,6 +83,7 @@ export function MainMenu() {
       playerName: trimmedName,
       token,
       character: selectedCharacter,
+      characterColor: selectedCharacterColor ?? undefined,
       reconnectToken: getStoredReconnectToken() ?? undefined,
     });
   };

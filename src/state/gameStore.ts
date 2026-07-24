@@ -6,6 +6,7 @@ import { DEFAULT_CHARACTER } from '../constants/characters';
 
 const RECONNECT_KEY = 'mockopoly_reconnect';
 const CHARACTER_KEY = 'mockopoly_character';
+const CHARACTER_COLOR_KEY = 'mockopoly_character_color';
 const TOKEN_KEY = 'mockopoly_token';
 
 const DEFAULT_TOKEN: TokenType = 'red';
@@ -43,6 +44,9 @@ interface GameStore {
   // ── character + token color selection (persisted) ──
   selectedCharacter: string;
   setSelectedCharacter: (id: string) => void;
+  /** Hex color for the primary outfit material of the selected skin (null = native skin color). */
+  selectedCharacterColor: string | null;
+  setSelectedCharacterColor: (hex: string | null) => void;
   /** Player board-identity color (the base puck under the token). */
   selectedToken: TokenType;
   setSelectedToken: (token: TokenType) => void;
@@ -69,6 +73,10 @@ function getStoredCharacter(): string {
   try { return localStorage.getItem(CHARACTER_KEY) || DEFAULT_CHARACTER; } catch { return DEFAULT_CHARACTER; }
 }
 
+function getStoredCharacterColor(): string | null {
+  try { return localStorage.getItem(CHARACTER_COLOR_KEY) || null; } catch { return null; }
+}
+
 function getStoredToken(): TokenType {
   try {
     const t = localStorage.getItem(TOKEN_KEY) as TokenType | null;
@@ -93,11 +101,22 @@ export const useGameStore = create<GameStore>((set, get) => ({
   screen: 'menu',
   gameOver: null,
   selectedCharacter: getStoredCharacter(),
+  selectedCharacterColor: getStoredCharacterColor(),
   selectedToken: getStoredToken(),
 
   setSelectedCharacter: (id) => {
     set({ selectedCharacter: id });
     try { localStorage.setItem(CHARACTER_KEY, id); } catch { /* ignore */ }
+  },
+  setSelectedCharacterColor: (hex) => {
+    set({ selectedCharacterColor: hex });
+    try {
+      if (hex === null) {
+        localStorage.removeItem(CHARACTER_COLOR_KEY);
+      } else {
+        localStorage.setItem(CHARACTER_COLOR_KEY, hex);
+      }
+    } catch { /* ignore */ }
   },
   setSelectedToken: (token) => {
     set({ selectedToken: token });

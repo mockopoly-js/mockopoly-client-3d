@@ -21,9 +21,11 @@ interface PreviewSceneProps {
   url: string;
   /** Rarity accent (hex) used to tint the podium ring. */
   accent?: string;
+  /** Hex color to recolor the skin's primary outfit material (live preview). */
+  baseColor?: string;
 }
 
-function RotatingGroup({ url, accent = '#2a2a40' }: PreviewSceneProps) {
+function RotatingGroup({ url, accent = '#2a2a40', baseColor }: PreviewSceneProps) {
   const groupRef = useRef<THREE.Group>(null);
 
   useFrame((_, delta) => {
@@ -34,8 +36,8 @@ function RotatingGroup({ url, accent = '#2a2a40' }: PreviewSceneProps) {
 
   return (
     <group ref={groupRef}>
-      {/* Character — NATIVE colors (tint is a no-op), feet at y=0, Idle loop. */}
-      <CharacterToken url={url} clip="Idle" scale={0.2} />
+      {/* Character — primary outfit recolored if baseColor is set; Skin/Face/Hair untouched. */}
+      <CharacterToken url={url} clip="Idle" scale={0.2} baseColor={baseColor} />
       {/* Podium disc, accent-tinted rim glow. */}
       <mesh receiveShadow position={[0, -0.004, 0]} rotation={[-Math.PI / 2, 0, 0]}>
         <circleGeometry args={[0.6, 64]} />
@@ -49,7 +51,7 @@ function RotatingGroup({ url, accent = '#2a2a40' }: PreviewSceneProps) {
   );
 }
 
-export function CharacterPreviewCanvas({ url, accent }: PreviewSceneProps) {
+export function CharacterPreviewCanvas({ url, accent, baseColor }: PreviewSceneProps) {
   return (
     <Canvas
       style={{ width: '100%', height: '100%' }}
@@ -62,7 +64,7 @@ export function CharacterPreviewCanvas({ url, accent }: PreviewSceneProps) {
       <ambientLight intensity={0.75} />
       <directionalLight position={[1.5, 3, 2]} intensity={1.25} />
       <directionalLight position={[-1.8, 1.5, -0.6]} intensity={0.35} color="#9aa6ff" />
-      <RotatingGroup url={url} accent={accent} />
+      <RotatingGroup url={url} accent={accent} baseColor={baseColor} />
     </Canvas>
   );
 }

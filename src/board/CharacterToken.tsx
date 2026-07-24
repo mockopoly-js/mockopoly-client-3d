@@ -56,6 +56,71 @@ function cloneMaterial(mat: THREE.Material): THREE.Material {
   return (mat as THREE.MeshStandardMaterial).clone();
 }
 
+/**
+ * Allowlist of primary outfit material names (case-insensitive). The first name
+ * in this list that appears in the skin's material set is chosen as the recolor
+ * target. Skin/Face/Hair materials are never recolored.
+ */
+const OUTFIT_ALLOWLIST = ['shirt', 'clothes', 'main', 'jacket', 'armor'];
+const SKIN_BLOCKLIST = ['skin', 'face', 'hair', 'eye'];
+
+/**
+ * Given a list of material names from a cloned scene, return the name of the
+ * primary outfit material to recolor, or null if none qualifies.
+ *
+ * Strategy:
+ * 1. Filter out any Skin/Face/Hair/Eye materials.
+ * 2. Among the remaining, find the first whose name is in the OUTFIT_ALLOWLIST
+ *    (case-insensitive match).
+ * 3. If none match, fall back to the first non-skin material (largest by index).
+ *
+ * Exported so it can be unit-tested independently of Three.js.
+ */
+export function pickPrimaryMaterialName(names: string[]): string | null {
+  const nonSkin = names.filter(
+    (n) => !SKIN_BLOCKLIST.some((b) => n.toLowerCase().includes(b)),
+  );
+  if (nonSkin.length === 0) return null;
+  const allowlisted = nonSkin.find((n) =>
+    OUTFIT_ALLOWLIST.some((a) => n.toLowerCase().includes(a)),
+  );
+  return allowlisted ?? nonSkin[0];
+}
+
+/**
+ * Apply `baseColor` to the primary outfit material of a cloned scene.
+ * Skin/Face/Hair/Eye materials are never touched.
+ */
+function applyBaseColor(scene: THREE.Group, baseColor: string): void {
+  // Collect all unique material names from the scene.
+  const matNames: string[] = [];
+  scene.traverse((o) => {
+    const mesh = o as THREE.Mesh;
+    if (!mesh.isMesh) return;
+    const mats = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
+    for (const m of mats) {
+      if (m && m.name && !matNames.includes(m.name)) {
+        matNames.push(m.name);
+      }
+    }
+  });
+
+  const targetName = pickPrimaryMaterialName(matNames);
+  if (!targetName) return;
+
+  const color = new THREE.Color(baseColor);
+  scene.traverse((o) => {
+    const mesh = o as THREE.Mesh;
+    if (!mesh.isMesh) return;
+    const mats = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
+    for (const m of mats) {
+      if (m && m.name === targetName) {
+        (m as THREE.MeshStandardMaterial).color.set(color);
+      }
+    }
+  });
+}
+
 interface CharacterTokenProps {
   url: string;
   /**
@@ -64,6 +129,14 @@ interface CharacterTokenProps {
    * recoloring the character. Kept only for API/back-compat.
    */
   tint?: string;
+  /**
+   * Optional hex color to recolor the skin's PRIMARY outfit material (the first
+   * material whose name is in the outfit allowlist, or the first non-skin
+   * material). Skin/Face/Hair/Eye materials are never touched. When undefined or
+   * null the native colors are kept unchanged. Recomputed when `baseColor` or
+   * the source scene changes.
+   */
+  baseColor?: string;
   scale?: number;
   /** First clip played on mount (looped). Defaults to 'Idle'. */
   initialClip?: CharacterClip;
@@ -87,12 +160,14 @@ interface CharacterTokenProps {
  * `play('Walk')` / `play('Idle')` to switch.
  */
 export const CharacterToken = forwardRef<CharacterTokenHandle, CharacterTokenProps>(
-  function CharacterToken({ url, scale = 0.2, initialClip = 'Idle', clip, y = 0 }, apiRef) {
+  function CharacterToken({ url, scale = 0.2, initialClip = 'Idle', clip, y = 0, baseColor }, apiRef) {
     const gltf = useGLTF(url);
 
     // Per-instance clone (independent skeleton). Materials are cloned so each
-    // instance owns/disposes its own, but the character's NATIVE colors are kept
-    // untouched (no tint). Recompute only if the source scene changes.
+    // instance owns/disposes its own. NATIVE colors are kept unless `baseColor`
+    // is provided, in which case only the primary outfit material is recolored
+    // (Skin/Face/Hair/Eye are always left untouched).
+    // Recompute when the source scene OR baseColor changes.
     const scene = useMemo(() => {
       const cloned = cloneSkeleton(gltf.scene) as THREE.Group;
       cloned.traverse((o) => {
@@ -106,8 +181,13 @@ export const CharacterToken = forwardRef<CharacterTokenHandle, CharacterTokenPro
           mesh.material = cloneMaterial(mesh.material);
         }
       });
+      // Apply outfit recolor after all materials are cloned (safe — per-instance).
+      if (baseColor) {
+        applyBaseColor(cloned, baseColor);
+      }
       return cloned;
-    }, [gltf.scene]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [gltf.scene, baseColor]);
 
     // Dispose the per-instance cloned materials on unmount / re-clone. Geometry
     // is shared with the cached gltf (SkeletonUtils clones nodes but reuses

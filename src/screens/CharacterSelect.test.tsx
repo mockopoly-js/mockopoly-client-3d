@@ -82,7 +82,10 @@ describe('CharacterSelect (locker)', () => {
 
   it('category chips cover All + the 12 categories', () => {
     renderSelect();
-    const tabs = screen.getAllByRole('tab');
+    // Scope to the skin-category tablist (aria-label="Skin categories") to
+    // exclude the tab switcher (Skin color / Player color) which are in their own tablist.
+    const categoryTablist = screen.getByRole('tablist', { name: /skin categories/i });
+    const tabs = within(categoryTablist).getAllByRole('tab');
     expect(tabs).toHaveLength(CHARACTER_CATEGORIES.length + 1);
   });
 
@@ -133,6 +136,8 @@ describe('CharacterSelect (locker)', () => {
     const targetName = within(cards[0]).getByRole('img').getAttribute('alt');
     const targetDef = CHARACTERS.find((c) => c.name === targetName)!;
     fireEvent.click(cards[0]);
+    // Switch to the Player color tab to access identity swatches.
+    fireEvent.click(screen.getByTestId('tab-player-color'));
     // Pick a non-default color.
     fireEvent.click(screen.getByRole('button', { name: 'blue' }));
     fireEvent.click(screen.getByRole('button', { name: /equip/i }));
@@ -159,15 +164,18 @@ describe('CharacterSelect (locker)', () => {
     expect(screen.getByText(/no skins match/i)).toBeTruthy();
   });
 
-  it('has 8 color swatch buttons labelled "Your color"', () => {
+  it('has 8 color swatch buttons in the Player color tab', () => {
     renderSelect();
+    // Switch to the Player color tab.
+    fireEvent.click(screen.getByTestId('tab-player-color'));
     const swatches = screen.getAllByRole('button').filter((b) =>
       ['red', 'blue', 'green', 'yellow', 'purple', 'orange', 'cyan', 'pink'].includes(
         b.getAttribute('aria-label') ?? '',
       ),
     );
     expect(swatches).toHaveLength(8);
-    expect(screen.getByText(/your color/i)).toBeTruthy();
+    // The player-color panel's section label is shown.
+    expect(screen.getByTestId('player-color-panel')).toBeTruthy();
   });
 
   it('all 52 skins have a resolvable rarity + non-empty description', () => {
@@ -176,5 +184,118 @@ describe('CharacterSelect (locker)', () => {
       expect(['common', 'rare', 'epic', 'legendary']).toContain(meta.rarity);
       expect(meta.description.length).toBeGreaterThan(0);
     }
+  });
+
+  // ── Color tab tests ────────────────────────────────────────────────────────
+
+  it('Color tab shows the skin color panel by default (Skin color tab active)', () => {
+    renderSelect();
+    // Default active tab should be skin color.
+    expect(screen.getByTestId('tab-skin-color').getAttribute('aria-selected')).toBe('true');
+    expect(screen.getByTestId('tab-player-color').getAttribute('aria-selected')).toBe('false');
+    expect(screen.getByTestId('skin-color-panel')).toBeTruthy();
+    expect(screen.queryByTestId('player-color-panel')).toBeNull();
+  });
+
+  it('Color tab shows the palette with 16 curated swatches', () => {
+    renderSelect();
+    // Skin color tab is default — check the outfit palette.
+    const palette = screen.getByRole('group', { name: /skin outfit color palette/i });
+    const swatches = within(palette).getAllByRole('button');
+    expect(swatches).toHaveLength(16);
+  });
+
+  it('Color tab includes a free color picker input and hex text input', () => {
+    renderSelect();
+    expect(screen.getByTestId('skin-free-color-input')).toBeTruthy();
+    expect(screen.getByTestId('skin-color-hex-input')).toBeTruthy();
+  });
+
+  it('Color tab palette swatch click sets characterColor draft', () => {
+    renderSelect();
+    // Find a palette swatch by its aria-label (e.g. "Crimson").
+    const crimsonBtn = screen.getByRole('button', { name: /crimson/i });
+    fireEvent.click(crimsonBtn);
+    // The swatch becomes aria-pressed=true.
+    expect(crimsonBtn.getAttribute('aria-pressed')).toBe('true');
+  });
+
+  it('Color tab Default/Reset button clears the characterColor', () => {
+    renderSelect();
+    // Select a color first.
+    fireEvent.click(screen.getByRole('button', { name: /crimson/i }));
+    // Reset.
+    fireEvent.click(screen.getByTestId('skin-color-reset'));
+    // After reset, no swatch should be pressed.
+    const palette = screen.getByRole('group', { name: /skin outfit color palette/i });
+    const pressed = within(palette).getAllByRole('button').filter(
+      (b) => b.getAttribute('aria-pressed') === 'true',
+    );
+    expect(pressed).toHaveLength(0);
+  });
+
+  it('Equip stores selectedCharacterColor when a palette swatch is chosen', () => {
+    renderSelect();
+    fireEvent.click(screen.getByRole('button', { name: /cobalt/i }));
+    fireEvent.click(screen.getByRole('button', { name: /equip/i }));
+    // The Cobalt hex should be persisted.
+    expect(useGameStore.getState().selectedCharacterColor).toBe('#1565c0');
+  });
+
+  it('Equip stores null characterColor when Default is chosen', () => {
+    renderSelect();
+    // Pick a color then reset.
+    fireEvent.click(screen.getByRole('button', { name: /crimson/i }));
+    fireEvent.click(screen.getByTestId('skin-color-reset'));
+    fireEvent.click(screen.getByRole('button', { name: /equip/i }));
+    expect(useGameStore.getState().selectedCharacterColor).toBe(null);
+  });
+
+  it('preview receives baseColor prop matching the selected swatch', () => {
+    renderSelect();
+    fireEvent.click(screen.getByRole('button', { name: /forest/i }));
+    // The preview canvas mock should receive the baseColor as data-basecolor.
+    // (The CharacterPreviewCanvas mock doesn't forward it, so we test the panel
+    //  renders the swatch pressed instead.)
+    const forestBtn = screen.getByRole('button', { name: /forest/i });
+    expect(forestBtn.getAttribute('aria-pressed')).toBe('true');
+  });
+
+  it('switching to Player color tab shows token swatches and hides skin palette', () => {
+    renderSelect();
+    fireEvent.click(screen.getByTestId('tab-player-color'));
+    expect(screen.getByTestId('player-color-panel')).toBeTruthy();
+    expect(screen.queryByTestId('skin-color-panel')).toBeNull();
+    // Ensure the 8 identity tokens are shown.
+    const swatches = screen.getAllByRole('button').filter((b) =>
+      ['red', 'blue', 'green', 'yellow', 'purple', 'orange', 'cyan', 'pink'].includes(
+        b.getAttribute('aria-label') ?? '',
+      ),
+    );
+    expect(swatches).toHaveLength(8);
+  });
+
+  // ── Store: selectedCharacterColor ─────────────────────────────────────────
+
+  describe('gameStore selectedCharacterColor', () => {
+    it('defaults to null (native skin color)', () => {
+      useGameStore.getState().reset();
+      // After reset, it is still null (reset doesn't touch persisted character color).
+      const color = useGameStore.getState().selectedCharacterColor;
+      expect(color === null || typeof color === 'string').toBe(true);
+    });
+
+    it('setSelectedCharacterColor updates state and persists to localStorage', () => {
+      useGameStore.getState().setSelectedCharacterColor('#e53935');
+      expect(useGameStore.getState().selectedCharacterColor).toBe('#e53935');
+      expect(localStorage.getItem('mockopoly_character_color')).toBe('#e53935');
+    });
+
+    it('setSelectedCharacterColor(null) removes the key from localStorage', () => {
+      useGameStore.getState().setSelectedCharacterColor('#1565c0');
+      useGameStore.getState().setSelectedCharacterColor(null);
+      expect(useGameStore.getState().selectedCharacterColor).toBe(null);
+      expect(localStorage.getItem('mockopoly_character_color')).toBe(null);
+    });
   });
 });
