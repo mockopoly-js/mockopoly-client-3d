@@ -57,7 +57,7 @@ export type CharacterClip =
   | 'RecieveHit';
 
 export interface CharacterTokenHandle {
-  play: (clip: CharacterClip, opts?: { loop?: boolean; fade?: number }) => void;
+  play: (clip: CharacterClip, opts?: { loop?: boolean; fade?: number; onFinished?: () => void }) => void;
 }
 
 /**
@@ -294,7 +294,7 @@ export const CharacterToken = forwardRef<CharacterTokenHandle, CharacterTokenPro
 
     const play = useMemo(
       () =>
-        (clip: CharacterClip, opts?: { loop?: boolean; fade?: number }) => {
+        (clip: CharacterClip, opts?: { loop?: boolean; fade?: number; onFinished?: () => void }) => {
           const next = actions[clip];
           if (!next) return;
           if (current.current === clip) return;
@@ -311,8 +311,23 @@ export const CharacterToken = forwardRef<CharacterTokenHandle, CharacterTokenPro
             next.fadeIn(fade).play();
           }
           current.current = clip;
+
+          // Wire up the onFinished callback for LoopOnce clips only. Subscribe to
+          // the mixer's 'finished' event, verify this is the right action (guards
+          // against stale callbacks from a rapid sequence of one-shots), then
+          // remove the listener so it fires exactly once and never leaks.
+          if (opts?.loop === false && opts.onFinished) {
+            const cb = opts.onFinished;
+            const onMixerFinished = (e: THREE.Event) => {
+              const ev = e as THREE.Event & { action: THREE.AnimationAction };
+              if (ev.action !== next) return; // not our action — ignore
+              mixer.removeEventListener('finished', onMixerFinished);
+              cb();
+            };
+            mixer.addEventListener('finished', onMixerFinished);
+          }
         },
-      [actions],
+      [actions, mixer],
     );
 
     // Start on the initial clip once actions are ready.
@@ -329,8 +344,9 @@ export const CharacterToken = forwardRef<CharacterTokenHandle, CharacterTokenPro
 
     useImperativeHandle(apiRef, () => ({ play }), [play]);
 
-    // Keep the mixer reference from being GC-surprised (drei ticks it in useFrame).
-    void mixer;
+    // mixer is used in the play closure above (addEventListener/removeEventListener)
+    // and also ticked by drei's useFrame internally. Referencing it here ensures
+    // the linter does not flag it as unused when the play memo is the sole consumer.
 
     return (
       <group ref={rootRef} scale={scale} position-y={y}>

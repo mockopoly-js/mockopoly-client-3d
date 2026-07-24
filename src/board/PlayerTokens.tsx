@@ -181,6 +181,87 @@ export function PlayerTokens() {
   // Imperative handles to each character, for one-shot Victory/Defeat clips.
   const chars = useRef<Record<string, CharacterTokenHandle | null>>({});
 
+  // ── Victory-on-gain detection ─────────────────────────────────────────────
+  // Previous snapshot values keyed by player id. Null until the first snapshot
+  // lands — so the initial load never triggers a celebration.
+  const prevMoney = useRef<Record<string, number>>({});
+  const prevPropCount = useRef<Record<string, number>>({});
+  // Set to true while a Victory one-shot is in flight; prevents re-triggering.
+  const isCelebrating = useRef<Record<string, boolean>>({});
+  // Set to true when a gain is detected during an active run; cleared and played
+  // once the walk finishes (so pass-GO salary celebrates on arrival, not mid-run).
+  const pendingVictory = useRef<Record<string, boolean>>({});
+
+  // ── Victory-on-gain: subscribe to store player snapshots ─────────────────
+  // Runs whenever the authoritative state.players array changes (GAME_STATE_UPDATE
+  // lands). Diffs each non-bankrupt player's money and properties.length against
+  // the previous snapshot. The very FIRST snapshot initialises the baseline
+  // without triggering Victory. On subsequent updates, a gain (money up OR
+  // properties gained) schedules or plays the Victory one-shot.
+  //
+  // Cleanup: the subscribe returns an unsubscribe function; returned from useEffect
+  // so it fires on unmount (no leak).
+  useEffect(() => {
+    const playVictory = (id: string) => {
+      if (isCelebrating.current[id]) return;
+      isCelebrating.current[id] = true;
+      chars.current[id]?.play('Victory', {
+        loop: false,
+        onFinished: () => {
+          isCelebrating.current[id] = false;
+          // Return to the correct reactive state (Run if still moving, else Idle).
+          chars.current[id]?.play(movingRef.current[id] ? 'Run' : 'Idle');
+        },
+      });
+    };
+
+    const unsub = useGameStore.subscribe((store) => {
+      const players = store.state?.players;
+      if (!players) return;
+
+      const isFirstSnapshot =
+        Object.keys(prevMoney.current).length === 0 &&
+        Object.keys(prevPropCount.current).length === 0;
+
+      for (const p of players) {
+        if (p.isBankrupt) {
+          // Clean up tracking for removed/bankrupt players.
+          delete prevMoney.current[p.id];
+          delete prevPropCount.current[p.id];
+          delete pendingVictory.current[p.id];
+          delete isCelebrating.current[p.id];
+          continue;
+        }
+
+        const prevM = prevMoney.current[p.id];
+        const prevPC = prevPropCount.current[p.id];
+
+        // Always update baseline (even on first snapshot).
+        prevMoney.current[p.id] = p.money;
+        prevPropCount.current[p.id] = p.properties.length;
+
+        if (isFirstSnapshot) continue; // Initialise baseline only — no celebration.
+
+        // Detect a gain: money up OR new properties acquired.
+        const gained =
+          (prevM !== undefined && p.money > prevM) ||
+          (prevPC !== undefined && p.properties.length > prevPC);
+
+        if (!gained) continue;
+
+        // If the token is currently running (mid-hop), defer until walk ends.
+        if (movingRef.current[p.id]) {
+          pendingVictory.current[p.id] = true;
+        } else {
+          playVictory(p.id);
+        }
+      }
+    });
+
+    return unsub;
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   // Server says a token moved → build the walk polyline + flag it moving.
   // `passedGo` rides along on the S_PlayerMoved contract event and is already
   // forwarded verbatim by GameStateSync (gameBus.emit('player-moved', data)),
@@ -246,7 +327,10 @@ export function PlayerTokens() {
         toTile: d.to,
       };
 
-      // Flip to 'Walk' (only if not already flagged — avoids a redundant render).
+      // Flip to 'Run' (only if not already flagged — avoids a redundant render).
+      // Also clear isCelebrating so movement (Run) takes over from any in-flight
+      // Victory one-shot — the reactive clip prop drives the crossfade.
+      isCelebrating.current[d.playerId] = false;
       if (!movingRef.current[d.playerId]) {
         setMoving((m) => ({ ...m, [d.playerId]: true }));
       }
@@ -362,6 +446,21 @@ export function PlayerTokens() {
               return nextMap;
             });
           }
+
+          // Deferred Victory: if a gain was detected while this token was running
+          // (e.g. GO salary credited mid-move), play it now that the walk is done.
+          if (pendingVictory.current[p.id] && !isCelebrating.current[p.id]) {
+            pendingVictory.current[p.id] = false;
+            isCelebrating.current[p.id] = true;
+            const pid = p.id; // capture for closure
+            chars.current[pid]?.play('Victory', {
+              loop: false,
+              onFinished: () => {
+                isCelebrating.current[pid] = false;
+                chars.current[pid]?.play(movingRef.current[pid] ? 'Run' : 'Idle');
+              },
+            });
+          }
         }
       } else {
         // Reconcile to the authoritative tile + stack offset (world space).
@@ -407,7 +506,7 @@ export function PlayerTokens() {
         const [ox, oz] = restOffset(p, players);
         const hex = TOKEN_HEX[p.token as TokenType];
         const char = resolveCharacter(p.character ?? DEFAULT_CHARACTER);
-        const clip = moving[p.id] ? 'Walk' : 'Idle';
+        const clip = moving[p.id] ? 'Run' : 'Idle';
         return (
           <group
             key={p.id}
