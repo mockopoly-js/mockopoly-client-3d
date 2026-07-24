@@ -12,7 +12,9 @@ import {
 // R3F intrinsic elements (<group>, <primitive>) are unknown to jsdom's DOM
 // renderer, so stub them to plain divs. We render outside a real <Canvas> — the
 // point of this test is that CharacterToken's module imports resolve and its
-// clip/tint props are accepted, NOT to exercise WebGL/skinning (browser-only).
+// clip prop drives an animation action, NOT to exercise WebGL/skinning
+// (browser-only). The `tint` prop is a no-op (characters render native colors);
+// it is still accepted for back-compat, so the tests pass it harmlessly.
 vi.mock('@react-three/fiber', () => ({ useFrame: () => {} }));
 
 // Fake useGLTF/useAnimations so the component mounts without fetching a .glb or
@@ -51,7 +53,7 @@ vi.mock('@react-three/drei', () => {
 });
 
 // SkeletonUtils.clone: return a minimal cloned "scene" with a no-op traverse so
-// the tint pass runs without a real Object3D graph.
+// the per-instance material-clone pass runs without a real Object3D graph.
 vi.mock('three/examples/jsm/utils/SkeletonUtils.js', () => ({
   clone: () => ({ traverse: (_fn: (o: unknown) => void) => {} }),
 }));
@@ -138,6 +140,20 @@ describe('CharacterToken', () => {
     expect(ref.current).not.toBeNull();
     expect(typeof ref.current?.play).toBe('function');
     ref.current?.play('Walk');
+    expect(walkAction.play).toHaveBeenCalled();
+  });
+
+  it('drives the reactive `clip` prop (Idle→Walk) without a re-mount', () => {
+    // Mount on Idle (default clip prop unset → initialClip 'Idle').
+    const { rerender } = render(
+      <CharacterToken url="/models/characters/Suit_Male.glb" tint="#3498db" clip="Idle" />,
+    );
+    expect(idleAction.play).toHaveBeenCalled();
+    expect(walkAction.play).not.toHaveBeenCalled();
+    // Flipping clip → 'Walk' crossfades to the Walk action (same instance).
+    rerender(
+      <CharacterToken url="/models/characters/Suit_Male.glb" tint="#3498db" clip="Walk" />,
+    );
     expect(walkAction.play).toHaveBeenCalled();
   });
 

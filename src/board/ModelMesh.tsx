@@ -71,7 +71,7 @@ export function ModelMesh({
 
 /**
  * Preload a model `.glb` into drei's cache. Re-exports `useGLTF.preload` so
- * callers can warm any url ahead of first render (see `constants/models.ts`,
- * which preloads the 8 token models).
+ * callers can warm any url ahead of first render (used by Buildings for the
+ * house/hotel models).
  */
 ModelMesh.preload = useGLTF.preload;
