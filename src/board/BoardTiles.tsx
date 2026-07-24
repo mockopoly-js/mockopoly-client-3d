@@ -45,6 +45,14 @@ const TOP_Y = 0.02;
 /** Edge/side + bottom color — reads as a warm toy-board rim. */
 const EDGE_COLOR = '#c9a06a';
 
+/**
+ * Saturation multiplier for the printed board artwork ONLY (top face, index 2).
+ * 1.0 = unchanged; >1 = more saturated. Applied in the fragment shader after
+ * map_fragment so it is tunable without touching the source image or any other
+ * material (edge, city, forest, tokens are all unaffected).
+ */
+const BOARD_SATURATION = 1.3;
+
 export function BoardTiles() {
   const texture = useTexture('/images/board.webp');
   const maxAniso = useThree((s) => s.gl.capabilities.getMaxAnisotropy());
@@ -69,6 +77,30 @@ export function BoardTiles() {
   const materials = useMemo(() => {
     const edge = new THREE.MeshStandardMaterial({ color: EDGE_COLOR, roughness: 0.85 });
     const top = new THREE.MeshStandardMaterial({ map: texture, roughness: 0.7 });
+
+    // Inject a saturation boost into the TOP face shader only — after map_fragment
+    // samples the texture into diffuseColor, we pull toward/away from luminance-grey
+    // using a luminance-mix (ITU-R BT.709 coefficients).  Guard with userData so
+    // the patch is applied at most once even if the material is re-compiled.
+    top.onBeforeCompile = (shader) => {
+      if (top.userData._satPatchApplied) return;
+      top.userData._satPatchApplied = true;
+
+      // Inject the tunable constant just after #include <common>.
+      shader.fragmentShader = shader.fragmentShader.replace(
+        '#include <common>',
+        `#include <common>\nconst float BOARD_SATURATION = ${BOARD_SATURATION.toFixed(4)};`,
+      );
+
+      // After map_fragment has written diffuseColor, apply luminance-mix saturation.
+      shader.fragmentShader = shader.fragmentShader.replace(
+        '#include <map_fragment>',
+        `#include <map_fragment>
+float _l = dot(diffuseColor.rgb, vec3(0.2126, 0.7152, 0.0722));
+diffuseColor.rgb = clamp(mix(vec3(_l), diffuseColor.rgb, BOARD_SATURATION), 0.0, 1.0);`,
+      );
+    };
+
     return [edge, edge, top, edge, edge, edge];
   }, [texture]);
 
