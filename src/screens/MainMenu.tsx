@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { socketManager } from '../network/SocketManager';
 import { gameBus } from '../state/gameBus';
 import { useGameStore, getStoredReconnectToken } from '../state/gameStore';
@@ -9,15 +10,22 @@ import type { S_RoomCreated, S_RoomJoined, S_RoomRejected } from '../types/Socke
 import { FONT_FAMILY } from '../constants/fonts';
 import { useIsMobile } from '../ui/useIsMobile';
 import { GameButton } from '../ui/GameButton';
+import { resolveCharacter } from '../constants/characters';
 
 const TOKENS = Object.keys(TOKEN_HEX) as TokenType[];
 
 export function MainMenu() {
   const [name, setName] = useState('');
-  const [token, setToken] = useState<TokenType>('red');
   const [code, setCode] = useState('');
   const [error, setError] = useState<string | null>(null);
   const isMobile = useIsMobile();
+  const navigate = useNavigate();
+  const selectedCharacter = useGameStore((s) => s.selectedCharacter);
+  // Board-identity color persists in the store so the CharacterSelect "locker"
+  // (Equip) and this menu stay in sync. The swatch row still lets you tweak it.
+  const token = useGameStore((s) => s.selectedToken);
+  const setToken = useGameStore((s) => s.setSelectedToken);
+  const charDef = resolveCharacter(selectedCharacter);
 
   useEffect(() => {
     const applyJoined = (state: S_RoomJoined['state']) => {
@@ -59,7 +67,7 @@ export function MainMenu() {
   const create = () => {
     if (!canCreate) return;
     setError(null);
-    socketManager.emit(EVENTS.ROOM_CREATE, { playerName: trimmedName, token });
+    socketManager.emit(EVENTS.ROOM_CREATE, { playerName: trimmedName, token, character: selectedCharacter });
   };
   const join = () => {
     if (!canJoin) return;
@@ -68,6 +76,7 @@ export function MainMenu() {
       roomCode: normalizedCode,
       playerName: trimmedName,
       token,
+      character: selectedCharacter,
       reconnectToken: getStoredReconnectToken() ?? undefined,
     });
   };
@@ -95,6 +104,16 @@ export function MainMenu() {
           />
         ))}
       </div>
+      <button
+        className="mm-char-btn"
+        onClick={() => navigate('/character-select')}
+        style={charBtn(m)}
+        aria-label="Choose character"
+      >
+        <span style={charBtnIcon}>&#128100;</span>
+        <span style={charBtnLabel}>{charDef.name}</span>
+        <span style={charBtnArrow}>›</span>
+      </button>
       <GameButton variant="primary" fullWidth onClick={create} disabled={!canCreate}>
         Create Room
       </GameButton>
@@ -272,3 +291,43 @@ const errorText = (m: boolean): React.CSSProperties => ({
   textAlign: 'center',
   width: '100%',
 });
+
+// ── Character chooser affordance ──
+const charBtn = (m: boolean): React.CSSProperties => ({
+  display: 'flex',
+  alignItems: 'center',
+  gap: 8,
+  width: '100%',
+  padding: m ? '11px 14px' : '9px 14px',
+  borderRadius: 14,
+  border: `2px solid ${GOLD}`,
+  background: 'rgba(255,255,255,0.85)',
+  cursor: 'pointer',
+  fontFamily: FONT,
+  fontWeight: 600,
+  fontSize: m ? 15 : 14,
+  color: '#3b3224',
+  textAlign: 'left',
+  boxSizing: 'border-box',
+  touchAction: 'manipulation',
+});
+
+const charBtnIcon: React.CSSProperties = {
+  fontSize: 18,
+  lineHeight: 1,
+  flexShrink: 0,
+};
+
+const charBtnLabel: React.CSSProperties = {
+  flex: 1,
+  overflow: 'hidden',
+  textOverflow: 'ellipsis',
+  whiteSpace: 'nowrap',
+};
+
+const charBtnArrow: React.CSSProperties = {
+  fontSize: 20,
+  lineHeight: 1,
+  color: GOLD,
+  flexShrink: 0,
+};

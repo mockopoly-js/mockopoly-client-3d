@@ -1,9 +1,24 @@
 import { create } from 'zustand';
-import type { GameState, Player } from '../types/GameState';
+import type { GameState, Player, TokenType } from '../types/GameState';
 import type { ToastMessage, ToastType } from '../types/ui';
 import type { S_GameOver } from '../types/SocketEvents';
+import { DEFAULT_CHARACTER } from '../constants/characters';
 
 const RECONNECT_KEY = 'mockopoly_reconnect';
+const CHARACTER_KEY = 'mockopoly_character';
+const TOKEN_KEY = 'mockopoly_token';
+
+const DEFAULT_TOKEN: TokenType = 'red';
+const VALID_TOKENS: readonly TokenType[] = [
+  'red',
+  'blue',
+  'green',
+  'yellow',
+  'purple',
+  'orange',
+  'cyan',
+  'pink',
+];
 
 export type Screen = 'menu' | 'lobby' | 'game' | 'game-over';
 
@@ -25,6 +40,13 @@ interface GameStore {
   screen: Screen;
   gameOver: S_GameOver | null;
 
+  // ── character + token color selection (persisted) ──
+  selectedCharacter: string;
+  setSelectedCharacter: (id: string) => void;
+  /** Player board-identity color (the base puck under the token). */
+  selectedToken: TokenType;
+  setSelectedToken: (token: TokenType) => void;
+
   // ── actions ──
   update: (state: GameState) => void;
   setMyPlayerId: (id: string) => void;
@@ -43,6 +65,19 @@ interface GameStore {
   reset: () => void;
 }
 
+function getStoredCharacter(): string {
+  try { return localStorage.getItem(CHARACTER_KEY) || DEFAULT_CHARACTER; } catch { return DEFAULT_CHARACTER; }
+}
+
+function getStoredToken(): TokenType {
+  try {
+    const t = localStorage.getItem(TOKEN_KEY) as TokenType | null;
+    return t && VALID_TOKENS.includes(t) ? t : DEFAULT_TOKEN;
+  } catch {
+    return DEFAULT_TOKEN;
+  }
+}
+
 export const useGameStore = create<GameStore>((set, get) => ({
   state: null,
   myPlayerId: null,
@@ -57,6 +92,17 @@ export const useGameStore = create<GameStore>((set, get) => ({
   showDevHacks: false,
   screen: 'menu',
   gameOver: null,
+  selectedCharacter: getStoredCharacter(),
+  selectedToken: getStoredToken(),
+
+  setSelectedCharacter: (id) => {
+    set({ selectedCharacter: id });
+    try { localStorage.setItem(CHARACTER_KEY, id); } catch { /* ignore */ }
+  },
+  setSelectedToken: (token) => {
+    set({ selectedToken: token });
+    try { localStorage.setItem(TOKEN_KEY, token); } catch { /* ignore */ }
+  },
 
   update: (state) => set({ state }),
   setMyPlayerId: (id) => set({ myPlayerId: id }),

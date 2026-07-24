@@ -1,4 +1,5 @@
 import { lazy, Suspense, useEffect, useState } from 'react';
+import { useLocation } from 'react-router-dom';
 import { socketManager } from './network/SocketManager';
 import { gameStateSync } from './network/GameStateSync';
 import { useGameStore } from './state/gameStore';
@@ -37,12 +38,22 @@ const GameScene = lazy(() =>
   import('./screens/GameScene').then((m) => ({ default: m.GameScene })),
 );
 
+// Lazy-load CharacterSelect — it pulls in CharacterPreviewCanvas which imports
+// three/CharacterToken. Keeping it lazy ensures three stays out of the entry chunk.
+const CharacterSelect = lazy(() =>
+  import('./screens/CharacterSelect').then((m) => ({ default: m.CharacterSelect })),
+);
+
 export default function App() {
   const screen = useGameStore((s) => s.screen);
   const toggleDevHacks = useGameStore((s) => s.toggleDevHacks);
   const toggleDealPanel = useGameStore((s) => s.toggleDealPanel);
+  const location = useLocation();
 
   // Keep the URL and the game-flow screen in sync (Back/Forward + deep links).
+  // The character-select path (/character-select) is outside the game flow;
+  // useScreenRouting will treat it as an unknown path and collapse to 'menu',
+  // which is fine — we intercept it before any screen rendering below.
   useScreenRouting();
 
   // Wire gameBus events → synthesized SFX.
@@ -109,6 +120,9 @@ export default function App() {
     if (mustPay) toggleDealPanel(true);
   }, [mustPay, toggleDealPanel]);
 
+  // Character select is a URL-only overlay outside the game flow state machine.
+  const isCharacterSelect = location.pathname === '/character-select';
+
   return (
     <>
       <ConnectionStatus connected={connected} playerId={playerId} />
@@ -116,6 +130,12 @@ export default function App() {
       <MuteButton />
       <RotateHint />
       <DevHacksPanel />
+      {isCharacterSelect ? (
+        <Suspense fallback={<LoadingScreen />}>
+          <CharacterSelect />
+        </Suspense>
+      ) : (
+        <>
       {screen === 'menu' && <MainMenu />}
       {screen === 'lobby' && <Lobby />}
       {screen === 'game' && (
@@ -138,6 +158,8 @@ export default function App() {
         </>
       )}
       {screen === 'game-over' && <GameOverScreen />}
+        </>
+      )}
     </>
   );
 }
