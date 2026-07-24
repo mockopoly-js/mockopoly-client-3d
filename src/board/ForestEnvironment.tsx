@@ -81,9 +81,37 @@ const FOREST_FADE_NEAR = 0.5; // world units: fully faded (dissolved) at/below t
 const FOREST_FADE_FAR = 4.5;  // world units: fully solid (unchanged) at/beyond this camera distance
 
 /**
- * Injects the near-camera dither-fade into a MeshStandardMaterial's fragment
- * shader. Idempotent per material (guarded by a flag) so shared/instanced
- * materials are patched exactly once.
+ * ── BOARD-FOOTPRINT CLIP (poke-through removal) ───────────────────────────────
+ * The forest terrain is one continuous low-poly mesh; a hump/mound of it can rise
+ * ABOVE the board's top surface INSIDE the board footprint, clipping up through
+ * the board (a green mountain poking through). We discard any forest fragment
+ * whose WORLD position falls inside the board's axis-aligned XZ footprint AND
+ * above the board top surface. Forest OUTSIDE the footprint (the surrounding
+ * treeline/hills) and forest BELOW the board top (hidden ground under the slab)
+ * are untouched.
+ *
+ * The board slab is 10×10 centered at origin (its rotated content still has the
+ * same axis-aligned world footprint), so the footprint is x∈[-HALF,HALF],
+ * z∈[-HALF,HALF]. Because the city fills the inner square, clipping the whole
+ * 10×10 footprint above the surface is safe — no legit forest belongs there.
+ *
+ * Needs the fragment's WORLD position, computed INSTANCING-AWARE in the vertex
+ * shader (the trees are GPU-instanced, so we must fold in instanceMatrix before
+ * modelMatrix — mirroring three's own worldpos_vertex logic) and passed through
+ * as the `vWorldPos` varying.
+ *
+ * Tunable:
+ *   BOARD_CLIP_HALF   — half-width of the clip box (board is 10 wide → 5.0).
+ *   BOARD_CLIP_TOP_Y  — clip fragments above this world Y. Board top is 0.02;
+ *                       0.03 sits just above it to avoid z-fighting at the seam.
+ */
+const BOARD_CLIP_HALF = 5.0;    // board half-width; clip box is [-HALF,HALF]² in world XZ
+const BOARD_CLIP_TOP_Y = 0.03;  // clip forest above this world Y inside the box (board top ≈ 0.02)
+
+/**
+ * Injects BOTH the near-camera dither-fade AND the board-footprint poke-through
+ * clip into a MeshStandardMaterial's shaders. Idempotent per material (guarded
+ * by a flag) so shared/instanced materials are patched exactly once.
  */
 function applyForestFade(material: THREE.Material): void {
   const mat = material as THREE.Material & { userData: { forestFadeApplied?: boolean } };
@@ -94,13 +122,40 @@ function applyForestFade(material: THREE.Material): void {
   mat.onBeforeCompile = (shader, renderer) => {
     prevOnBeforeCompile?.(shader, renderer);
 
+    // ── VERTEX: compute the fragment's WORLD position, INSTANCING-AWARE ────────
+    // Declare the varying on the always-present <common> include.
+    shader.vertexShader = shader.vertexShader.replace(
+      '#include <common>',
+      /* glsl */ `#include <common>
+        varying vec3 vWorldPos;
+      `,
+    );
+    // After <project_vertex>, `transformed` holds the object-space position with
+    // all displacements applied. Fold in instanceMatrix (GPU-instanced trees)
+    // THEN modelMatrix — mirroring three's worldpos_vertex — so vWorldPos is the
+    // correct world position for BOTH instanced and non-instanced meshes.
+    shader.vertexShader = shader.vertexShader.replace(
+      '#include <project_vertex>',
+      /* glsl */ `#include <project_vertex>
+        vec4 forestWorldPos = vec4(transformed, 1.0);
+        #ifdef USE_INSTANCING
+          forestWorldPos = instanceMatrix * forestWorldPos;
+        #endif
+        forestWorldPos = modelMatrix * forestWorldPos;
+        vWorldPos = forestWorldPos.xyz;
+      `,
+    );
+
     // Fragment header: constants + ordered 4×4 Bayer dither helper. Injected by
     // extending the always-present <common> include (stable across three builds).
     shader.fragmentShader = shader.fragmentShader.replace(
       '#include <common>',
       /* glsl */ `#include <common>
+        varying vec3 vWorldPos;
         const float FOREST_FADE_NEAR = ${FOREST_FADE_NEAR.toFixed(4)};
         const float FOREST_FADE_FAR  = ${FOREST_FADE_FAR.toFixed(4)};
+        const float BOARD_CLIP_HALF  = ${BOARD_CLIP_HALF.toFixed(4)};
+        const float BOARD_CLIP_TOP_Y = ${BOARD_CLIP_TOP_Y.toFixed(4)};
         // Ordered 4×4 Bayer matrix → screen-space dither threshold in [0,1).
         float forestBayer(vec2 fragCoord) {
           int x = int(mod(fragCoord.x, 4.0));
@@ -123,6 +178,15 @@ function applyForestFade(material: THREE.Material): void {
       '#include <dithering_fragment>',
       /* glsl */ `
         {
+          // Board-footprint poke-through clip FIRST: drop any forest fragment
+          // inside the board's XZ footprint that rises above the board top.
+          if (
+            vWorldPos.x > -BOARD_CLIP_HALF && vWorldPos.x < BOARD_CLIP_HALF &&
+            vWorldPos.z > -BOARD_CLIP_HALF && vWorldPos.z < BOARD_CLIP_HALF &&
+            vWorldPos.y > BOARD_CLIP_TOP_Y
+          ) discard;
+
+          // Near-camera dither-fade: closer fragments are more likely to discard.
           float forestCamDist = length(vViewPosition);
           float forestFade = smoothstep(FOREST_FADE_NEAR, FOREST_FADE_FAR, forestCamDist);
           if (forestFade < forestBayer(gl_FragCoord.xy)) discard;
