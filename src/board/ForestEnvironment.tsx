@@ -51,6 +51,91 @@ const FOREST_ROT = 0;       // radians; orient the landscape
 const FOREST_PAN_X = 0;     // world units; slide terrain E/W under the board
 const FOREST_PAN_Z = 0;     // world units; slide terrain N/S under the board
 
+/**
+ * ── NEAR-CAMERA FADE (per-fragment dither) ───────────────────────────────────
+ * Trees that come CLOSE to the camera would block the view of the board, so the
+ * forest material FADES OUT geometry near the camera and fills it back in as the
+ * camera pulls away. This is done PER-FRAGMENT in the material's fragment shader
+ * (via onBeforeCompile) rather than per-mesh, because the forest is GPU-instanced
+ * (EXT_mesh_gpu_instancing) — hiding a mesh would hide a whole tree TYPE across
+ * the scene, not just the trees physically near the camera.
+ *
+ * Distance source: `vViewPosition` — the built-in MeshStandardMaterial varying
+ * (= vector from the fragment to the camera in view space, correctly transformed
+ * through instanceMatrix). `length(vViewPosition)` = camera-to-fragment distance
+ * in WORLD units (view space is unscaled). Works for instanced + non-instanced.
+ *
+ * The fade is a DITHER discard (ordered 4×4 Bayer threshold on gl_FragCoord):
+ * surviving fragments stay fully OPAQUE and write depth — so NO transparency,
+ * sorting, or blending is needed, and far trees are pixel-for-pixel unchanged.
+ *
+ *   fade = smoothstep(NEAR, FAR, dist)  → 0 up close (dissolved), 1 far (solid)
+ *   if (fade < bayerThreshold) discard;  → closer ⇒ more fragments discarded
+ *
+ * Tunable (world units): trees within FOREST_FADE_FAR of the camera begin to
+ * dither out; below FOREST_FADE_NEAR they are fully gone. Camera sits ~10 units
+ * out at initial framing and can zoom closer, so ~0.5–4.5 dissolves only trees
+ * the user has moved right up against.
+ */
+const FOREST_FADE_NEAR = 0.5; // world units: fully faded (dissolved) at/below this camera distance
+const FOREST_FADE_FAR = 4.5;  // world units: fully solid (unchanged) at/beyond this camera distance
+
+/**
+ * Injects the near-camera dither-fade into a MeshStandardMaterial's fragment
+ * shader. Idempotent per material (guarded by a flag) so shared/instanced
+ * materials are patched exactly once.
+ */
+function applyForestFade(material: THREE.Material): void {
+  const mat = material as THREE.Material & { userData: { forestFadeApplied?: boolean } };
+  if (mat.userData.forestFadeApplied) return;
+  mat.userData.forestFadeApplied = true;
+
+  const prevOnBeforeCompile = mat.onBeforeCompile?.bind(mat);
+  mat.onBeforeCompile = (shader, renderer) => {
+    prevOnBeforeCompile?.(shader, renderer);
+
+    // Fragment header: constants + ordered 4×4 Bayer dither helper. Injected by
+    // extending the always-present <common> include (stable across three builds).
+    shader.fragmentShader = shader.fragmentShader.replace(
+      '#include <common>',
+      /* glsl */ `#include <common>
+        const float FOREST_FADE_NEAR = ${FOREST_FADE_NEAR.toFixed(4)};
+        const float FOREST_FADE_FAR  = ${FOREST_FADE_FAR.toFixed(4)};
+        // Ordered 4×4 Bayer matrix → screen-space dither threshold in [0,1).
+        float forestBayer(vec2 fragCoord) {
+          int x = int(mod(fragCoord.x, 4.0));
+          int y = int(mod(fragCoord.y, 4.0));
+          int i = y * 4 + x;
+          float m =
+            i == 0  ?  0.0 : i == 1  ?  8.0 : i == 2  ?  2.0 : i == 3  ? 10.0 :
+            i == 4  ? 12.0 : i == 5  ?  4.0 : i == 6  ? 14.0 : i == 7  ?  6.0 :
+            i == 8  ?  3.0 : i == 9  ? 11.0 : i == 10 ?  1.0 : i == 11 ?  9.0 :
+            i == 12 ? 15.0 : i == 13 ?  7.0 : i == 14 ? 13.0 :               5.0;
+          return (m + 0.5) / 16.0;
+        }
+      `,
+    );
+
+    // Discard near-camera fragments BEFORE dithering_fragment (always present in
+    // the MeshStandardMaterial fragment shader). vViewPosition = fragment→camera
+    // vector in view space; its length is the camera distance in world units.
+    shader.fragmentShader = shader.fragmentShader.replace(
+      '#include <dithering_fragment>',
+      /* glsl */ `
+        {
+          float forestCamDist = length(vViewPosition);
+          float forestFade = smoothstep(FOREST_FADE_NEAR, FOREST_FADE_FAR, forestCamDist);
+          if (forestFade < forestBayer(gl_FragCoord.xy)) discard;
+        }
+        #include <dithering_fragment>
+      `,
+    );
+  };
+
+  // Changing onBeforeCompile requires a program recompile.
+  mat.needsUpdate = true;
+}
+
 const FOREST_URL = '/models/forest.glb';
 
 export function ForestEnvironment(): React.JSX.Element {
@@ -63,6 +148,12 @@ export function ForestEnvironment(): React.JSX.Element {
       if (m.isMesh) {
         m.receiveShadow = true; // ground/foliage takes the board's shadow
         m.frustumCulled = false;
+        // Per-fragment near-camera dither-fade so trees close to the camera
+        // dissolve out of the way of the board (see applyForestFade). The forest
+        // likely shares one material across all meshes, but handle arrays too;
+        // applyForestFade is idempotent so a shared material is patched once.
+        const mats = Array.isArray(m.material) ? m.material : [m.material];
+        for (const mat of mats) if (mat) applyForestFade(mat);
       }
     });
     scene.updateMatrixWorld(true);
