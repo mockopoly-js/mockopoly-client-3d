@@ -57,7 +57,7 @@ const INNER_SQUARE = BOARD_WORLD_SIZE * 0.6; // 10 * 0.6 = 6 → empty center �
 // to X to avoid vertical distortion. City footprint (model ~300×260) is recentered
 // at origin, then each axis is scaled independently to fill the inner square equally.
 // PANs stay 0 so the bbox stays perfectly centered (|centerX|,|centerZ| < 0.1).
-const CITY_FILL_HALF = 3.45;  // target half-extent on X and Z axes (safely inside ±3.66 tile edge)
+const CITY_FILL_HALF = 3.55;  // target half-extent on X and Z axes (safely inside ±3.66 tile edge)
 const CITY_PAN_X = 0;         // world-X fine-tune (post-scale); 0 = bbox-centered on origin
 const CITY_PAN_Z = 0;         // world-Z fine-tune (post-scale); 0 = bbox-centered on origin
 const CITY_Y = 0.02;          // rest the city ground on the board top (TOP_Y)

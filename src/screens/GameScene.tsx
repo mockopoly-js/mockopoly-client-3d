@@ -36,7 +36,7 @@ export function GameScene() {
   return (
     <Canvas
       style={{ position: 'fixed', inset: 0 }}
-      camera={{ position: [0, 9, 11], fov: 50 }}
+      camera={{ position: [0, 8.5, 12], fov: 50 }}
       shadows
       dpr={[1, 2]}
       performance={{ min: 0.5 }}
