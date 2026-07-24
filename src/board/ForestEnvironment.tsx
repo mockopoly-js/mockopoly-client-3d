@@ -105,8 +105,8 @@ const FOREST_FADE_FAR = 4.5;  // world units: fully solid (unchanged) at/beyond 
  *   BOARD_CLIP_TOP_Y  — clip fragments above this world Y. Board top is 0.02;
  *                       0.03 sits just above it to avoid z-fighting at the seam.
  */
-const BOARD_CLIP_HALF = 5.0;    // board half-width; clip box is [-HALF,HALF]² in world XZ
-const BOARD_CLIP_TOP_Y = 0.03;  // clip forest above this world Y inside the box (board top ≈ 0.02)
+const BOARD_CLIP_HALF = 5.2;    // board half-width; clip box is [-HALF,HALF]² in world XZ
+const BOARD_CLIP_TOP_Y = 0.02;  // clip forest above this world Y inside the box (board top ≈ 0.02)
 
 /**
  * Injects BOTH the near-camera dither-fade AND the board-footprint poke-through
@@ -154,8 +154,8 @@ function applyForestFade(material: THREE.Material): void {
         varying vec3 vWorldPos;
         const float FOREST_FADE_NEAR = ${FOREST_FADE_NEAR.toFixed(4)};
         const float FOREST_FADE_FAR  = ${FOREST_FADE_FAR.toFixed(4)};
-        const float BOARD_CLIP_HALF  = ${BOARD_CLIP_HALF.toFixed(4)};
-        const float BOARD_CLIP_TOP_Y = ${BOARD_CLIP_TOP_Y.toFixed(4)};
+        const float BOARD_CLIP_HALF  = ${BOARD_CLIP_HALF.toFixed(2)};
+        const float BOARD_CLIP_TOP_Y = ${BOARD_CLIP_TOP_Y.toFixed(2)};
         // Ordered 4×4 Bayer matrix → screen-space dither threshold in [0,1).
         float forestBayer(vec2 fragCoord) {
           int x = int(mod(fragCoord.x, 4.0));
