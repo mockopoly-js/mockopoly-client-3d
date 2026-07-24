@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, act } from '@testing-library/react';
 import { forwardRef, useImperativeHandle } from 'react';
 import * as THREE from 'three';
-import { CameraRig } from './CameraRig';
+import { CameraRig, INITIAL_CAM_OFFSET, INITIAL_CAM_TARGET } from './CameraRig';
 import { useGameStore } from '../state/gameStore';
 import { tileToWorldRotated, BOARD_ROTATION } from './positions';
 import type { GameState } from '../types/GameState';
@@ -176,27 +176,25 @@ describe('CameraRig', () => {
     expect(lastControls!.update).not.toHaveBeenCalled();
   });
 
-  it('snaps the OrbitControls target to the rotation-corrected active player tile on initial mount', () => {
+  it('snaps the OrbitControls target to INITIAL_CAM_TARGET (board center) on initial mount', () => {
     // Player on GO (tile 0) — the initial game state.
     useGameStore.getState().update(fakeState(0));
     render(<CameraRig />);
 
     // The initial-snap effect runs synchronously in the test environment.
-    // Target should now equal tileToWorldRotated(0) (not board-center 0,0,0 unless
-    // the rotated position also happens to be zero — verify with the actual value).
-    const rotated = tileToWorldRotated(0);
-    expect(lastControls!.target.x).toBeCloseTo(rotated.x, 4);
-    expect(lastControls!.target.y).toBeCloseTo(0, 4);
-    expect(lastControls!.target.z).toBeCloseTo(rotated.z, 4);
+    // Target should equal INITIAL_CAM_TARGET (board center [0,0,0]) so the whole
+    // board is framed — GO appears front-bottom-right from the isometric offset.
+    expect(lastControls!.target.x).toBeCloseTo(INITIAL_CAM_TARGET[0], 4);
+    expect(lastControls!.target.y).toBeCloseTo(INITIAL_CAM_TARGET[1], 4);
+    expect(lastControls!.target.z).toBeCloseTo(INITIAL_CAM_TARGET[2], 4);
   });
 
-  it('snaps the camera position to target + [0, 8.5, 12] offset on initial mount', () => {
+  it('snaps the camera position to INITIAL_CAM_TARGET + INITIAL_CAM_OFFSET on initial mount', () => {
     useGameStore.getState().update(fakeState(0));
     render(<CameraRig />);
 
-    const rotated = tileToWorldRotated(0);
-    expect(fakeCamera.position.x).toBeCloseTo(rotated.x, 4);
-    expect(fakeCamera.position.y).toBeCloseTo(rotated.y + 8.5, 4);
-    expect(fakeCamera.position.z).toBeCloseTo(rotated.z + 12, 4);
+    expect(fakeCamera.position.x).toBeCloseTo(INITIAL_CAM_TARGET[0] + INITIAL_CAM_OFFSET[0], 4);
+    expect(fakeCamera.position.y).toBeCloseTo(INITIAL_CAM_TARGET[1] + INITIAL_CAM_OFFSET[1], 4);
+    expect(fakeCamera.position.z).toBeCloseTo(INITIAL_CAM_TARGET[2] + INITIAL_CAM_OFFSET[2], 4);
   });
 });

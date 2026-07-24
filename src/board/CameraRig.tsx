@@ -9,6 +9,23 @@ import { tileToWorldRotated, BOARD_ROTATION as _BOARD_ROTATION } from './positio
 // Re-export so callers can assert the shared constant is wired in.
 export { BOARD_ROTATION } from './positions';
 
+// ── Tunable initial-framing constants ─────────────────────────────────────────
+// Camera is positioned at boardCenter + INITIAL_CAM_OFFSET and aims at the
+// board center. This puts the GO corner (world +X, -Z after BOARD_ROTATION)
+// at the front-bottom-RIGHT of screen while the whole board fills the frame.
+//
+// INITIAL_CAM_OFFSET — world-space offset from board origin (0,0,0):
+//   X: right (positive = camera moves screen-right → GO shifts right in frame)
+//   Y: height (larger = steeper downward tilt)
+//   Z: toward-camera (+Z is screen-bottom; larger = more "in front" of board)
+// A value of [8, 12, 8] gives ~47° elevation, azimuth 45° into the GO corner.
+//
+// INITIAL_CAM_TARGET — orbit target on first mount. [0,0,0] = board center so
+// the whole board fills the frame. Auto-focus lerps this toward the active
+// player each frame until the user manually interacts.
+export const INITIAL_CAM_OFFSET: [number, number, number] = [8, 12, 8];
+export const INITIAL_CAM_TARGET: [number, number, number] = [0, 0, 0];
+
 /**
  * CameraRig: free Blender-style viewport navigation + gentle first-turn auto-focus.
  *
@@ -72,11 +89,11 @@ export function CameraRig() {
     focusGoal.current.set(rotated.x, 0, rotated.z);
   }, [activePlayer?.id, activePlayer?.position]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Initial snap: as soon as both the controls instance and a valid active player
-  // are available, snap the OrbitControls target directly to the player's tile
-  // (typically GO at game start). The camera position is offset by the same
-  // [0, 8.5, 12] vector that the Canvas camera prop uses, keeping the familiar
-  // overhead framing but now centred on the player rather than the board origin.
+  // Initial snap: on first mount, snap the OrbitControls target to the board
+  // center (INITIAL_CAM_TARGET) and position the camera at board-center +
+  // INITIAL_CAM_OFFSET. Targeting the board center frames the whole board in
+  // view — GO corner appears front-bottom-right, Free Parking recedes top-left.
+  // Auto-focus then gently pulls the target toward the active player each frame.
   // This is driven by useEffect (not useFrame) so it fires on mount / first render.
   useEffect(() => {
     if (initialSnapDone.current) return;
@@ -84,17 +101,21 @@ export function CameraRig() {
     const controls = controlsRef.current;
     if (!controls) return;
 
-    const rotated = tileToWorldRotated(activePlayer.position);
-    const target = new THREE.Vector3(rotated.x, 0, rotated.z);
-
-    // Snap the orbit target.
+    // Orbit target: board center gives the best whole-board framing.
+    const target = new THREE.Vector3(...INITIAL_CAM_TARGET);
     controls.target.copy(target);
-    // Place the camera at target + the default offset [0, 8.5, 12].
-    camera.position.set(target.x, target.y + 8.5, target.z + 12);
+
+    // Camera: board center + isometric offset (GO ends up front-bottom-right).
+    camera.position.set(
+      target.x + INITIAL_CAM_OFFSET[0],
+      target.y + INITIAL_CAM_OFFSET[1],
+      target.z + INITIAL_CAM_OFFSET[2],
+    );
     controls.update();
 
-    // Also prime focusGoal so the lerp loop stays in sync.
-    focusGoal.current.copy(target);
+    // Prime focusGoal at the player's tile so auto-focus lerps from the correct goal.
+    const rotated = tileToWorldRotated(activePlayer.position);
+    focusGoal.current.set(rotated.x, 0, rotated.z);
 
     initialSnapDone.current = true;
   });
