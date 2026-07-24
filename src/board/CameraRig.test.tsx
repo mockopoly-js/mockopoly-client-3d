@@ -4,13 +4,12 @@ import { forwardRef, useImperativeHandle } from 'react';
 import * as THREE from 'three';
 import { CameraRig, INITIAL_CAM_OFFSET, INITIAL_CAM_TARGET } from './CameraRig';
 import { useGameStore } from '../state/gameStore';
-import { tileToWorldRotated, BOARD_ROTATION } from './positions';
 import type { GameState } from '../types/GameState';
 
 // ── R3F / drei stubs ─────────────────────────────────────────────────────────
 // We render CameraRig outside a real <Canvas>, so useFrame must be captured (we
-// drive it manually to exercise the auto-focus loop) and OrbitControls must be a
-// forwardRef fake that (a) records the props CameraRig passes and (b) exposes a
+// drive it manually to exercise the debug readout loop) and OrbitControls must be
+// a forwardRef fake that (a) records the props CameraRig passes and (b) exposes a
 // controllable fake controls instance through the forwarded ref — exactly how the
 // real drei <OrbitControls> hands back its imperative controls object (NOT a DOM
 // node). CameraRig passes a callback ref, so useImperativeHandle drives it.
@@ -128,62 +127,12 @@ describe('CameraRig', () => {
     expect(lastControls!.mouseButtons.LEFT).toBe(THREE.MOUSE.ROTATE);
   });
 
-  it('auto-focuses the target toward the active player before manual control — target uses BOARD_ROTATION', () => {
-    // Start player on tile 5 so the initial snap lands at tileToWorldRotated(5).
-    useGameStore.getState().update(fakeState(5));
-    render(<CameraRig />);
-    expect(frameCallback).toBeTruthy();
-
-    // After initial snap the target is already at tile 5's rotated position.
-    // Now move the player to a different tile (tile 10) — this triggers the
-    // useEffect that updates focusGoal, so the next frame lerps from tile-5 toward tile-10.
-    act(() => {
-      useGameStore.getState().update(fakeState(10));
-    });
-
-    const before = lastControls!.target.clone();
-    lastControls!.update.mockClear();
-    act(() => { frameCallback!(); });
-
-    // Target eased toward tile 10 → moved from tile-5 position, and update() was called.
-    expect(lastControls!.target.distanceTo(before)).toBeGreaterThan(0);
-    expect(lastControls!.update).toHaveBeenCalled();
-
-    // Confirm BOARD_ROTATION is non-zero so the rotation assertion is meaningful.
-    expect(BOARD_ROTATION).not.toBe(0);
-
-    // The lerp goal (focusGoal) must equal tileToWorldRotated(10), not raw tileToWorld(10).
-    // After one lerp step the target must have moved in the direction of the rotated goal.
-    const rotated10 = tileToWorldRotated(10);
-    const goal = new THREE.Vector3(rotated10.x, 0, rotated10.z);
-    // The moved target should be closer to the goal than the starting position was.
-    expect(lastControls!.target.distanceTo(goal)).toBeLessThan(before.distanceTo(goal));
-  });
-
-  it('disables auto-focus permanently after the first manual interaction (onStart)', () => {
-    useGameStore.getState().update(fakeState(5));
-    render(<CameraRig />);
-    // Simulate the user grabbing the camera: OrbitControls fires onStart.
-    act(() => { (lastProps!.onStart as () => void)(); });
-    // Even after onEnd, auto-focus must stay off for the session.
-    act(() => { (lastProps!.onEnd as () => void)(); });
-
-    lastControls!.update.mockClear();
-    const before = lastControls!.target.clone();
-    act(() => { frameCallback!(); });
-    // Target unchanged and update() not called — the free camera is not yanked back.
-    expect(lastControls!.target.distanceTo(before)).toBe(0);
-    expect(lastControls!.update).not.toHaveBeenCalled();
-  });
-
-  it('snaps the OrbitControls target to INITIAL_CAM_TARGET (board center) on initial mount', () => {
-    // Player on GO (tile 0) — the initial game state.
+  it('snaps the OrbitControls target to INITIAL_CAM_TARGET (fixed world point) on initial mount', () => {
+    // Player on GO (tile 0) — the initial game state. Store hydration is the guard.
     useGameStore.getState().update(fakeState(0));
     render(<CameraRig />);
 
-    // The initial-snap effect runs synchronously in the test environment.
-    // Target should equal INITIAL_CAM_TARGET (board center [0,0,0]) so the whole
-    // board is framed — GO appears front-bottom-right from the isometric offset.
+    // Target must equal INITIAL_CAM_TARGET exactly — NOT a player tile position.
     expect(lastControls!.target.x).toBeCloseTo(INITIAL_CAM_TARGET[0], 4);
     expect(lastControls!.target.y).toBeCloseTo(INITIAL_CAM_TARGET[1], 4);
     expect(lastControls!.target.z).toBeCloseTo(INITIAL_CAM_TARGET[2], 4);
@@ -193,8 +142,27 @@ describe('CameraRig', () => {
     useGameStore.getState().update(fakeState(0));
     render(<CameraRig />);
 
+    // camera.position = [-3.77 + -7.27, 0.61 + 7.04, 0.67 + 0.24] = [-11.04, 7.64, 0.91]
     expect(fakeCamera.position.x).toBeCloseTo(INITIAL_CAM_TARGET[0] + INITIAL_CAM_OFFSET[0], 4);
     expect(fakeCamera.position.y).toBeCloseTo(INITIAL_CAM_TARGET[1] + INITIAL_CAM_OFFSET[1], 4);
     expect(fakeCamera.position.z).toBeCloseTo(INITIAL_CAM_TARGET[2] + INITIAL_CAM_OFFSET[2], 4);
+  });
+
+  it('does NOT drift the camera target after load — no auto-focus lerp runs', () => {
+    useGameStore.getState().update(fakeState(0));
+    render(<CameraRig />);
+    expect(frameCallback).toBeTruthy();
+
+    const targetBefore = lastControls!.target.clone();
+    lastControls!.update.mockClear();
+
+    // Change the active player's position — this must NOT move the camera target.
+    act(() => { useGameStore.getState().update(fakeState(10)); });
+    act(() => { frameCallback!(); });
+
+    // Target must remain exactly where it snapped — no drift allowed.
+    expect(lastControls!.target.distanceTo(targetBefore)).toBe(0);
+    // update() must NOT have been called from auto-focus logic in useFrame.
+    expect(lastControls!.update).not.toHaveBeenCalled();
   });
 });
