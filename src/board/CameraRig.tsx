@@ -24,7 +24,7 @@ export { BOARD_ROTATION } from './positions';
 // INITIAL_CAM_TARGET — orbit target on first mount. [0,0,0] = board center so
 // the whole board fills the frame. Auto-focus lerps this toward the active
 // player each frame until the user manually interacts.
-export const INITIAL_CAM_OFFSET: [number, number, number] = [-8, 12, -8];
+export const INITIAL_CAM_OFFSET: [number, number, number] = [-8, 12, 8];
 export const INITIAL_CAM_TARGET: [number, number, number] = [0, 0, 0];
 
 /**
