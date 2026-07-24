@@ -1,12 +1,15 @@
 /**
- * CharacterPreviewCanvas — the single R3F Canvas used on CharacterSelect.
+ * CharacterPreviewCanvas — the SINGLE live R3F Canvas on the CharacterSelect
+ * "locker". Everything else in the grid is a static thumbnail <img>, so this is
+ * the only WebGL context on the screen (one animated character = trivial perf).
  *
- * Isolated in its own module so the lazy() boundary in CharacterSelect.tsx
- * pulls three + CharacterToken into an async chunk, keeping them off the
- * menu-entry bundle. One animated character = trivial perf.
+ * Isolated in its own module so the lazy() boundary in CharacterSelect.tsx pulls
+ * three + drei + CharacterToken into an async chunk, keeping them OFF the
+ * menu-entry bundle.
  *
- * Auto-rotates slowly on Y. Soft ambient + directional key light.
- * A simple disc "podium" underneath the character.
+ * Big, prominent full-body preview: the selected skin (NATIVE colors), slowly
+ * auto-rotating on a soft podium, lit by a gentle key/fill/rim. The rarity
+ * accent tints the podium ring so the preview echoes the card frame.
  */
 
 import { useRef } from 'react';
@@ -16,45 +19,50 @@ import { CharacterToken } from '../board/CharacterToken';
 
 interface PreviewSceneProps {
   url: string;
-  tint: string;
+  /** Rarity accent (hex) used to tint the podium ring. */
+  accent?: string;
 }
 
-function RotatingGroup({ url, tint }: PreviewSceneProps) {
+function RotatingGroup({ url, accent = '#2a2a40' }: PreviewSceneProps) {
   const groupRef = useRef<THREE.Group>(null);
 
   useFrame((_, delta) => {
     if (groupRef.current) {
-      groupRef.current.rotation.y += delta * 0.6;
+      groupRef.current.rotation.y += delta * 0.5;
     }
   });
 
   return (
     <group ref={groupRef}>
-      {/* Character — 0.2 default scale, feet at y=0 */}
-      <CharacterToken url={url} tint={tint} scale={0.2} />
-      {/* Podium disc */}
-      <mesh receiveShadow position={[0, -0.005, 0]} rotation={[-Math.PI / 2, 0, 0]}>
-        <circleGeometry args={[0.55, 48]} />
-        <meshStandardMaterial color="#2a2a40" roughness={0.9} metalness={0.1} />
+      {/* Character — NATIVE colors (tint is a no-op), feet at y=0, Idle loop. */}
+      <CharacterToken url={url} clip="Idle" scale={0.2} />
+      {/* Podium disc, accent-tinted rim glow. */}
+      <mesh receiveShadow position={[0, -0.004, 0]} rotation={[-Math.PI / 2, 0, 0]}>
+        <circleGeometry args={[0.6, 64]} />
+        <meshStandardMaterial color="#181826" roughness={0.85} metalness={0.15} />
+      </mesh>
+      <mesh position={[0, 0.002, 0]} rotation={[-Math.PI / 2, 0, 0]}>
+        <ringGeometry args={[0.56, 0.6, 64]} />
+        <meshStandardMaterial color={accent} emissive={accent} emissiveIntensity={0.35} />
       </mesh>
     </group>
   );
 }
 
-export function CharacterPreviewCanvas({ url, tint }: PreviewSceneProps) {
+export function CharacterPreviewCanvas({ url, accent }: PreviewSceneProps) {
   return (
     <Canvas
       style={{ width: '100%', height: '100%' }}
-      camera={{ position: [0, 0.9, 1.5], fov: 42 }}
+      camera={{ position: [0, 0.95, 1.7], fov: 40 }}
       shadows={false}
-      dpr={[1, 1.5]}
+      dpr={[1, 2]}
       gl={{ powerPreference: 'default', antialias: true }}
     >
-      <color attach="background" args={['#1a1a2e']} />
-      <ambientLight intensity={0.7} />
-      <directionalLight position={[1.5, 3, 2]} intensity={1.2} />
-      <directionalLight position={[-1.5, 1.5, -1]} intensity={0.3} color="#8899ff" />
-      <RotatingGroup url={url} tint={tint} />
+      <color attach="background" args={['#0d0d18']} />
+      <ambientLight intensity={0.75} />
+      <directionalLight position={[1.5, 3, 2]} intensity={1.25} />
+      <directionalLight position={[-1.8, 1.5, -0.6]} intensity={0.35} color="#9aa6ff" />
+      <RotatingGroup url={url} accent={accent} />
     </Canvas>
   );
 }

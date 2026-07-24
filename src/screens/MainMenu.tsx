@@ -16,12 +16,15 @@ const TOKENS = Object.keys(TOKEN_HEX) as TokenType[];
 
 export function MainMenu() {
   const [name, setName] = useState('');
-  const [token, setToken] = useState<TokenType>('red');
   const [code, setCode] = useState('');
   const [error, setError] = useState<string | null>(null);
   const isMobile = useIsMobile();
   const navigate = useNavigate();
   const selectedCharacter = useGameStore((s) => s.selectedCharacter);
+  // Board-identity color persists in the store so the CharacterSelect "locker"
+  // (Equip) and this menu stay in sync. The swatch row still lets you tweak it.
+  const token = useGameStore((s) => s.selectedToken);
+  const setToken = useGameStore((s) => s.setSelectedToken);
   const charDef = resolveCharacter(selectedCharacter);
 
   useEffect(() => {
