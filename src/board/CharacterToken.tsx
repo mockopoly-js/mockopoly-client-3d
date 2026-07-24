@@ -22,13 +22,26 @@ import { clone as cloneSkeleton } from 'three/examples/jsm/utils/SkeletonUtils.j
  * play correctly on the clone (same bone names) — no clip cloning required.
  *
  * COLOR: outfit/accessory materials render with NATIVE authored colors — a Suit
- * stays grey, a Wizard stays purple, etc. Only the character's SKIN-TONE
- * materials (named "Skin" / "Face" in the .glb) are recolored when the player
- * picks a skin color via the `baseColor` prop. Player identity on the board is
- * shown by the colored base ring under the token (PlayerTokens), NOT by
- * recoloring the outfit. We still clone every material per instance so each
- * token can dispose its own materials on unmount without touching the shared
- * cached gltf. The `tint` prop is retained for API/back-compat but is a no-op.
+ * stays grey, a Wizard stays purple, etc. Only the character's FLESH material
+ * (named "Skin" in the .glb) is recolored when the player picks a skin color via
+ * the `baseColor` prop.
+ *
+ * IMPORTANT — verified against the actual .glb structure (all 52 models share
+ * the same Quaternius-style rig, one mesh "Cube.004" split into per-material
+ * primitives):
+ *   • "Skin"  = the ENTIRE flesh body (head, torso, arms, HANDS, legs). Its
+ *     primitive bbox spans the full character height (y≈-0.02 .. 3.13). THIS is
+ *     the flesh and the ONLY thing recolored.
+ *   • "Face"  = a thin (~0.08–0.21 deep) flat DECAL panel sitting in front of
+ *     the head (z≈0.34–0.50, y≈2.44–2.79) that carries the drawn EYES, EYEBROWS
+ *     and MOUTH. It is NOT flesh — recoloring it (the old bug) turned the eyes /
+ *     brows the skin color. "Face" is therefore EXCLUDED from the recolor and
+ *     keeps its authored color.
+ * Player identity on the board is shown by the colored base ring under the token
+ * (PlayerTokens), NOT by recoloring the outfit. We still clone every material per
+ * instance so each token can dispose its own materials on unmount without
+ * touching the shared cached gltf. The `tint` prop is retained for API/back-compat
+ * but is a no-op.
  */
 export type CharacterClip =
   | 'Idle'
@@ -50,31 +63,42 @@ export interface CharacterTokenHandle {
 /**
  * Clone a material per instance (so unmount can dispose it without touching the
  * shared cached gltf). Outfit/accessory materials keep their NATIVE authored
- * colors. Only Skin/Face materials are recolored via `baseColor`.
+ * colors. Only the flesh "Skin" material is recolored via `baseColor`.
  */
 function cloneMaterial(mat: THREE.Material): THREE.Material {
   return (mat as THREE.MeshStandardMaterial).clone();
 }
 
 /**
- * Skin-tone material name fragments (case-insensitive, partial match).
+ * Flesh material name fragments (case-insensitive, partial match).
  * Materials whose names contain any of these tokens are the character's actual
  * flesh/body — they are the TARGET of the "Skin Color" recolor. All other
- * materials (outfit, hair, eyes, accessories) are left untouched.
+ * materials (outfit, hair, eyes, facial features, accessories) are untouched.
  *
- * "face" is included because Face materials share the same skin tone as the
- * body, so hands + face always match the chosen skin color.
+ * Only "skin" is a flesh token. Across all 52 models the "Skin" material's
+ * primitive spans the whole body (head + torso + arms + hands + legs), so a
+ * single recolor covers the face flesh AND the hands uniformly.
+ *
+ * "face" is deliberately NOT a flesh token: the "Face" material is the flat
+ * eyes/eyebrows/mouth DECAL panel in front of the head, not flesh (see the file
+ * header for the verified bbox data). It is additionally listed in the exclude
+ * set below so it can never be recolored.
  */
-const SKIN_MATERIAL_TOKENS = ['skin', 'face'];
+const SKIN_MATERIAL_TOKENS = ['skin'];
 
 /**
  * Explicit exclude list — any material whose name (case-insensitive, partial)
  * contains ANY of these tokens is NEVER recolored, even if it also matches a
- * skin/face token. The exclude wins unconditionally.
+ * flesh token. The exclude wins unconditionally.
  *
- * Covers: hair & facial hair, eyes & ocular components, facial features, and
- * accessories that may share naming fragments with skin/face materials.
+ * "face" heads the list: the "Face" material is the drawn eyes/eyebrows/mouth
+ * decal (NOT flesh), and recoloring it was the reported bug (blue eyes/brows).
  *
+ * Also covers: hair & facial hair, eyes & ocular components, other facial
+ * features, and accessories that may share naming fragments with the flesh
+ * material.
+ *
+ *   face,
  *   hair, beard, mustache, moustache, stubble, goatee, sideburn, whisker,
  *   facial,
  *   eye, eyes, eyebrow, brow, lash, pupil, iris, sclera, lens,
@@ -82,6 +106,8 @@ const SKIN_MATERIAL_TOKENS = ['skin', 'face'];
  *   glasses, mask
  */
 const SKIN_EXCLUDE_TOKENS = [
+  // Eyes/eyebrows/mouth decal panel (the "Face" material) — NOT flesh.
+  'face',
   // Hair & facial hair
   'hair', 'beard', 'mustache', 'moustache', 'stubble', 'goatee', 'sideburn', 'whisker', 'facial',
   // Eyes & ocular
@@ -92,18 +118,19 @@ const SKIN_EXCLUDE_TOKENS = [
 
 /**
  * Given a list of material names from a cloned scene, return all names that
- * are skin-tone materials (body + face). These are the only materials that
- * get recolored when the player picks a skin color. Outfit, hair, eyes, and
- * all other accessories are NEVER touched.
+ * are FLESH materials (the body "Skin"). These are the only materials that get
+ * recolored when the player picks a skin color. Outfit, hair, eyes, the "Face"
+ * feature decal, and all other accessories are NEVER touched.
  *
  * A material is included when:
- *   1. Its name (case-insensitive) contains "skin" or "face"  AND
- *   2. Its name does NOT contain any of the eye-exclude tokens
- *      (eye, brow, lash, pupil, iris, sclera, lens).
+ *   1. Its name (case-insensitive) contains "skin"  AND
+ *   2. Its name does NOT contain any of the exclude tokens (face, eye, brow,
+ *      hair, mouth, …).
  *
- * The exclude check wins — e.g. "EyeFace_skin" is still excluded.
+ * The exclude check wins — e.g. "FaceSkin" is still excluded (it would be a
+ * feature-decal-tone material, not flesh).
  *
- * Returns an empty array when the model has no skin/face materials (rare).
+ * Returns an empty array when the model has no flesh material (rare).
  *
  * Exported so it can be unit-tested independently of Three.js.
  */
@@ -112,8 +139,9 @@ export function pickSkinMaterialNames(names: string[]): string[] {
     const lower = n.toLowerCase();
     const isSkin = SKIN_MATERIAL_TOKENS.some((token) => lower.includes(token));
     if (!isSkin) return false;
-    // Exclude all non-flesh materials: hair, facial hair, eyes, ocular,
-    // other facial features, and accessories — even if they match skin/face.
+    // Exclude all non-flesh materials: the "Face" feature decal, hair, facial
+    // hair, eyes, ocular, other facial features, and accessories — even if they
+    // also match a flesh token.
     const isExcluded = SKIN_EXCLUDE_TOKENS.some((token) => lower.includes(token));
     return !isExcluded;
   });
@@ -129,14 +157,16 @@ export function pickPrimaryMaterialName(names: string[]): string | null {
 }
 
 /**
- * Apply `baseColor` to all skin-tone materials (Skin, Face) of a cloned scene.
- * Outfit materials (Shirt, Clothes, Main, Jacket, Armor, Hat, Belt, Pants, etc.)
- * and all other accessories/hair/eyes are NEVER touched — they keep their
- * original authored colors. Only the body flesh + face mesh is recolored so the
- * player's chosen skin color is reflected uniformly across hands, arms, and face.
+ * Apply `baseColor` to the flesh "Skin" material of a cloned scene. Outfit
+ * materials (Shirt, Clothes, Main, Jacket, Armor, Hat, Belt, Pants, etc.), the
+ * "Face" eyes/eyebrows/mouth decal, hair, and all other accessories are NEVER
+ * touched — they keep their original authored colors. Because the "Skin"
+ * material's geometry spans the whole body, one recolor reflects the player's
+ * chosen skin color uniformly across the face flesh, arms, and hands, while the
+ * drawn eyes / eyebrows keep their original color.
  *
- * If the model has no skin/face material at all, this is a no-op (native colors
- * are kept as-is).
+ * If the model has no flesh material at all, this is a no-op (native colors are
+ * kept as-is).
  */
 function applyBaseColor(scene: THREE.Group, baseColor: string): void {
   // Collect all unique material names from the scene.
@@ -152,7 +182,7 @@ function applyBaseColor(scene: THREE.Group, baseColor: string): void {
     }
   });
 
-  // Resolve which material names are skin-tone targets (Skin + Face).
+  // Resolve which material names are flesh targets (Skin; Face is excluded).
   const skinNames = pickSkinMaterialNames(matNames);
   if (skinNames.length === 0) return;
 
@@ -179,13 +209,14 @@ interface CharacterTokenProps {
    */
   tint?: string;
   /**
-   * Optional hex color for the character's SKIN TONE. When set, all materials
-   * whose name contains "skin" or "face" (case-insensitive) are recolored to
-   * this value — so hands, arms, and face all match. Outfit materials (Shirt,
-   * Clothes, Jacket, Armor, Hat, Belt, Pants, etc.) and hair/eyes are NEVER
-   * touched; they keep their native authored colors. When undefined or null the
-   * native skin tone is kept unchanged. Recomputed when `baseColor` or the
-   * source scene changes.
+   * Optional hex color for the character's SKIN TONE. When set, the flesh
+   * material (name contains "skin", case-insensitive) is recolored to this
+   * value — its geometry spans the whole body, so the face flesh, arms, and
+   * hands all match. Outfit materials (Shirt, Clothes, Jacket, Armor, Hat, Belt,
+   * Pants, etc.), hair, and the "Face" eyes/eyebrows/mouth decal are NEVER
+   * touched; they keep their native authored colors (so the drawn eyes / brows
+   * stay their original color). When undefined or null the native skin tone is
+   * kept unchanged. Recomputed when `baseColor` or the source scene changes.
    */
   baseColor?: string;
   scale?: number;
@@ -216,8 +247,9 @@ export const CharacterToken = forwardRef<CharacterTokenHandle, CharacterTokenPro
 
     // Per-instance clone (independent skeleton). Materials are cloned so each
     // instance owns/disposes its own. Outfit/accessory colors are always NATIVE.
-    // When `baseColor` is provided, only Skin/Face materials are recolored
-    // so the player's skin tone is applied (body + face match; outfit untouched).
+    // When `baseColor` is provided, only the flesh "Skin" material is recolored
+    // so the player's skin tone is applied (face flesh + arms + hands match;
+    // outfit, hair, and the eyes/eyebrows "Face" decal untouched).
     // Recompute when the source scene OR baseColor changes.
     const scene = useMemo(() => {
       const cloned = cloneSkeleton(gltf.scene) as THREE.Group;

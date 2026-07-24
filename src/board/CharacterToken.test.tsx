@@ -174,57 +174,72 @@ describe('CharacterToken', () => {
   });
 });
 
-// ── pickSkinMaterialNames — skin-tone material picker ─────────────────────────
+// ── pickSkinMaterialNames — flesh material picker ─────────────────────────────
 //
-// The "Skin Color" feature recolors ONLY the character's flesh/body materials
-// (Skin + Face). Outfit, hair, eyes, and all accessories keep native colors.
+// The "Skin Color" feature recolors ONLY the character's FLESH material ("Skin"),
+// whose geometry spans the whole body (face flesh + arms + hands). Outfit, hair,
+// eyes, and — crucially — the "Face" material (the flat eyes/eyebrows/mouth decal
+// panel, NOT flesh) keep their native colors.
+//
+// VERIFIED against all 52 .glb models via @gltf-transform NodeIO:
+//   • "Skin" primitive bbox spans y≈-0.02..3.13 (full body) → flesh, recolored.
+//   • "Face" primitive is a ~0.08–0.21-deep flat panel at z≈0.34–0.50, y≈2.44–2.79
+//     (in front of the head) carrying the drawn eyes/brows/mouth → NOT recolored.
+// Recoloring "Face" was the reported bug (blue eyes/eyebrows).
 
-describe('pickSkinMaterialNames (skin-tone material picker)', () => {
-  it('picks Skin and Face materials — body + face match the chosen skin color', () => {
-    // BaseCharacter (only Skin + Face) → both recolored → fully red body
-    expect(pickSkinMaterialNames(['Skin', 'Face'])).toEqual(['Skin', 'Face']);
-    // Suit_Male: Skin/Face picked; Black/Belt/Shirt/Hair/Details left alone
-    expect(pickSkinMaterialNames(['Skin', 'Black', 'Belt', 'Shirt', 'Details', 'Face', 'Hair'])).toEqual(['Skin', 'Face']);
-    // Ninja_Male: Skin/Face picked; Main/Details/Grey left alone
-    expect(pickSkinMaterialNames(['Skin', 'Main', 'Details', 'Grey', 'Face'])).toEqual(['Skin', 'Face']);
-    // Wizard: Skin/Face picked; Clothes/Belt/Gold/Hat/Hair left alone
-    expect(pickSkinMaterialNames(['Skin', 'Clothes', 'Belt', 'Gold', 'Hat', 'Hair', 'Face'])).toEqual(['Skin', 'Face']);
+describe('pickSkinMaterialNames (flesh material picker)', () => {
+  it('picks ONLY the flesh "Skin" material — the eyes/brows "Face" decal is excluded', () => {
+    // BaseCharacter (Skin + Face) → only Skin recolored; Face (eyes/brows) kept
+    expect(pickSkinMaterialNames(['Skin', 'Face'])).toEqual(['Skin']);
+    // Suit_Male: only Skin; Black/Belt/Shirt/Details/Face/Hair left alone
+    expect(pickSkinMaterialNames(['Skin', 'Black', 'Belt', 'Shirt', 'Details', 'Face', 'Hair'])).toEqual(['Skin']);
+    // Ninja_Male: only Skin; Main/Details/Grey/Face left alone
+    expect(pickSkinMaterialNames(['Skin', 'Main', 'Details', 'Grey', 'Face'])).toEqual(['Skin']);
+    // Wizard: only Skin; Clothes/Belt/Gold/Hat/Hair/Face left alone
+    expect(pickSkinMaterialNames(['Skin', 'Clothes', 'Belt', 'Gold', 'Hat', 'Hair', 'Face'])).toEqual(['Skin']);
   });
 
-  it('is case-insensitive — matches SKIN, skin.001, face_mesh, etc.', () => {
-    expect(pickSkinMaterialNames(['SKIN', 'FACE', 'SHIRT'])).toEqual(['SKIN', 'FACE']);
-    expect(pickSkinMaterialNames(['skin.001', 'face_mesh', 'Clothes'])).toEqual(['skin.001', 'face_mesh']);
+  it('is case-insensitive — matches SKIN, skin.001; excludes FACE, face_mesh', () => {
+    expect(pickSkinMaterialNames(['SKIN', 'FACE', 'SHIRT'])).toEqual(['SKIN']);
+    expect(pickSkinMaterialNames(['skin.001', 'face_mesh', 'Clothes'])).toEqual(['skin.001']);
   });
 
-  it('returns only Skin when the model has no Face material', () => {
+  it('returns Skin regardless of whether a Face material is present', () => {
+    // Knight_* variants have Skin but no Face (helmet) → Skin recolored.
     expect(pickSkinMaterialNames(['Skin', 'Armor', 'Hair'])).toEqual(['Skin']);
   });
 
-  it('returns empty array when the model has no skin/face material (no recolor)', () => {
-    // A fully-armored / non-humanoid model with no Skin/Face material
+  it('returns empty array when the model has no flesh material (no recolor)', () => {
+    // A fully-armored / non-humanoid model with no Skin material.
     expect(pickSkinMaterialNames(['Armor', 'Armor_Dark', 'Detail', 'Red'])).toEqual([]);
+    // A model with ONLY a Face decal (no flesh) → nothing recolored.
+    expect(pickSkinMaterialNames(['Face', 'Hair'])).toEqual([]);
     expect(pickSkinMaterialNames([])).toEqual([]);
   });
 
-  it('never includes outfit or accessory materials in the result', () => {
+  it('never includes outfit, accessory, or the Face decal in the result', () => {
     const result = pickSkinMaterialNames(['Skin', 'Shirt', 'Pants', 'Belt', 'Hat', 'Jacket', 'Armor', 'Main', 'Clothes', 'Face', 'Hair']);
-    expect(result).toEqual(['Skin', 'Face']);
-    // Shirt, Pants, Belt, Hat, Jacket, Armor, Main, Clothes, Hair are ALL absent
+    expect(result).toEqual(['Skin']);
+    // Outfit + Face + Hair are ALL absent.
     expect(result).not.toContain('Shirt');
     expect(result).not.toContain('Pants');
     expect(result).not.toContain('Armor');
     expect(result).not.toContain('Hair');
+    expect(result).not.toContain('Face');
   });
 
-  it('NEVER recolors eyes, eyebrows, hair, or facial-hair materials — only pure flesh', () => {
-    // Eyes and eyebrows — explicit exclusions.
+  it('NEVER recolors the Face decal, eyes, eyebrows, hair, or facial-hair — only pure flesh', () => {
+    // The "Face" eyes/brows/mouth decal is excluded even alongside flesh.
+    expect(pickSkinMaterialNames(['Face', 'Skin'])).toEqual(['Skin']);
+    expect(pickSkinMaterialNames(['Eyebrow', 'Face', 'Skin'])).toEqual(['Skin']);
+    // A material that matches "skin" but also an exclude token stays excluded.
+    expect(pickSkinMaterialNames(['FaceSkin', 'Skin', 'Face'])).toEqual(['Skin']);
     expect(pickSkinMaterialNames(['Eye_L', 'Eye_R', 'Skin'])).toEqual(['Skin']);
-    expect(pickSkinMaterialNames(['Eyebrow', 'Face', 'Skin'])).toEqual(['Face', 'Skin']);
-    // A material that would match "face" AND an exclude token is still excluded.
-    expect(pickSkinMaterialNames(['EyeFace_skin', 'Skin', 'Face'])).toEqual(['Skin', 'Face']);
 
-    // All primary exclude tokens individually (case-insensitive) must return [].
+    // All exclude tokens individually (case-insensitive) must return [].
     const excludedMaterials = [
+      // The face-feature decal panel.
+      'Face', 'FACE',
       // Eyes & ocular
       'Eye', 'EYES', 'Eyebrow', 'Brow_L', 'Lash', 'Pupil', 'Iris', 'Sclera', 'Lens',
       // Hair & facial hair
@@ -236,29 +251,31 @@ describe('pickSkinMaterialNames (skin-tone material picker)', () => {
       expect(pickSkinMaterialNames([mat]), `expected "${mat}" to be excluded`).toEqual([]);
     }
 
-    // Skin + Face are STILL recolored (only flesh changes).
-    expect(pickSkinMaterialNames(['Skin', 'Face'])).toEqual(['Skin', 'Face']);
+    // Skin is STILL recolored (only flesh changes).
+    expect(pickSkinMaterialNames(['Skin', 'Face'])).toEqual(['Skin']);
 
-    // Full humanoid material list — only Skin + Face survive.
+    // Full humanoid material list — only Skin survives; Face (eyes/brows) does not.
     const full = [
       'Skin', 'Face', 'Eye_L', 'Eye_R', 'Eyebrow', 'Beard', 'Hair',
       'Shirt', 'Pants', 'Belt', 'Hat', 'Glasses',
     ];
-    expect(pickSkinMaterialNames(full)).toEqual(['Skin', 'Face']);
+    expect(pickSkinMaterialNames(full)).toEqual(['Skin']);
   });
 
-  it('preserves order of appearance in the input array', () => {
-    // Face listed before Skin in input → Face comes first in result
-    expect(pickSkinMaterialNames(['Face', 'Clothes', 'Skin'])).toEqual(['Face', 'Skin']);
+  it('preserves order of appearance for multiple flesh materials', () => {
+    // Only Skin-like names survive; order is preserved among them.
+    expect(pickSkinMaterialNames(['Face', 'Clothes', 'Skin'])).toEqual(['Skin']);
+    expect(pickSkinMaterialNames(['Skin_Body', 'Clothes', 'Skin_Head'])).toEqual(['Skin_Body', 'Skin_Head']);
   });
 });
 
 // ── pickPrimaryMaterialName (deprecated back-compat) ──────────────────────────
 
 describe('pickPrimaryMaterialName (deprecated — delegates to pickSkinMaterialNames)', () => {
-  it('returns the first skin-tone material or null', () => {
+  it('returns the first flesh material or null (Face is not flesh)', () => {
     expect(pickPrimaryMaterialName(['Skin', 'Face', 'Shirt'])).toBe('Skin');
-    expect(pickPrimaryMaterialName(['Face', 'Clothes'])).toBe('Face');
+    // Face alone is the eyes/brows decal, not flesh → null.
+    expect(pickPrimaryMaterialName(['Face', 'Clothes'])).toBe(null);
     expect(pickPrimaryMaterialName(['Shirt', 'Pants'])).toBe(null);
     expect(pickPrimaryMaterialName([])).toBe(null);
   });
