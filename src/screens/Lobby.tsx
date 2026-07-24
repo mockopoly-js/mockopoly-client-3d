@@ -62,85 +62,136 @@ export function Lobby() {
   if (isMobile) {
     return (
       <div style={wrapMobile}>
-        <button onClick={copyCode} style={codeChipMobile}>Room {roomCode ?? '----'}</button>
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 10, width: '100%', maxWidth: 400 }}>
-          {playerSlots}
-        </div>
-        {countdown !== null && status === 'starting'
-          ? <div style={{ fontWeight: 800, fontSize: 20, color: '#e07d0a' }}>Starting in {countdown}...</div>
-          : (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 10, width: '100%', maxWidth: 400 }}>
-              <button onClick={toggleReady} disabled={locked} style={{ ...btnMobile, background: me?.isReady ? '#2a8855' : '#2a2a42', color: '#fff' }}>
-                {me?.isReady ? 'Ready ✓' : 'Ready'}
-              </button>
-              {isHost && (
-                <button onClick={start} disabled={locked || players.length < 2} style={{ ...btnMobile, background: '#e07d0a', color: '#fff' }}>
-                  Start Game
+        <div style={panelMobile}>
+          <button onClick={copyCode} style={codeChipMobile}>Room {roomCode ?? '----'}</button>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 10, width: '100%', maxWidth: 400 }}>
+            {playerSlots}
+          </div>
+          {countdown !== null && status === 'starting'
+            ? <div style={{ fontWeight: 800, fontSize: 20, color: '#e07d0a' }}>Starting in {countdown}...</div>
+            : (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 10, width: '100%', maxWidth: 400 }}>
+                <button onClick={toggleReady} disabled={locked} style={{ ...btnMobile, background: me?.isReady ? '#2a8855' : '#2a2a42', color: '#fff' }}>
+                  {me?.isReady ? 'Ready ✓' : 'Ready'}
                 </button>
-              )}
-              <button onClick={leave} disabled={locked} style={{ ...btnMobile, background: '#e7dcbf', color: '#3b3224' }}>Back</button>
-            </div>
-          )}
+                {isHost && (
+                  <button onClick={start} disabled={locked || players.length < 2} style={{ ...btnMobile, background: '#e07d0a', color: '#fff' }}>
+                    Start Game
+                  </button>
+                )}
+                <button onClick={leave} disabled={locked} style={{ ...btnMobile, background: '#e7dcbf', color: '#3b3224' }}>Back</button>
+              </div>
+            )}
+        </div>
       </div>
     );
   }
 
   return (
     <div style={wrap}>
-      <button onClick={copyCode} style={codeChip}>Room {roomCode ?? '----'}</button>
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 10, width: 320 }}>
-        {playerSlots}
-      </div>
+      <div style={panel}>
+        <button onClick={copyCode} style={codeChip}>Room {roomCode ?? '----'}</button>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 10, width: '100%' }}>
+          {playerSlots}
+        </div>
 
-      {countdown !== null && status === 'starting'
-        ? <div style={{ fontWeight: 800, fontSize: 20, color: '#e07d0a' }}>Starting in {countdown}...</div>
-        : (
-          <div style={{ display: 'flex', gap: 10 }}>
-            <button onClick={toggleReady} disabled={locked} style={{ ...btn, background: me?.isReady ? '#2a8855' : '#2a2a42', color: '#fff' }}>
-              {me?.isReady ? 'Ready ✓' : 'Ready'}
-            </button>
-            {isHost && (
-              <button onClick={start} disabled={locked || players.length < 2} style={{ ...btn, background: '#e07d0a', color: '#fff' }}>
-                Start Game
+        {countdown !== null && status === 'starting'
+          ? <div style={{ fontWeight: 800, fontSize: 20, color: '#e07d0a' }}>Starting in {countdown}...</div>
+          : (
+            <div style={{ display: 'flex', gap: 10 }}>
+              <button onClick={toggleReady} disabled={locked} style={{ ...btn, background: me?.isReady ? '#2a8855' : '#2a2a42', color: '#fff' }}>
+                {me?.isReady ? 'Ready ✓' : 'Ready'}
               </button>
-            )}
-            <button onClick={leave} disabled={locked} style={{ ...btn, background: '#e7dcbf', color: '#3b3224' }}>Back</button>
-          </div>
-        )}
+              {isHost && (
+                <button onClick={start} disabled={locked || players.length < 2} style={{ ...btn, background: '#e07d0a', color: '#fff' }}>
+                  Start Game
+                </button>
+              )}
+              <button onClick={leave} disabled={locked} style={{ ...btn, background: '#e7dcbf', color: '#3b3224' }}>Back</button>
+            </div>
+          )}
+      </div>
     </div>
   );
 }
 
 const FONT = FONT_FAMILY;
+const GOLD = '#d4af37';
+const BG_URL = '/images/lobby-bg.webp';
 
-// ── Desktop styles (unchanged) ──
-const wrap: React.CSSProperties = {
-  position: 'fixed', inset: 0, display: 'flex', flexDirection: 'column', gap: 18,
-  alignItems: 'center', justifyContent: 'center', background: '#eaf7fc', fontFamily: FONT, color: '#3b3224',
+// ── Backdrop (toy-city diorama; the empty plaza sits dead-center) ──
+const backdropBase: React.CSSProperties = {
+  position: 'fixed',
+  inset: 0,
+  backgroundImage: `url(${BG_URL})`,
+  backgroundColor: '#5aa9e6', // sky fallback while the webp loads
+  backgroundRepeat: 'no-repeat',
+  backgroundSize: 'cover',
+  fontFamily: FONT,
+  color: '#3b3224',
+  display: 'flex',
+  boxSizing: 'border-box',
 };
+
+// ── Desktop: cover + centered so the panel lands in the mid-frame plaza ──
+const wrap: React.CSSProperties = {
+  ...backdropBase,
+  backgroundPosition: 'center center',
+  alignItems: 'center',
+  justifyContent: 'center',
+};
+
+// ── Desktop control panel — floats in the sandy plaza (centered both axes) ──
+const panel: React.CSSProperties = {
+  display: 'flex',
+  flexDirection: 'column',
+  gap: 14,
+  alignItems: 'center',
+  width: 'min(420px, 90vw)',
+  boxSizing: 'border-box',
+  padding: '24px 26px',
+  borderRadius: 24,
+  background: 'rgba(255, 251, 240, 0.9)',
+  border: `3px solid ${GOLD}`,
+  boxShadow: '0 18px 48px rgba(0,0,0,0.45), inset 0 0 0 1px rgba(255,255,255,0.6)',
+  backdropFilter: 'blur(2px)',
+  WebkitBackdropFilter: 'blur(2px)',
+};
+
 const codeChip: React.CSSProperties = { fontFamily: FONT, fontWeight: 800, border: 'none', background: '#fbf6ec', borderRadius: 999, padding: '8px 16px', cursor: 'pointer' };
 const slot: React.CSSProperties = { display: 'flex', alignItems: 'center', gap: 10, background: '#fbf6ec', borderRadius: 14, padding: '10px 14px' };
 const emptySlot: React.CSSProperties = { ...slot, justifyContent: 'center', color: '#9a8f7c', fontWeight: 700 };
 const dot: React.CSSProperties = { width: 22, height: 22, borderRadius: '50%' };
 const btn: React.CSSProperties = { fontFamily: FONT, fontWeight: 800, border: 'none', borderRadius: 14, padding: '12px 20px', cursor: 'pointer' };
 
-// ── Mobile styles ──
+// ── Mobile: same fixed bg (top center) with a centered scrim panel ──
 const wrapMobile: React.CSSProperties = {
-  position: 'fixed',
-  inset: 0,
+  ...backdropBase,
+  backgroundPosition: 'top center',
+  alignItems: 'center',
+  justifyContent: 'center',
+  padding: '20px 12px',
+  paddingTop: 'calc(20px + env(safe-area-inset-top))',
+  paddingBottom: 'calc(20px + env(safe-area-inset-bottom))',
+  overflowY: 'auto',
+};
+
+// ── Mobile control panel — near-full-width scrim card, centered ──
+const panelMobile: React.CSSProperties = {
   display: 'flex',
   flexDirection: 'column',
   gap: 14,
   alignItems: 'center',
-  justifyContent: 'center',
-  background: '#eaf7fc',
-  fontFamily: FONT,
-  color: '#3b3224',
-  padding: '20px 16px',
-  paddingTop: 'calc(20px + env(safe-area-inset-top))',
-  paddingBottom: 'calc(20px + env(safe-area-inset-bottom))',
+  width: '100%',
+  maxWidth: 440,
   boxSizing: 'border-box',
-  overflowY: 'auto',
+  padding: '20px 16px',
+  borderRadius: 22,
+  background: 'rgba(255, 251, 240, 0.92)',
+  border: `3px solid ${GOLD}`,
+  boxShadow: '0 12px 36px rgba(0,0,0,0.4), inset 0 0 0 1px rgba(255,255,255,0.6)',
+  backdropFilter: 'blur(2px)',
+  WebkitBackdropFilter: 'blur(2px)',
 };
 const codeChipMobile: React.CSSProperties = {
   fontFamily: FONT, fontWeight: 800, border: 'none', background: '#fbf6ec',
