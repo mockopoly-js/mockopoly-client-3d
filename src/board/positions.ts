@@ -53,6 +53,40 @@ export function tileToWorld(index: number): [number, number, number] {
 }
 
 /**
+ * Ordered list of tile indices a token WALKS through moving `from` → `to`,
+ * INCLUSIVE of both endpoints and following the ring clockwise (index+1),
+ * wrapping past 39 → 0 so the token rounds corners and passes GO along the
+ * track — it NEVER cuts diagonally across the board.
+ *
+ * Result shape: `[from, from+1, …, to]` (all mod 40). This is the polyline of
+ * tile centers the walk animation glides along; consecutive entries are always
+ * adjacent tiles on the ring, so segment tangents give clean per-segment facing.
+ *
+ * - `from === to` → `[from]` (a single vertex; no movement, token stays put).
+ * - A full lap (`from === to` is treated as no-op, NOT a 40-tile loop) — the
+ *   server sends distinct from/to for real moves, so a same-tile event means
+ *   "already there". Callers that want a full lap must pass distinct indices.
+ *
+ * Differs from `hopPath` (which returns from+1..to, EXCLUSIVE of `from`): this
+ * helper includes the start vertex so the caller can build the walk polyline
+ * directly without prepending the origin.
+ *
+ * Exported + pure so it can be unit-tested independently of Three.js.
+ */
+export function buildTilePath(from: number, to: number): number[] {
+  const a = ((from % 40) + 40) % 40;
+  const b = ((to % 40) + 40) % 40;
+  const path: number[] = [a];
+  if (a === b) return path;
+  let i = a;
+  do {
+    i = (i + 1) % 40;
+    path.push(i);
+  } while (i !== b);
+  return path;
+}
+
+/**
  * Like tileToWorld but applies BOARD_ROTATION about the world-Y axis, so the
  * returned Vector3 matches the token's ACTUAL rendered world position.
  *

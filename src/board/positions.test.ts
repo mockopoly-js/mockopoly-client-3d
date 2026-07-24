@@ -3,6 +3,7 @@ import {
   SPACE_POSITIONS,
   tileToWorld,
   tileToWorldRotated,
+  buildTilePath,
   BOARD_WORLD_SIZE,
   thirdPersonPose,
   THIRD_PERSON_DIST,
@@ -39,6 +40,38 @@ describe('SPACE_POSITIONS', () => {
     expect(y).toBe(0);
     expect(x).toBeCloseTo((SPACE_POSITIONS[20].x - 0.5) * BOARD_WORLD_SIZE, 6);
     expect(z).toBeCloseTo((SPACE_POSITIONS[20].y - 0.5) * BOARD_WORLD_SIZE, 6);
+  });
+});
+
+describe('buildTilePath', () => {
+  it('includes both endpoints for a single-step move (adjacent tiles)', () => {
+    // from → from+1: two vertices, so the walk polyline has exactly one segment.
+    expect(buildTilePath(5, 6)).toEqual([5, 6]);
+  });
+  it('lists from..to inclusive for a straight-line multi-tile move', () => {
+    expect(buildTilePath(12, 20)).toEqual([12, 13, 14, 15, 16, 17, 18, 19, 20]);
+  });
+  it('wraps past GO (38 → 2 goes 38,39,0,1,2 — never cuts across)', () => {
+    expect(buildTilePath(38, 2)).toEqual([38, 39, 0, 1, 2]);
+  });
+  it('is one longer than hopPath (includes the start vertex)', () => {
+    // 5-space move → 6 vertices (5 segments).
+    expect(buildTilePath(0, 5)).toHaveLength(6);
+    expect(buildTilePath(37, 4)).toEqual([37, 38, 39, 0, 1, 2, 3, 4]);
+  });
+  it('returns a single vertex (no movement) when from === to', () => {
+    expect(buildTilePath(7, 7)).toEqual([7]);
+  });
+  it('a full lap is expressible via distinct wrap endpoints (39 → 38 = whole ring)', () => {
+    const lap = buildTilePath(39, 38);
+    expect(lap[0]).toBe(39);
+    expect(lap[lap.length - 1]).toBe(38);
+    expect(lap).toHaveLength(40); // 39,0,1,…,38 — every tile exactly once
+    expect(new Set(lap).size).toBe(40);
+  });
+  it('normalizes out-of-range / negative indices', () => {
+    expect(buildTilePath(40, 42)).toEqual([0, 1, 2]);
+    expect(buildTilePath(-1, 1)).toEqual([39, 0, 1]);
   });
 });
 

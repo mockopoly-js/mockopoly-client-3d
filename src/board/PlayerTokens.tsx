@@ -3,27 +3,59 @@ import { useFrame } from '@react-three/fiber';
 import * as THREE from 'three';
 import { useGameStore } from '../state/gameStore';
 import { useGameBusEvent } from '../state/useGameBus';
-import { tileToWorld } from './positions';
-import { hopPath, stackOffset } from './hopPath';
+import { tileToWorld, buildTilePath } from './positions';
+import { stackOffset } from './hopPath';
 import { TOKEN_HEX } from '../constants/theme';
 import { CharacterToken, type CharacterTokenHandle } from './CharacterToken';
 import { resolveCharacter, DEFAULT_CHARACTER } from '../constants/characters';
 import type { Player, TokenType } from '../types/GameState';
 
 const BASE_Y = 0.15;
-const HOP_H = 0.3;
-const HOP_MS = 150; // ANIMATION_TOKEN_MOVE_PER_SPACE_MS — keeps lockstep with server
 const CHAR_SCALE = 0.2; // matches CharacterToken's board-token default
-const ROT_LERP = 0.35; // how quickly the character swings to face travel each frame
 const FACING_OFFSET = 0; // radians — single knob: set to Math.PI if model faces backward
 const RING_INNER = 0.26; // inner radius of the identity ring
 const RING_OUTER = 0.32; // outer radius (~0.06 band — thin, not fat)
 
+// ── Walk-motion tuning ───────────────────────────────────────────────────────
+// SERVER_MOVE_WINDOW_PER_TILE_MS is the client mirror of the server's
+// ANIMATION_TOKEN_MOVE_PER_SPACE_MS: the server gates the next GAME_STATE_UPDATE
+// by (this × spaces), so the whole walk MUST finish within that window or the
+// token gets snapped mid-stride by an incoming snapshot. This value is the
+// authoritative per-tile budget — do NOT exceed it.
+const SERVER_MOVE_WINDOW_PER_TILE_MS = 150; // ANIMATION_TOKEN_MOVE_PER_SPACE_MS
+
+// WALK_MS_PER_TILE is the desired glide time per board tile. It is CLAMPED to
+// the server budget per move (perTile = min(WALK_MS_PER_TILE, windowMs/steps)),
+// so a slower walk never overruns the sync window. Kept equal to the server
+// budget so typical 1–12 tile moves land exactly in lockstep and feel snappy.
+const WALK_MS_PER_TILE = 150;
+
+// Yaw turn rate: fraction of the remaining angle closed per 60fps-equivalent
+// frame (delta-scaled below). High so the character finishes rotating to the
+// new segment direction essentially AT the corner vertex, not a tile later.
+const YAW_TURN_PER_FRAME = 0.55;
+// If the remaining yaw error is below this (radians) we snap to target — kills
+// the last-degree crawl so the turn reads as crisp/complete at the corner.
+const YAW_SNAP_EPSILON = 0.03;
+
 interface Anim {
-  queue: number[];   // remaining tiles to visit, in order
-  elapsed: number;   // ms into the current hop
-  fromX: number;     // world x at the start of the current hop
-  fromZ: number;     // world z at the start of the current hop
+  /** World-space vertices of the walk polyline (tile centers), from A..B. */
+  pts: { x: number; z: number }[];
+  /** Index of the segment currently being walked (pts[seg] → pts[seg+1]). */
+  seg: number;
+  /** ms elapsed into the current segment. */
+  segElapsed: number;
+  /** ms budget per segment (clamped to the server window). */
+  perTile: number;
+}
+
+/** Shortest-arc step of `cur` toward `target` by `frac` (delta-scaled), with an
+ *  epsilon snap so the turn crisply completes instead of crawling forever. */
+function stepYaw(cur: number, target: number, frac: number): number {
+  let diff = target - cur;
+  diff = Math.atan2(Math.sin(diff), Math.cos(diff)); // unwrap to [-π, π]
+  if (Math.abs(diff) <= YAW_SNAP_EPSILON) return target;
+  return cur + diff * frac;
 }
 
 /**
@@ -33,6 +65,22 @@ interface Anim {
 function restOffset(player: Player, players: Player[]): [number, number] {
   const coLocated = players.filter((p) => p.position === player.position && !p.isBankrupt);
   const idx = coLocated.findIndex((p) => p.id === player.id);
+  return stackOffset(idx < 0 ? 0 : idx);
+}
+
+/**
+ * Predicted resting offset for `playerId` arriving on tile `to`, using the same
+ * index rule as `restOffset` but keyed on the DESTINATION tile (store positions
+ * are still stale when `player-moved` fires). The moving player is folded into
+ * the co-located set at `to` so its stack index matches what the reconcile will
+ * compute once the authoritative snapshot lands. Order-stable with the store's
+ * player order so the index is consistent across the walk end and the reconcile.
+ */
+function destOffset(playerId: string, to: number, players: Player[]): [number, number] {
+  const coLocated = players.filter(
+    (p) => !p.isBankrupt && (p.id === playerId || p.position === to),
+  );
+  const idx = coLocated.findIndex((p) => p.id === playerId);
   return stackOffset(idx < 0 ? 0 : idx);
 }
 
@@ -61,24 +109,30 @@ function restOffset(player: Player, players: Player[]): [number, number] {
  * co-located players can even pick the same character — the ring color still
  * tells them apart, and it matches the token color the pods/ownership use).
  *
- * On a `player-moved` event we enqueue `hopPath(from, to)` and lerp across each
- * tile in exactly HOP_MS. While a hop is queued the store snapshot (which
- * already holds the final tile) is ignored; when the queue drains we reconcile
- * to `tileToWorld(position)` + stack offset so any drift is corrected. The drive
- * math is UNCHANGED from the pawn version — only the rendered object and the
- * Idle↔Walk clip switch are new.
+ * MOTION MODEL — the token WALKS, it does not hop. On a `player-moved` event we
+ * build `buildTilePath(from, to)` → an ordered polyline of world-space tile
+ * centers (A, A+1, …, B, wrapping past GO so corners are rounded and the board
+ * is never cut across diagonally). Each frame the token glides along the current
+ * segment at a CONSTANT pace (`perTile` ms per tile, clamped to the server sync
+ * window) with its feet flat on the board — there is NO vertical hop arc; y is
+ * pinned at BASE_Y throughout. The Walk animation clip supplies all the body
+ * motion. While walking the store snapshot (which already holds the final tile)
+ * is ignored; when the path completes we reconcile to `tileToWorld(position)` +
+ * stack offset so any drift is corrected.
+ *
+ * FACING turns AT the corner: the target heading is the tangent of the CURRENT
+ * segment (direction from pts[seg] → pts[seg+1]) plus FACING_OFFSET. Because that
+ * tangent changes discretely at a corner vertex, and we close the yaw error with
+ * a fast delta-scaled lerp (+ an epsilon snap), the character finishes turning
+ * right as it reaches the corner tile — not one tile later. At rest the facing is
+ * held toward the next tile (consistent with the last walked segment).
  *
  * Clip switching does NOT touch the position lockstep: it is a per-player React
- * state map (`moving`) flipped to true when a hop is enqueued (in the
- * `player-moved` handler) and back to false the first frame the queue drains
- * (guarded so we only setState on the transition, never every frame). The
- * CharacterToken key is stable per `player.id`, so flipping `clip` crossfades
- * the animation without re-mounting the skeleton/mixer.
- *
- * Facing: the character swings to face its direction of travel during a hop
- * (heading derived from the per-frame movement delta, slerped into
- * `group.rotation.y`) and holds that facing at rest. This is applied only to the
- * group's rotation inside useFrame — it never perturbs the position lerp.
+ * state map (`moving`) flipped to true when a walk starts (in the `player-moved`
+ * handler) and back to false the first frame the path completes (guarded so we
+ * only setState on the transition, never every frame). The CharacterToken key is
+ * stable per `player.id`, so flipping `clip` crossfades Idle↔Walk without
+ * re-mounting the skeleton/mixer.
  */
 export function PlayerTokens() {
   const players = (useGameStore((s) => s.state?.players) ?? []).filter((p) => !p.isBankrupt);
@@ -90,7 +144,7 @@ export function PlayerTokens() {
     }
   }, [players.map((p) => `${p.id}:${p.character ?? ''}`).join(',')]);
 
-  // Per-player "is mid-hop" → drives Idle↔Walk. React state so the clip prop
+  // Per-player "is walking" → drives Idle↔Walk. React state so the clip prop
   // re-renders; a ref mirror lets useFrame flip it without a stale closure and
   // without a setState every frame (only on the enter/leave transition).
   const [moving, setMoving] = useState<Record<string, boolean>>({});
@@ -107,24 +161,48 @@ export function PlayerTokens() {
   // Imperative handles to each character, for one-shot Victory/Defeat clips.
   const chars = useRef<Record<string, CharacterTokenHandle | null>>({});
 
-  // Server says a token moved → enqueue the tile-by-tile hop + flag it moving.
+  // Server says a token moved → build the walk polyline + flag it moving.
   useGameBusEvent('player-moved', (d: { playerId: string; from: number; to: number }) => {
-    const queue = hopPath(d.from, d.to);
-    if (queue.length === 0) return;
-    // Seed the hop start from the group's current world position when available
-    // (handles rapid consecutive moves); otherwise from the `from` tile.
+    const tiles = buildTilePath(d.from, d.to);
+    // A single-vertex path means no actual move (from === to) → stay Idle.
+    if (tiles.length < 2) return;
+
+    // Vertices are the tile centers to glide through, in order.
+    const pts = tiles.map((idx) => {
+      const [x, , z] = tileToWorld(idx);
+      return { x, z };
+    });
+
+    // Seed the first vertex from the group's current world position when
+    // available (handles rapid consecutive moves so the walk starts exactly
+    // where the token is, with no visible jump); otherwise the `from` center.
     const group = groups.current[d.playerId];
-    let fromX: number;
-    let fromZ: number;
     if (group) {
-      fromX = group.position.x;
-      fromZ = group.position.z;
-    } else {
-      const [x, , z] = tileToWorld(d.from);
-      fromX = x;
-      fromZ = z;
+      pts[0] = { x: group.position.x, z: group.position.z };
     }
-    anims.current[d.playerId] = { queue, elapsed: 0, fromX, fromZ };
+
+    // Land the FINAL vertex on the destination tile's resting stack offset so
+    // the walk ends exactly where the rest-reconcile will place the token —
+    // avoids a sub-frame pop of the stack offset when co-located tokens share
+    // the destination tile. Intermediate vertices stay on raw tile centers.
+    //
+    // NOTE: at event time the store positions are still stale (the authoritative
+    // GAME_STATE_UPDATE that moves this player to `d.to` arrives AFTER the anim
+    // window). We therefore predict the destination offset from `d.to` directly,
+    // reproducing the same index rule the rest-reconcile uses, so the walk ends
+    // exactly where the token will rest.
+    const [dox, doz] = destOffset(d.playerId, d.to, playersRef.current);
+    const last = pts[pts.length - 1];
+    pts[pts.length - 1] = { x: last.x + dox, z: last.z + doz };
+
+    const steps = pts.length - 1; // number of segments (tiles walked)
+    // Clamp per-tile time to the server sync window so the whole walk finishes
+    // before the next GAME_STATE_UPDATE arrives (never snapped mid-stride).
+    const windowMs = SERVER_MOVE_WINDOW_PER_TILE_MS * steps;
+    const perTile = Math.min(WALK_MS_PER_TILE, windowMs / steps);
+
+    anims.current[d.playerId] = { pts, seg: 0, segElapsed: 0, perTile };
+
     // Flip to 'Walk' (only if not already flagged — avoids a redundant render).
     if (!movingRef.current[d.playerId]) {
       setMoving((m) => ({ ...m, [d.playerId]: true }));
@@ -151,58 +229,58 @@ export function PlayerTokens() {
       if (!group) continue;
 
       const anim = anims.current[p.id];
-      if (anim && anim.queue.length > 0) {
-        anim.elapsed += dtMs;
-        const t = Math.min(anim.elapsed / HOP_MS, 1);
-        const [tx, , tz] = tileToWorld(anim.queue[0]);
-        const prevX = group.position.x;
-        const prevZ = group.position.z;
-        // World-space lerp: group is a direct child of the origin group.
-        group.position.x = THREE.MathUtils.lerp(anim.fromX, tx, t);
-        group.position.z = THREE.MathUtils.lerp(anim.fromZ, tz, t);
-        group.position.y = BASE_Y + Math.sin(t * Math.PI) * HOP_H;
-        // Face direction of travel: derive heading from this frame's planar
-        // delta (fall back to the whole-hop delta on the very first sub-frame so
-        // a heading exists immediately). Only rotation is touched here — the
-        // position lerp above is untouched.
-        let dx = group.position.x - prevX;
-        let dz = group.position.z - prevZ;
-        if (Math.abs(dx) < 1e-5 && Math.abs(dz) < 1e-5) {
-          dx = tx - anim.fromX;
-          dz = tz - anim.fromZ;
+      if (anim && anim.seg < anim.pts.length - 1) {
+        // Advance through segments, carrying overshoot so a fast frame can cross
+        // more than one tile without stalling (keeps constant ground speed).
+        anim.segElapsed += dtMs;
+        while (anim.segElapsed >= anim.perTile && anim.seg < anim.pts.length - 2) {
+          anim.segElapsed -= anim.perTile;
+          anim.seg += 1;
         }
-        if (Math.abs(dx) > 1e-5 || Math.abs(dz) > 1e-5) {
-          const target = Math.atan2(dx, dz) + FACING_OFFSET; // three's +z is "forward" for atan2(x,z)
+
+        const a = anim.pts[anim.seg];
+        const b = anim.pts[anim.seg + 1];
+        const t = Math.min(anim.segElapsed / anim.perTile, 1);
+
+        // Constant-speed glide along the current segment, feet flat on the board.
+        group.position.x = THREE.MathUtils.lerp(a.x, b.x, t);
+        group.position.z = THREE.MathUtils.lerp(a.z, b.z, t);
+        group.position.y = BASE_Y; // NO hop arc — walk at ground level.
+
+        // FACING follows the CURRENT segment tangent, so the target heading flips
+        // discretely at each corner vertex. A fast, delta-scaled yaw lerp (with an
+        // epsilon snap) closes that error within a frame or two, so the turn reads
+        // as completing AT the corner, not one tile later.
+        const dx = b.x - a.x;
+        const dz = b.z - a.z;
+        if (Math.abs(dx) > 1e-6 || Math.abs(dz) > 1e-6) {
+          const target = Math.atan2(dx, dz) + FACING_OFFSET; // three: +z is "forward" for atan2(x,z)
           const cur = facing.current[p.id] ?? target;
-          // Shortest-arc lerp toward the target heading.
-          let diff = target - cur;
-          diff = Math.atan2(Math.sin(diff), Math.cos(diff));
-          const next = cur + diff * ROT_LERP;
+          // Frame-rate aware: scale the per-frame fraction to 60fps so the turn
+          // rate is consistent regardless of refresh rate. Clamp to [0,1].
+          const frac = Math.min(1, YAW_TURN_PER_FRAME * (dtMs / (1000 / 60)));
+          const next = stepYaw(cur, target, frac);
           group.rotation.y = next;
           facing.current[p.id] = next;
         }
-        // NO squash/stretch for characters — the Walk clip supplies the body
-        // motion; we keep only the positional hop arc so the humanoid doesn't
-        // look rubbery. (scale stays at the CharacterToken default.)
+
         seeded.current[p.id] = true;
-        if (t >= 1) {
-          // Advance to the next tile; carry over overshoot so we stay in lockstep.
-          anim.fromX = tx;
-          anim.fromZ = tz;
-          anim.elapsed = Math.max(0, anim.elapsed - HOP_MS);
-          anim.queue.shift();
-          if (anim.queue.length === 0) {
-            delete anims.current[p.id];
-            // Queue drained → back to 'Idle'. Guard so we setState only on the
-            // transition, never every frame.
-            if (movingRef.current[p.id]) {
-              setMoving((m) => {
-                if (!m[p.id]) return m;
-                const nextMap = { ...m };
-                delete nextMap[p.id];
-                return nextMap;
-              });
-            }
+
+        // Reached the final vertex → walk done.
+        if (anim.seg >= anim.pts.length - 2 && anim.segElapsed >= anim.perTile) {
+          // Snap to the exact final vertex to kill sub-pixel drift, then clear.
+          group.position.x = b.x;
+          group.position.z = b.z;
+          delete anims.current[p.id];
+          // Path complete → back to 'Idle'. Guard so we setState only on the
+          // transition, never every frame.
+          if (movingRef.current[p.id]) {
+            setMoving((m) => {
+              if (!m[p.id]) return m;
+              const nextMap = { ...m };
+              delete nextMap[p.id];
+              return nextMap;
+            });
           }
         }
       } else {
