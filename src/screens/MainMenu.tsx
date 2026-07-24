@@ -3,11 +3,12 @@ import { socketManager } from '../network/SocketManager';
 import { gameBus } from '../state/gameBus';
 import { useGameStore, getStoredReconnectToken } from '../state/gameStore';
 import { EVENTS } from '../types/SocketEvents';
-import { TOKEN_HEX } from '../constants/theme';
+import { TOKEN_HEX, GOLD } from '../constants/theme';
 import type { TokenType } from '../types/GameState';
 import type { S_RoomCreated, S_RoomJoined, S_RoomRejected } from '../types/SocketEvents';
 import { FONT_FAMILY } from '../constants/fonts';
 import { useIsMobile } from '../ui/useIsMobile';
+import { GameButton } from '../ui/GameButton';
 
 const TOKENS = Object.keys(TOKEN_HEX) as TokenType[];
 
@@ -75,7 +76,6 @@ export function MainMenu() {
   // difference between mobile & desktop is sizing, which is passed in via `m`.
   const controls = (m: boolean) => (
     <>
-      <style>{PRESS_CSS}</style>
       <input
         className="mm-input"
         placeholder="Enter your name..."
@@ -95,9 +95,9 @@ export function MainMenu() {
           />
         ))}
       </div>
-      <button className="mm-btn mm-btn-create" onClick={create} disabled={!canCreate} style={createBtn(m, canCreate)}>
+      <GameButton variant="primary" fullWidth onClick={create} disabled={!canCreate}>
         Create Room
-      </button>
+      </GameButton>
       <div style={joinRow(m)}>
         <input
           className="mm-input"
@@ -107,9 +107,9 @@ export function MainMenu() {
           onChange={(e) => setCode(e.target.value.toUpperCase())}
           style={{ ...(m ? inputMobile : input), flex: 1, minWidth: 0, textTransform: 'uppercase', letterSpacing: '0.2em', textAlign: 'center' }}
         />
-        <button className="mm-btn mm-btn-join" onClick={join} disabled={!canJoin} style={joinBtn(m, canJoin)}>
+        <GameButton variant="secondary" onClick={join} disabled={!canJoin} style={{ flexShrink: 0 }}>
           Join
-        </button>
+        </GameButton>
       </div>
       {error && <div role="alert" style={errorText(m)}>{error}</div>}
     </>
@@ -132,20 +132,6 @@ export function MainMenu() {
 
 const FONT = FONT_FAMILY;
 
-// Hover / press feedback that inline styles can't express. Scoped to the
-// menu's classes; :disabled buttons are excluded so dimmed states stay put.
-const PRESS_CSS = `
-.mm-btn:not(:disabled):hover { filter: brightness(1.05); }
-.mm-btn:not(:disabled):active { transform: translateY(3px); box-shadow: 0 1px 0 rgba(0,0,0,0.3); }
-.mm-swatch:hover { transform: scale(1.12); }
-.mm-swatch:active { transform: scale(1.05); }
-.mm-input::placeholder { color: #a89a72; }
-.mm-input:focus { border-color: #d4af37; box-shadow: 0 0 0 3px rgba(212,175,55,0.28); }
-`;
-
-const GOLD = '#d4af37';
-const GOLD_BRIGHT = '#f0d060';
-const GOLD_DARK = '#9a6b1e';
 const RED = '#c53a26';
 const HERO_URL = '/images/home-hero.webp';
 
@@ -272,58 +258,10 @@ const swatch = (m: boolean, selected: boolean, hex: string): React.CSSProperties
   };
 };
 
-// ── Buttons ──
-const createBtn = (m: boolean, enabled: boolean): React.CSSProperties => ({
-  fontFamily: FONT,
-  fontWeight: 800,
-  fontSize: m ? 18 : 17,
-  letterSpacing: '0.04em',
-  textTransform: 'uppercase',
-  color: enabled ? '#5a3d0a' : 'rgba(90,61,10,0.55)',
-  background: enabled
-    ? `linear-gradient(180deg, ${GOLD_BRIGHT} 0%, ${GOLD} 100%)`
-    : 'linear-gradient(180deg, #d9cfb0 0%, #c3b78f 100%)',
-  border: `2px solid ${enabled ? GOLD_DARK : '#a99e78'}`,
-  borderRadius: 16,
-  padding: m ? '15px 22px' : '13px 22px',
-  width: '100%',
-  minHeight: m ? 52 : undefined,
-  cursor: enabled ? 'pointer' : 'not-allowed',
-  opacity: enabled ? 1 : 0.7,
-  boxShadow: enabled
-    ? '0 6px 0 rgba(154,107,30,0.55), 0 8px 18px rgba(0,0,0,0.35), inset 0 1px 0 rgba(255,255,255,0.6)'
-    : '0 3px 0 rgba(0,0,0,0.15)',
-  transition: 'transform 0.08s ease, box-shadow 0.08s ease',
-  touchAction: 'manipulation',
-});
-
 const joinRow = (m: boolean): React.CSSProperties => ({
   display: 'flex',
   gap: m ? 10 : 8,
   width: '100%',
-});
-const joinBtn = (m: boolean, enabled: boolean): React.CSSProperties => ({
-  fontFamily: FONT,
-  fontWeight: 800,
-  fontSize: m ? 16 : 15,
-  letterSpacing: '0.04em',
-  textTransform: 'uppercase',
-  color: enabled ? '#fff' : 'rgba(255,255,255,0.7)',
-  background: enabled
-    ? 'linear-gradient(180deg, #f0a83c 0%, #e07d0a 100%)'
-    : 'linear-gradient(180deg, #d9c9b0 0%, #c3ad8f 100%)',
-  border: `2px solid ${enabled ? '#a85a06' : '#a99e78'}`,
-  borderRadius: 14,
-  padding: m ? '13px 18px' : '11px 18px',
-  minHeight: m ? 50 : undefined,
-  flexShrink: 0,
-  cursor: enabled ? 'pointer' : 'not-allowed',
-  opacity: enabled ? 1 : 0.7,
-  boxShadow: enabled
-    ? '0 4px 0 rgba(168,90,6,0.55), 0 6px 14px rgba(0,0,0,0.3), inset 0 1px 0 rgba(255,255,255,0.4)'
-    : '0 3px 0 rgba(0,0,0,0.12)',
-  transition: 'transform 0.08s ease, box-shadow 0.08s ease',
-  touchAction: 'manipulation',
 });
 
 const errorText = (m: boolean): React.CSSProperties => ({

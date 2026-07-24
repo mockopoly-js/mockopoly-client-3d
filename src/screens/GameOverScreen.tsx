@@ -4,6 +4,7 @@ import { formatMoney } from '../utils/format';
 import type { Player, TokenType } from '../types/GameState';
 import { FONT_FAMILY } from '../constants/fonts';
 import { useIsMobile } from '../ui/useIsMobile';
+import { GameButton } from '../ui/GameButton';
 
 export function GameOverScreen() {
   const gameOver = useGameStore((s) => s.gameOver);
@@ -35,7 +36,7 @@ export function GameOverScreen() {
             </div>
           ))}
         </div>
-        <button onClick={reset} style={btnMobile}>Back to Menu</button>
+        <GameButton variant="primary" onClick={reset}>Back to Menu</GameButton>
       </div>
     );
   }
@@ -57,7 +58,7 @@ export function GameOverScreen() {
           </div>
         ))}
       </div>
-      <button onClick={reset} style={btn}>Back to Menu</button>
+      <GameButton variant="primary" onClick={reset}>Back to Menu</GameButton>
     </div>
   );
 }
@@ -71,7 +72,6 @@ const wrap: React.CSSProperties = {
 const card: React.CSSProperties = { background: '#12121e', borderRadius: 16, padding: 20, width: 340, display: 'flex', flexDirection: 'column', gap: 6 };
 const row: React.CSSProperties = { display: 'flex', alignItems: 'center', gap: 10, padding: '6px 0' };
 const dot: React.CSSProperties = { width: 18, height: 18, borderRadius: '50%', flexShrink: 0 };
-const btn: React.CSSProperties = { fontFamily: 'inherit', fontWeight: 800, fontSize: 15, color: '#08080f', background: '#d4af37', border: 'none', borderRadius: 14, padding: '12px 26px', cursor: 'pointer' };
 
 // ── Mobile styles ──
 const wrapMobile: React.CSSProperties = {
@@ -100,17 +100,4 @@ const cardMobile: React.CSSProperties = {
   display: 'flex',
   flexDirection: 'column',
   gap: 6,
-};
-const btnMobile: React.CSSProperties = {
-  fontFamily: 'inherit',
-  fontWeight: 800,
-  fontSize: 16,
-  color: '#08080f',
-  background: '#d4af37',
-  border: 'none',
-  borderRadius: 14,
-  padding: '14px 32px',
-  cursor: 'pointer',
-  minHeight: 50,
-  touchAction: 'manipulation',
 };

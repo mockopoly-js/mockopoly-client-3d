@@ -3,10 +3,11 @@ import { socketManager } from '../network/SocketManager';
 import { gameBus } from '../state/gameBus';
 import { useGameStore, selectMyPlayer } from '../state/gameStore';
 import { EVENTS } from '../types/SocketEvents';
-import { TOKEN_HEX } from '../constants/theme';
+import { TOKEN_HEX, GOLD } from '../constants/theme';
 import type { Player, TokenType } from '../types/GameState';
 import { FONT_FAMILY } from '../constants/fonts';
 import { useIsMobile } from '../ui/useIsMobile';
+import { GameButton } from '../ui/GameButton';
 
 export function Lobby() {
   const state = useGameStore((s) => s.state);
@@ -71,15 +72,15 @@ export function Lobby() {
             ? <div style={{ fontWeight: 800, fontSize: 20, color: '#e07d0a' }}>Starting in {countdown}...</div>
             : (
               <div style={{ display: 'flex', flexDirection: 'column', gap: 10, width: '100%', maxWidth: 400 }}>
-                <button onClick={toggleReady} disabled={locked} style={{ ...btnMobile, background: me?.isReady ? '#2a8855' : '#2a2a42', color: '#fff' }}>
+                <GameButton variant={me?.isReady ? 'success' : 'primary'} onClick={toggleReady} disabled={locked} fullWidth>
                   {me?.isReady ? 'Ready ✓' : 'Ready'}
-                </button>
+                </GameButton>
                 {isHost && (
-                  <button onClick={start} disabled={locked || players.length < 2} style={{ ...btnMobile, background: '#e07d0a', color: '#fff' }}>
+                  <GameButton variant="primary" onClick={start} disabled={locked || players.length < 2} fullWidth>
                     Start Game
-                  </button>
+                  </GameButton>
                 )}
-                <button onClick={leave} disabled={locked} style={{ ...btnMobile, background: '#e7dcbf', color: '#3b3224' }}>Back</button>
+                <GameButton variant="tertiary" onClick={leave} disabled={locked} fullWidth>Back</GameButton>
               </div>
             )}
         </div>
@@ -99,15 +100,15 @@ export function Lobby() {
           ? <div style={{ fontWeight: 800, fontSize: 20, color: '#e07d0a' }}>Starting in {countdown}...</div>
           : (
             <div style={{ display: 'flex', gap: 10 }}>
-              <button onClick={toggleReady} disabled={locked} style={{ ...btn, background: me?.isReady ? '#2a8855' : '#2a2a42', color: '#fff' }}>
+              <GameButton variant={me?.isReady ? 'success' : 'primary'} onClick={toggleReady} disabled={locked} fullWidth>
                 {me?.isReady ? 'Ready ✓' : 'Ready'}
-              </button>
+              </GameButton>
               {isHost && (
-                <button onClick={start} disabled={locked || players.length < 2} style={{ ...btn, background: '#e07d0a', color: '#fff' }}>
+                <GameButton variant="primary" onClick={start} disabled={locked || players.length < 2} fullWidth>
                   Start Game
-                </button>
+                </GameButton>
               )}
-              <button onClick={leave} disabled={locked} style={{ ...btn, background: '#e7dcbf', color: '#3b3224' }}>Back</button>
+              <GameButton variant="tertiary" onClick={leave} disabled={locked} fullWidth>Back</GameButton>
             </div>
           )}
       </div>
@@ -116,7 +117,6 @@ export function Lobby() {
 }
 
 const FONT = FONT_FAMILY;
-const GOLD = '#d4af37';
 const BG_URL = '/images/lobby-bg.webp';
 
 // ── Backdrop (toy-city diorama; the empty plaza sits dead-center) ──
@@ -158,11 +158,10 @@ const panel: React.CSSProperties = {
   WebkitBackdropFilter: 'blur(2px)',
 };
 
-const codeChip: React.CSSProperties = { fontFamily: FONT, fontWeight: 800, border: 'none', background: '#fbf6ec', borderRadius: 999, padding: '8px 16px', cursor: 'pointer' };
+const codeChip: React.CSSProperties = { fontFamily: FONT, fontWeight: 800, border: `1px solid ${GOLD}`, background: '#fbf6ec', borderRadius: 999, padding: '8px 16px', cursor: 'pointer' };
 const slot: React.CSSProperties = { display: 'flex', alignItems: 'center', gap: 10, background: '#fbf6ec', borderRadius: 14, padding: '10px 14px' };
 const emptySlot: React.CSSProperties = { ...slot, justifyContent: 'center', color: '#9a8f7c', fontWeight: 700 };
 const dot: React.CSSProperties = { width: 22, height: 22, borderRadius: '50%' };
-const btn: React.CSSProperties = { fontFamily: FONT, fontWeight: 800, border: 'none', borderRadius: 14, padding: '12px 20px', cursor: 'pointer' };
 
 // ── Mobile: same fixed bg (top center) with a centered scrim panel ──
 const wrapMobile: React.CSSProperties = {
@@ -194,15 +193,10 @@ const panelMobile: React.CSSProperties = {
   WebkitBackdropFilter: 'blur(2px)',
 };
 const codeChipMobile: React.CSSProperties = {
-  fontFamily: FONT, fontWeight: 800, border: 'none', background: '#fbf6ec',
+  fontFamily: FONT, fontWeight: 800, border: `1px solid ${GOLD}`, background: '#fbf6ec',
   borderRadius: 999, padding: '12px 20px', cursor: 'pointer', fontSize: 16, minHeight: 44,
   touchAction: 'manipulation',
 };
 const slotMobile: React.CSSProperties = { display: 'flex', alignItems: 'center', gap: 10, background: '#fbf6ec', borderRadius: 14, padding: '13px 14px' };
 const emptySlotMobile: React.CSSProperties = { ...slotMobile, justifyContent: 'center', color: '#9a8f7c', fontWeight: 700 };
 const dotMobile: React.CSSProperties = { width: 26, height: 26, borderRadius: '50%', flexShrink: 0 };
-const btnMobile: React.CSSProperties = {
-  fontFamily: FONT, fontWeight: 800, border: 'none', borderRadius: 14,
-  padding: '14px 20px', cursor: 'pointer', fontSize: 16, minHeight: 50,
-  touchAction: 'manipulation',
-};
