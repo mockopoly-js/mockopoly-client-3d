@@ -11,6 +11,7 @@ export function TurnHud() {
   const isMyTurn = useGameStore(selectIsMyTurn);
   const current = useGameStore(selectCurrentPlayer);
   const turn = useGameStore((s) => s.state?.turn);
+  const freeParkingPool = useGameStore((s) => s.state?.freeParkingPool ?? 0);
   const isMobile = useIsMobile();
 
   if (!turn) return null;
@@ -35,6 +36,11 @@ export function TurnHud() {
           <span style={{ fontWeight: 800, color: isMyTurn ? '#d4af37' : '#e8e8f0' }}>
             {isMyTurn ? 'Your turn' : `${current?.name ?? '…'}'s turn`}
           </span>
+          {freeParkingPool > 0 && (
+            <span style={fpPill}>
+              FP: {formatMoney(freeParkingPool)}
+            </span>
+          )}
           <span style={{ fontWeight: 800, fontVariantNumeric: 'tabular-nums' }}>
             {me ? formatMoney(me.money) : ''}
           </span>
@@ -68,6 +74,11 @@ export function TurnHud() {
         <span style={{ fontWeight: 800, color: isMyTurn ? '#d4af37' : '#e8e8f0' }}>
           {isMyTurn ? 'Your turn' : `${current?.name ?? '…'}'s turn`}
         </span>
+        {freeParkingPool > 0 && (
+          <span style={fpPill}>
+            FP: {formatMoney(freeParkingPool)}
+          </span>
+        )}
         <span style={{ fontWeight: 800, fontVariantNumeric: 'tabular-nums' }}>
           {me ? formatMoney(me.money) : ''}
         </span>
@@ -131,6 +142,13 @@ const btnMobile: React.CSSProperties = {
   fontFamily: FONT, fontWeight: 800, fontSize: 16, border: 'none',
   borderRadius: 14, padding: '14px 0', cursor: 'pointer', flex: 1,
   minHeight: 44,
+};
+
+// ── Free Parking pill ──
+const fpPill: React.CSSProperties = {
+  fontSize: 11, fontWeight: 800, background: '#1a3020', color: '#46b16a',
+  border: '1px solid #46b16a', borderRadius: 999, padding: '2px 8px',
+  fontVariantNumeric: 'tabular-nums',
 };
 
 // ── Shared state styles ──

@@ -115,6 +115,7 @@ export default function App() {
       <ToastLayer />
       <MuteButton />
       <RotateHint />
+      <DevHacksPanel />
       {screen === 'menu' && <MainMenu />}
       {screen === 'lobby' && <Lobby />}
       {screen === 'game' && (
@@ -128,7 +129,6 @@ export default function App() {
           <PlayerPods />
           <GameLog />
           <MortgagePanel />
-          <DevHacksPanel />
           <HudButtons />
           <TradePanel />
           <PartnershipPanel />

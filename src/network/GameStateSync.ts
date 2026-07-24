@@ -20,6 +20,7 @@ import type {
   S_PartnershipDissolved, S_PartnershipRentSplit, S_PartnershipBuildCostSplit,
   S_DealOffered, S_DealCountered, S_DealAccepted,
   S_DealRejected, S_DealCompleted, S_DealCancelled,
+  S_TradeOffered, S_TradeCountered, S_TradeResolved,
 } from '../types/SocketEvents';
 
 // ─── Game State Sync ─────────────────────────────────────────────────────────
@@ -91,6 +92,17 @@ class GameStateSync {
     });
     socketManager.on(EVENTS.PROPERTY_RENT_COLLECTED, (data: S_RentCollected) => {
       gameBus.emit('rent-collected', data);
+      const myId = store().myPlayerId;
+      if (myId && (data.fromId === myId || data.toId === myId)) {
+        const players = store().state?.players;
+        const payer = players?.find(p => p.id === data.fromId);
+        const owner = players?.find(p => p.id === data.toId);
+        if (data.fromId === myId && owner) {
+          store().addToast(`You paid ${formatMoney(data.amount)} to ${owner.name}`, 'warning');
+        } else if (data.toId === myId && payer) {
+          store().addToast(`${payer.name} paid you ${formatMoney(data.amount)}`, 'success');
+        }
+      }
     });
     socketManager.on(EVENTS.PROPERTY_AUCTION_START, (data: S_AuctionStart) => {
       gameBus.emit('auction-start', data);
@@ -229,6 +241,28 @@ class GameStateSync {
     socketManager.on(EVENTS.DEAL_CANCELLED, (_data: S_DealCancelled) => {
       gameBus.emit('deal-cancelled', _data);
       store().addToast('Rent deal cancelled', 'info');
+    });
+
+    // ── Trades ─────────────────────────────────────────────────────────────────
+    socketManager.on(EVENTS.TRADE_OFFERED, (data: S_TradeOffered) => {
+      const from = store().state?.players.find(p => p.id === data.offer.fromPlayerId);
+      const to = store().state?.players.find(p => p.id === data.offer.toPlayerId);
+      store().addToast(`Trade offered${from ? ` by ${from.name}` : ''}${to ? ` to ${to.name}` : ''}`, 'info');
+    });
+    socketManager.on(EVENTS.TRADE_COUNTERED, (_data: S_TradeCountered) => {
+      store().addToast('Trade countered', 'warning');
+    });
+    socketManager.on(EVENTS.TRADE_ACCEPTED, (_data: S_TradeResolved) => {
+      store().addToast('Trade accepted', 'success');
+    });
+    socketManager.on(EVENTS.TRADE_REJECTED, (_data: S_TradeResolved) => {
+      store().addToast('Trade rejected', 'warning');
+    });
+    socketManager.on(EVENTS.TRADE_COMPLETED, (_data: S_TradeResolved) => {
+      store().addToast('Trade completed', 'success');
+    });
+    socketManager.on(EVENTS.TRADE_CANCELLED, (_data: S_TradeResolved) => {
+      store().addToast('Trade cancelled', 'info');
     });
 
     // ── Dev Hacks persistence ─────────────────────────────────────────────────

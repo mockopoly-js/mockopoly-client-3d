@@ -118,4 +118,27 @@ describe('TurnHud', () => {
     expect(screen.queryByRole('button', { name: /pay fine/i })).toBeNull();
     expect(screen.queryByRole('button', { name: /use card/i })).toBeNull();
   });
+
+  it('shows Free Parking pill when freeParkingPool > 0', () => {
+    useGameStore.getState().update({
+      roomCode: 'ABCD', status: 'in-progress',
+      players: [{ id: 'p1', name: 'Maya', token: 'red', money: 15_000_000, position: 0, isBankrupt: false, isConnected: true, isJailed: false, jailTurns: 0, jailCardCount: 0 }],
+      turn: { currentPlayerId: 'p1', phase: 'waiting', hasRolled: false },
+      config: { maxPlayers: 4 }, properties: [],
+      freeParkingPool: 5_000_000,
+    } as unknown as import('../types/GameState').GameState);
+    useGameStore.getState().setMyPlayerId('p1');
+    render(<TurnHud />);
+    // The pill renders "FP: " and "£5.000M" as adjacent text nodes in one span
+    expect(screen.getByText(/FP:/)).toBeTruthy();
+    // Use getAllByText since £5.000M also appears in the player money display
+    const fiveM = screen.getAllByText(/5\.000M/);
+    expect(fiveM.length).toBeGreaterThanOrEqual(1);
+  });
+
+  it('does NOT show Free Parking pill when freeParkingPool is 0', () => {
+    setState({ phase: 'waiting', hasRolled: false });
+    render(<TurnHud />);
+    expect(screen.queryByText(/FP:/)).toBeNull();
+  });
 });
