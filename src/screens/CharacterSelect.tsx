@@ -1,4 +1,5 @@
 import { lazy, Suspense, useState, useMemo, useCallback } from 'react';
+import { Lock, Star } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { useGameStore } from '../state/gameStore';
 import { CHARACTERS, CHARACTER_CATEGORIES, resolveCharacter } from '../constants/characters';
@@ -185,7 +186,7 @@ export function CharacterSelect() {
                     aria-label={locked ? 'Locked' : 'Premium'}
                     data-testid="skin-badge"
                   >
-                    {locked ? '🔒' : '★'}
+                    {locked ? <Lock size={12} aria-hidden /> : <Star size={12} aria-hidden />}
                   </span>
                 )}
               </span>
@@ -398,12 +399,14 @@ const s = {
     position: 'absolute',
     top: 4,
     right: 4,
-    fontSize: 12,
     lineHeight: 1,
     padding: '3px 5px',
     borderRadius: 8,
     background: locked ? 'rgba(0,0,0,0.65)' : glow(GOLD, 0.85),
     color: locked ? '#fff' : '#1a1400',
+    display: 'inline-flex',
+    alignItems: 'center',
+    justifyContent: 'center',
   }),
 
   cardName: {

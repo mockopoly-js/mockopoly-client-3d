@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { X } from 'lucide-react';
 import { useGameStore } from '../state/gameStore';
 import { BOARD_SPACES } from '../constants/board';
 import { COLOR_GROUP_HEX } from '../constants/theme';
@@ -44,7 +45,7 @@ export function PropertyListPanel() {
           <div style={drawerWrap}>
             <div style={drawerHdr}>
               <span style={hdrText}>Your properties</span>
-              <button style={closeBtn} onClick={() => setOpen(false)} aria-label="Close properties">×</button>
+              <button style={closeBtn} onClick={() => setOpen(false)} aria-label="Close properties"><X size={16} aria-hidden /></button>
             </div>
             {rows.map((p) => {
               const space = BOARD_SPACES[p.spaceIndex];
@@ -126,4 +127,4 @@ const drawerHdr: React.CSSProperties = {
   display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8,
 };
 const hdrText: React.CSSProperties = { fontSize: 10, letterSpacing: '.12em', textTransform: 'uppercase', color: '#8888a0', fontWeight: 800 };
-const closeBtn: React.CSSProperties = { background: 'none', border: 'none', color: '#8888a0', fontSize: 20, cursor: 'pointer', lineHeight: 1 };
+const closeBtn: React.CSSProperties = { background: 'none', border: 'none', color: '#8888a0', cursor: 'pointer', lineHeight: 1, display: 'inline-flex', alignItems: 'center', padding: 0 };
