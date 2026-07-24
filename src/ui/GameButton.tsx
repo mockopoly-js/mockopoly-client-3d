@@ -2,7 +2,7 @@ import type { CSSProperties, ReactNode } from 'react';
 import { FONT_FAMILY } from '../constants/fonts';
 import { useIsMobile } from './useIsMobile';
 
-export type GameButtonVariant = 'primary' | 'secondary' | 'success' | 'tertiary';
+export type GameButtonVariant = 'primary' | 'secondary' | 'success' | 'tertiary' | 'dark';
 
 interface GameButtonProps {
   variant?: GameButtonVariant;
@@ -28,6 +28,16 @@ interface VariantTokens {
 }
 
 const VARIANTS: Record<GameButtonVariant, VariantTokens> = {
+  // Dark — in-game HUD (End Turn, Pay Fine, Use Card, Trade, Partnership, Deal)
+  dark: {
+    gradientEnabled: 'linear-gradient(180deg, #2a2a42 0%, #12121e 100%)',
+    gradientDisabled: 'linear-gradient(180deg, #1e1e2e 0%, #0e0e18 100%)',
+    color: '#e8e8f0',
+    colorDisabled: 'rgba(232,232,240,0.4)',
+    border: '#3a3a58',
+    borderDisabled: '#252538',
+    shadowEnabled: '0 5px 0 rgba(0,0,0,0.55), 0 7px 16px rgba(0,0,0,0.4), inset 0 1px 0 rgba(255,255,255,0.08)',
+  },
   // Gold — Create Room, Start Game, Back to Menu
   primary: {
     gradientEnabled: 'linear-gradient(180deg, #f0d060 0%, #d4af37 100%)',

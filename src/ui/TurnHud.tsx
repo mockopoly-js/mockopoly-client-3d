@@ -5,6 +5,7 @@ import { EVENTS } from '../types/SocketEvents';
 import { formatMoney } from '../utils/format';
 import { useIsMobile } from './useIsMobile';
 import { FONT_FAMILY } from '../constants/fonts';
+import { GameButton } from './GameButton';
 
 export function TurnHud() {
   const me = useGameStore(selectMyPlayer);
@@ -48,21 +49,21 @@ export function TurnHud() {
         {/* Mobile action buttons are rendered inside the bottom bar — see hotbarMobile */}
         <div style={hotbarMobile}>
           {showJailActions && (
-            <button onClick={payFine} style={{ ...btnMobile, ...primary }}>
+            <GameButton variant="dark" onClick={payFine} style={btnMobileOverride}>
               Pay Fine (£500K)
-            </button>
+            </GameButton>
           )}
           {showJailActions && (
-            <button onClick={useCard} disabled={jailCardCount === 0} style={{ ...btnMobile, ...(jailCardCount > 0 ? primary : disabledStyle) }}>
+            <GameButton variant="dark" onClick={useCard} disabled={jailCardCount === 0} style={btnMobileOverride}>
               Use Card
-            </button>
+            </GameButton>
           )}
-          <button onClick={roll} disabled={!canRoll} style={{ ...btnMobile, ...(canRoll ? primary : disabledStyle) }}>
+          <GameButton variant="secondary" onClick={roll} disabled={!canRoll} style={btnMobileOverride}>
             Roll
-          </button>
-          <button onClick={end} disabled={!canEnd} style={{ ...btnMobile, ...(canEnd ? primary : disabledStyle) }}>
+          </GameButton>
+          <GameButton variant="dark" onClick={end} disabled={!canEnd} style={btnMobileOverride}>
             End Turn
-          </button>
+          </GameButton>
         </div>
       </>
     );
@@ -85,21 +86,21 @@ export function TurnHud() {
       </div>
       <div style={hotbar}>
         {showJailActions && (
-          <button onClick={payFine} style={{ ...btn, ...primary }}>
+          <GameButton variant="dark" onClick={payFine}>
             Pay Fine (£500K)
-          </button>
+          </GameButton>
         )}
         {showJailActions && (
-          <button onClick={useCard} disabled={jailCardCount === 0} style={{ ...btn, ...(jailCardCount > 0 ? primary : disabledStyle) }}>
+          <GameButton variant="dark" onClick={useCard} disabled={jailCardCount === 0}>
             Use Card
-          </button>
+          </GameButton>
         )}
-        <button onClick={roll} disabled={!canRoll} style={{ ...btn, ...(canRoll ? primary : disabledStyle) }}>
+        <GameButton variant="secondary" onClick={roll} disabled={!canRoll}>
           Roll
-        </button>
-        <button onClick={end} disabled={!canEnd} style={{ ...btn, ...(canEnd ? primary : disabledStyle) }}>
+        </GameButton>
+        <GameButton variant="dark" onClick={end} disabled={!canEnd}>
           End Turn
-        </button>
+        </GameButton>
       </div>
     </>
   );
@@ -116,10 +117,6 @@ const topBar: React.CSSProperties = {
 const hotbar: React.CSSProperties = {
   position: 'fixed', bottom: 16, left: '50%', transform: 'translateX(-50%)',
   display: 'flex', gap: 10, fontFamily: FONT, zIndex: 30,
-};
-const btn: React.CSSProperties = {
-  fontFamily: FONT, fontWeight: 800, fontSize: 15, border: 'none',
-  borderRadius: 14, padding: '12px 22px', cursor: 'pointer',
 };
 
 // ── Mobile styles ──
@@ -138,9 +135,10 @@ const hotbarMobile: React.CSSProperties = {
   padding: '10px 16px',
   paddingBottom: 'calc(10px + env(safe-area-inset-bottom))',
 };
-const btnMobile: React.CSSProperties = {
-  fontFamily: FONT, fontWeight: 800, fontSize: 16, border: 'none',
-  borderRadius: 14, padding: '14px 0', cursor: 'pointer', flex: 1,
+
+// On mobile, override GameButton sizing to fill flex slots (flex:1, full height)
+const btnMobileOverride: React.CSSProperties = {
+  flex: 1,
   minHeight: 44,
 };
 
@@ -150,7 +148,3 @@ const fpPill: React.CSSProperties = {
   border: '1px solid #46b16a', borderRadius: 999, padding: '2px 8px',
   fontVariantNumeric: 'tabular-nums',
 };
-
-// ── Shared state styles ──
-const primary: React.CSSProperties = { background: '#e07d0a', color: '#fff' };
-const disabledStyle: React.CSSProperties = { background: '#2a2a42', color: '#6a6a86', cursor: 'default' };
