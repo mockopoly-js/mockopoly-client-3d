@@ -17,18 +17,20 @@ const RING_INNER = 0.26; // inner radius of the identity ring
 const RING_OUTER = 0.32; // outer radius (~0.06 band — thin, not fat)
 
 // ── Walk-motion tuning ───────────────────────────────────────────────────────
-// SERVER_MOVE_WINDOW_PER_TILE_MS is the client mirror of the server's
-// ANIMATION_TOKEN_MOVE_PER_SPACE_MS: the server gates the next GAME_STATE_UPDATE
-// by (this × spaces), so the whole walk MUST finish within that window or the
-// token gets snapped mid-stride by an incoming snapshot. This value is the
-// authoritative per-tile budget — do NOT exceed it.
-const SERVER_MOVE_WINDOW_PER_TILE_MS = 150; // ANIMATION_TOKEN_MOVE_PER_SPACE_MS
+// SERVER_MOVE_WINDOW_PER_TILE_MS mirrors the server's ANIMATION_TOKEN_MOVE_PER_SPACE_MS.
+// The server gates the next GAME_STATE_UPDATE by (this × spaces); the walk now
+// takes LONGER than that window on purpose — the authoritative snapshot lands
+// BEFORE the walk finishes. That is safe because the reconcile branch (else
+// below) only runs when there is NO in-flight anim (anims.current[id] absent),
+// so the walk owns the token's position until completion and is never interrupted.
+const SERVER_MOVE_WINDOW_PER_TILE_MS = 150; // ANIMATION_TOKEN_MOVE_PER_SPACE_MS (kept for reference)
 
-// WALK_MS_PER_TILE is the desired glide time per board tile. It is CLAMPED to
-// the server budget per move (perTile = min(WALK_MS_PER_TILE, windowMs/steps)),
-// so a slower walk never overruns the sync window. Kept equal to the server
-// budget so typical 1–12 tile moves land exactly in lockstep and feel snappy.
-const WALK_MS_PER_TILE = 150;
+// WALK_MS_PER_TILE is the desired glide time per board tile. Speed is driven
+// SOLELY by this constant — the server-window cap has been removed. The walk
+// intentionally outlasts the server's 150 ms/tile gate; the in-flight walk
+// holds position until completion so the arriving GAME_STATE_UPDATE never snaps
+// the token mid-stride (the reconcile else-branch is guarded by !anims.current).
+const WALK_MS_PER_TILE = 320;
 
 // Yaw turn rate: fraction of the remaining angle closed per 60fps-equivalent
 // frame (delta-scaled below). High so the character finishes rotating to the
@@ -52,8 +54,11 @@ interface Anim {
   seg: number;
   /** ms elapsed into the current segment. */
   segElapsed: number;
-  /** ms budget per segment (clamped to the server window). */
+  /** ms budget per segment. */
   perTile: number;
+  /** Board tile index of the destination (used on completion to compute the
+   *  next-tile rest facing — Fix B). */
+  toTile: number;
 }
 
 /** Shortest-arc step of `cur` toward `target` by `frac` (delta-scaled), with an
@@ -120,19 +125,22 @@ function destOffset(playerId: string, to: number, players: Player[]): [number, n
  * build `buildTilePath(from, to)` → an ordered polyline of world-space tile
  * centers (A, A+1, …, B, wrapping past GO so corners are rounded and the board
  * is never cut across diagonally). Each frame the token glides along the current
- * segment at a CONSTANT pace (`perTile` ms per tile, clamped to the server sync
- * window) with its feet flat on the board — there is NO vertical hop arc; y is
- * pinned at BASE_Y throughout. The Walk animation clip supplies all the body
- * motion. While walking the store snapshot (which already holds the final tile)
- * is ignored; when the path completes we reconcile to `tileToWorld(position)` +
- * stack offset so any drift is corrected.
+ * segment at a CONSTANT pace (`WALK_MS_PER_TILE` ms per tile) with its feet flat
+ * on the board — there is NO vertical hop arc; y is pinned at BASE_Y throughout.
+ * The Walk animation clip supplies all the body motion. While walking the store
+ * snapshot (which already holds the final tile) is ignored — the reconcile else-
+ * branch is guarded by `!anims.current[id]` so the in-flight walk owns the
+ * token's position until completion; the now-longer walk never gets snapped
+ * mid-stride by an arriving GAME_STATE_UPDATE.
  *
- * FACING turns AT the corner: the target heading is the tangent of the CURRENT
- * segment (direction from pts[seg] → pts[seg+1]) plus FACING_OFFSET. Because that
- * tangent changes discretely at a corner vertex, and we close the yaw error with
- * a fast delta-scaled lerp (+ an epsilon snap), the character finishes turning
- * right as it reaches the corner tile — not one tile later. At rest the facing is
- * held toward the next tile (consistent with the last walked segment).
+ * FACING turns AT the corner and PIVOTS ON ARRIVAL: while walking, target yaw =
+ * current-segment tangent (pts[seg]→pts[seg+1]) + FACING_OFFSET. On walk
+ * completion the target yaw is retargeted to the NEXT-TILE direction from the
+ * destination (tileToWorld(to+1) - tileToWorld(to)), identical to the mount-seed
+ * convention. The yaw lerp (delta-scaled, epsilon-snapped) continues running
+ * EVEN WHILE IDLE, so the token visibly pivots at the corner on arrival and
+ * settles without jitter. Straight-edge landings are unaffected (next-tile dir ==
+ * incoming heading).
  *
  * Clip switching does NOT touch the position lockstep: it is a per-player React
  * state map (`moving`) flipped to true when a walk starts (in the `player-moved`
@@ -165,6 +173,11 @@ export function PlayerTokens() {
   const anims = useRef<Record<string, Anim>>({});
   const seeded = useRef<Record<string, boolean>>({});
   const facing = useRef<Record<string, number>>({}); // last committed heading (y-rot)
+  // Per-token TARGET yaw — decoupled from the committed heading so idle tokens
+  // can continue lerping toward the desired rest direction (next-tile facing)
+  // even when not walking. While walking, target = current-segment tangent;
+  // on walk completion, target = next-tile direction from destination.
+  const targetYaw = useRef<Record<string, number>>({});
   // Imperative handles to each character, for one-shot Victory/Defeat clips.
   const chars = useRef<Record<string, CharacterTokenHandle | null>>({});
 
@@ -218,14 +231,11 @@ export function PlayerTokens() {
       // exactly where the token will rest.
       const [dox, doz] = destOffset(d.playerId, d.to, playersRef.current);
 
-      const steps = pts.length - 1; // number of segments (tiles walked)
-      // Clamp per-tile time to the server sync window so the whole walk finishes
-      // before the next GAME_STATE_UPDATE arrives (never snapped mid-stride).
-      // With the directed path, `steps` now equals the server's ACTUAL moved-space
-      // count in BOTH directions, so windowMs/steps lines the walk up with the
-      // server's ANIMATION_TOKEN_MOVE_PER_SPACE_MS × actualSpaces gate again.
-      const windowMs = SERVER_MOVE_WINDOW_PER_TILE_MS * steps;
-      const perTile = Math.min(WALK_MS_PER_TILE, windowMs / steps);
+      // perTile is driven solely by WALK_MS_PER_TILE — no server-window cap.
+      // The walk intentionally outlasts the server's 150 ms/tile gate; the
+      // reconcile else-branch only runs when anims.current[id] is absent, so
+      // the in-flight walk owns the token's position and is never interrupted.
+      const perTile = WALK_MS_PER_TILE;
 
       anims.current[d.playerId] = {
         pts,
@@ -233,6 +243,7 @@ export function PlayerTokens() {
         seg: 0,
         segElapsed: 0,
         perTile,
+        toTile: d.to,
       };
 
       // Flip to 'Walk' (only if not already flagged — avoids a redundant render).
@@ -298,14 +309,21 @@ export function PlayerTokens() {
         const dx = b.x - a.x;
         const dz = b.z - a.z;
         if (Math.abs(dx) > 1e-6 || Math.abs(dz) > 1e-6) {
-          const target = Math.atan2(dx, dz) + FACING_OFFSET; // three: +z is "forward" for atan2(x,z)
-          const cur = facing.current[p.id] ?? target;
-          // Frame-rate aware: scale the per-frame fraction to 60fps so the turn
-          // rate is consistent regardless of refresh rate. Clamp to [0,1].
-          const frac = Math.min(1, YAW_TURN_PER_FRAME * (dtMs / (1000 / 60)));
-          const next = stepYaw(cur, target, frac);
-          group.rotation.y = next;
-          facing.current[p.id] = next;
+          // While walking: target = current-segment tangent.
+          targetYaw.current[p.id] = Math.atan2(dx, dz) + FACING_OFFSET;
+        }
+
+        // Apply yaw lerp toward targetYaw (frame-rate aware, epsilon snap).
+        // Runs every frame whether moving or idle so the turn settles smoothly.
+        {
+          const ty = targetYaw.current[p.id];
+          if (ty !== undefined) {
+            const cur = facing.current[p.id] ?? ty;
+            const frac = Math.min(1, YAW_TURN_PER_FRAME * (dtMs / (1000 / 60)));
+            const next = stepYaw(cur, ty, frac);
+            group.rotation.y = next;
+            facing.current[p.id] = next;
+          }
         }
 
         seeded.current[p.id] = true;
@@ -318,6 +336,22 @@ export function PlayerTokens() {
           group.position.x = b.x + anim.destOffset.x;
           group.position.z = b.z + anim.destOffset.z;
           delete anims.current[p.id];
+
+          // REST FACING (Fix B): on arrival, retarget yaw to the NEXT-tile
+          // direction from the destination so the token pivots at the corner
+          // rather than holding the incoming heading until next move. Matches
+          // the mount-seed convention (same formula as the ref callback below).
+          const toTile = anim.toTile;
+          if (toTile !== undefined) {
+            const [nx, , nz] = tileToWorld((toTile + 1) % 40);
+            const [cx, , cz] = tileToWorld(toTile);
+            const rdx = nx - cx;
+            const rdz = nz - cz;
+            if (Math.abs(rdx) > 1e-6 || Math.abs(rdz) > 1e-6) {
+              targetYaw.current[p.id] = Math.atan2(rdx, rdz) + FACING_OFFSET;
+            }
+          }
+
           // Path complete → back to 'Idle'. Guard so we setState only on the
           // transition, never every frame.
           if (movingRef.current[p.id]) {
@@ -334,10 +368,23 @@ export function PlayerTokens() {
         const [x, , z] = tileToWorld(p.position);
         const [ox, oz] = restOffset(p, current);
         group.position.set(x + ox, BASE_Y, z + oz);
-        // Hold the character's facing at rest (keeps whatever heading it landed
-        // with); rotation.y is already set from the last hop frame.
-        group.rotation.y = facing.current[p.id] ?? group.rotation.y;
         seeded.current[p.id] = true;
+
+        // Continue lerping toward targetYaw even while idle — the token pivots
+        // smoothly to its rest facing (next-tile direction set on walk completion)
+        // rather than snapping. Skip if no target is set yet (first frame).
+        const ty = targetYaw.current[p.id];
+        if (ty !== undefined) {
+          const cur = facing.current[p.id] ?? ty;
+          const frac = Math.min(1, YAW_TURN_PER_FRAME * (dtMs / (1000 / 60)));
+          const next = stepYaw(cur, ty, frac);
+          group.rotation.y = next;
+          facing.current[p.id] = next;
+        } else {
+          // First frame before any walk: hold whatever seeded facing is on the group.
+          group.rotation.y = facing.current[p.id] ?? group.rotation.y;
+        }
+
         // Safety net: if some path left `moving` stuck true with no queue, clear
         // it (transition-guarded, so this is a no-op on the steady state).
         if (movingRef.current[p.id]) {
@@ -371,13 +418,18 @@ export function PlayerTokens() {
               if (g && !seeded.current[p.id]) {
                 g.position.set(x + ox, BASE_Y, z + oz);
                 // Seed rest rotation: face direction of travel toward the next tile
-                // using the same convention as the hop code so rest and hop agree.
+                // using the same convention as walk-completion so rest and hop agree.
                 const [nx, , nz] = tileToWorld((p.position + 1) % 40);
                 const [cx, , cz] = tileToWorld(p.position);
                 const rdx = nx - cx, rdz = nz - cz;
                 const seedRot = Math.atan2(rdx, rdz) + FACING_OFFSET;
                 g.rotation.y = seedRot;
                 facing.current[p.id] = seedRot;
+                // Also seed targetYaw so the idle lerp starts already settled
+                // (no spurious pivot on first frame).
+                if (targetYaw.current[p.id] === undefined) {
+                  targetYaw.current[p.id] = seedRot;
+                }
               }
             }}
           >
