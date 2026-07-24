@@ -141,8 +141,8 @@ export const EVENTS = {
 
 // ─── Client → Server Payloads ─────────────────────────────────────────────────
 
-export interface C_RoomCreate   { playerName: string; token: TokenType }
-export interface C_RoomJoin     { roomCode: string; playerName: string; token: TokenType; reconnectToken?: string }
+export interface C_RoomCreate   { playerName: string; token: TokenType; character?: string }
+export interface C_RoomJoin     { roomCode: string; playerName: string; token: TokenType; character?: string; reconnectToken?: string }
 export interface C_RoomReady    { isReady: boolean }
 export interface C_BuildHouse   { spaceIndex: number }
 export interface C_BuildHotel   { spaceIndex: number }

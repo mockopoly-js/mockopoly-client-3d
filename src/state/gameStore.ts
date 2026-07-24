@@ -2,8 +2,10 @@ import { create } from 'zustand';
 import type { GameState, Player } from '../types/GameState';
 import type { ToastMessage, ToastType } from '../types/ui';
 import type { S_GameOver } from '../types/SocketEvents';
+import { DEFAULT_CHARACTER } from '../constants/characters';
 
 const RECONNECT_KEY = 'mockopoly_reconnect';
+const CHARACTER_KEY = 'mockopoly_character';
 
 export type Screen = 'menu' | 'lobby' | 'game' | 'game-over';
 
@@ -25,6 +27,10 @@ interface GameStore {
   screen: Screen;
   gameOver: S_GameOver | null;
 
+  // ── character selection (persisted) ──
+  selectedCharacter: string;
+  setSelectedCharacter: (id: string) => void;
+
   // ── actions ──
   update: (state: GameState) => void;
   setMyPlayerId: (id: string) => void;
@@ -43,6 +49,10 @@ interface GameStore {
   reset: () => void;
 }
 
+function getStoredCharacter(): string {
+  try { return localStorage.getItem(CHARACTER_KEY) || DEFAULT_CHARACTER; } catch { return DEFAULT_CHARACTER; }
+}
+
 export const useGameStore = create<GameStore>((set, get) => ({
   state: null,
   myPlayerId: null,
@@ -57,6 +67,12 @@ export const useGameStore = create<GameStore>((set, get) => ({
   showDevHacks: false,
   screen: 'menu',
   gameOver: null,
+  selectedCharacter: getStoredCharacter(),
+
+  setSelectedCharacter: (id) => {
+    set({ selectedCharacter: id });
+    try { localStorage.setItem(CHARACTER_KEY, id); } catch { /* ignore */ }
+  },
 
   update: (state) => set({ state }),
   setMyPlayerId: (id) => set({ myPlayerId: id }),

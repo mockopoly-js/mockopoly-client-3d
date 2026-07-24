@@ -6,6 +6,7 @@ import {
   selectCurrentPlayer,
   getStoredReconnectToken,
 } from './gameStore';
+import { DEFAULT_CHARACTER } from '../constants/characters';
 import type { GameState } from '../types/GameState';
 
 function fakeState(): GameState {
@@ -111,5 +112,22 @@ describe('gameStore', () => {
     useGameStore.getState().toggleDevHacks(true);
     useGameStore.getState().reset();
     expect(useGameStore.getState().showDevHacks).toBe(false);
+  });
+
+  it('selectedCharacter defaults to DEFAULT_CHARACTER', () => {
+    expect(useGameStore.getState().selectedCharacter).toBe(DEFAULT_CHARACTER);
+  });
+
+  it('setSelectedCharacter updates state and persists to localStorage', () => {
+    useGameStore.getState().setSelectedCharacter('Ninja_Male');
+    expect(useGameStore.getState().selectedCharacter).toBe('Ninja_Male');
+    expect(localStorage.getItem('mockopoly_character')).toBe('Ninja_Male');
+  });
+
+  it('setSelectedCharacter can be called with any character id', () => {
+    useGameStore.getState().setSelectedCharacter('Wizard');
+    expect(useGameStore.getState().selectedCharacter).toBe('Wizard');
+    useGameStore.getState().setSelectedCharacter('Pirate_Female');
+    expect(useGameStore.getState().selectedCharacter).toBe('Pirate_Female');
   });
 });
