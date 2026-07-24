@@ -14,8 +14,10 @@
     "icons:build": "node scripts/gen-icons.mjs",
     "models:tokens": "/Applications/Blender.app/Contents/MacOS/Blender --background --python scripts/blender/gen_tokens.py",
     "models:buildings": "/Applications/Blender.app/Contents/MacOS/Blender --background --python scripts/blender/gen_buildings.py",
-    "models:city": "/Applications/Blender.app/Contents/MacOS/Blender --background --python scripts/blender/gen_city.py",
-    "models:build": "npm run models:tokens && npm run models:buildings && npm run models:city"
+    "models:city-props": "/Applications/Blender.app/Contents/MacOS/Blender --background --python scripts/blender/gen_city.py",
+    "models:forest": "node scripts/gen-forest.mjs",
+    "models:city": "node scripts/gen-city.mjs",
+    "models:build": "npm run models:tokens && npm run models:buildings && npm run models:city-props && npm run models:forest && npm run models:city"
   },
   "keywords": [],
   "author": "",
@@ -35,7 +37,9 @@
     "zustand": "^5.0.14"
   },
   "devDependencies": {
+    "@gltf-transform/cli": "^4.4.1",
     "@gltf-transform/core": "^4.4.1",
+    "@gltf-transform/functions": "^4.4.1",
     "@testing-library/dom": "^10.4.1",
     "@testing-library/react": "^16.3.2",
     "@types/react": "^18.3.31",

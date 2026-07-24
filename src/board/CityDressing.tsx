@@ -1,76 +1,87 @@
-import { ModelMesh } from './ModelMesh';
+import { useMemo } from 'react';
+import * as THREE from 'three';
+import { useGLTF } from '@react-three/drei';
+import { BOARD_WORLD_SIZE } from './positions';
 
 /**
- * Static decorative toy-city props placed in the empty board center.
- * World board is 10 units square; tiles ring the edge at ~[-5,5].
- * All props here are inside x,z ∈ [-3.2, 3.2] and y=0, well clear of the tile ring.
+ * The real low-poly city (SimplePoly City → `public/models/city.glb`, ~5.5 MB,
+ * decoder-free) that sits in the board's empty CENTER — the middle of the
+ * printed 40-space ring — giving the "board-in-a-diorama" look.
  *
- * Layout (viewed from above, +x right, +z down):
- *   - A small skyline cluster of buildings near the center-left
- *   - Two flanking trees around the cluster
- *   - Two more trees offset to upper-right for balance
- *   - Two tiny street cars on "roads" between buildings
+ * Self-normalizing: the source glb carries baked authoring offsets (its runtime
+ * Box3 center is NOT at origin, and it uses EXT_mesh_gpu_instancing which three
+ * loads natively). So instead of trusting authored numbers we compute a
+ * `THREE.Box3` on the loaded scene at RUNTIME and:
+ *   1. RECENTER horizontally so the city's x/z center sits at world origin.
+ *   2. Drop its Y-min (ground) onto the board top (CITY_Y ≈ board top 0.02).
+ *   3. FIT it: base scale = INNER_SQUARE / max(boxSizeX, boxSizeZ), so the city's
+ *      footprint fills the board's inner empty square regardless of raw scale.
+ *      CITY_SCALE is a tunable multiplier ON TOP of that auto-fit.
  *
- * PROPS is entirely deterministic (no Math.random) — positions are hard-coded literals.
+ * The inner empty square (inside the tile ring) spans roughly world [-3, 3] on
+ * a 10×10 board, so INNER_SQUARE defaults to ~6. Buildings then grow UP from the
+ * board top, sitting INSIDE the ring — they must not cover the printed tiles.
+ *
+ * ── TUNABLE CONSTS (iterate live with these three only) ─────────────────────
+ *   CITY_SCALE — multiplier on the auto-fit footprint. 1.0 = city footprint
+ *                exactly fills INNER_SQUARE. <1 shrinks it inside the ring, >1
+ *                grows it (risk of spilling onto the tiles).
+ *   CITY_Y     — world Y the city GROUND rests on. Board top is 0.02; keep at/
+ *                just above it so buildings sit on the board, not floating/sunk.
+ *   CITY_ROT   — Y-rotation (radians) to aim the city's "front"/streets nicely
+ *                for the default camera.
  */
 
-const BASE = '/models/city/';
+/** World size of the board's inner empty square (inside the printed tile ring). */
+const INNER_SQUARE = BOARD_WORLD_SIZE * 0.6; // 10 * 0.6 = 6 → empty center ≈ [-3, 3]
 
-interface PropDef {
-  url: string;
-  pos: [number, number, number];
-  rotY: number;
-  scale: number;
-}
+const CITY_SCALE = 0.9;   // fill 90% of the inner square (small margin off the tiles)
+const CITY_Y = 0.02;      // rest the city ground on the board top (TOP_Y)
+const CITY_ROT = 0;       // radians; nudge to aim streets toward the camera
 
-const PROPS: PropDef[] = [
-  // ---- Tall building cluster: left-of-center ----
-  { url: `${BASE}building-tall.glb`,  pos: [-1.1,  0.0, -0.3],  rotY: 0.0,          scale: 1.0 },
-  { url: `${BASE}building-tall.glb`,  pos: [ 0.4,  0.0,  0.6],  rotY: 0.4,          scale: 0.85 },
+const CITY_URL = '/models/city.glb';
 
-  // ---- Wide buildings flanking the tall ones ----
-  { url: `${BASE}building-wide.glb`,  pos: [-0.1,  0.0, -1.0],  rotY: 0.3,          scale: 1.0 },
-  { url: `${BASE}building-wide.glb`,  pos: [ 1.3,  0.0,  0.0],  rotY: -0.3,         scale: 0.9 },
-  { url: `${BASE}building-wide.glb`,  pos: [-1.5,  0.0,  1.2],  rotY: 0.6,          scale: 0.8 },
-
-  // ---- Trees around the cluster ----
-  { url: `${BASE}tree.glb`,           pos: [-2.2,  0.0, -0.8],  rotY: 0.0,          scale: 1.0 },
-  { url: `${BASE}tree.glb`,           pos: [-2.0,  0.0,  0.5],  rotY: 0.5,          scale: 1.1 },
-  { url: `${BASE}tree.glb`,           pos: [ 2.0,  0.0, -1.4],  rotY: 0.8,          scale: 0.9 },
-  { url: `${BASE}tree.glb`,           pos: [ 2.5,  0.0,  1.0],  rotY: 1.2,          scale: 1.0 },
-  { url: `${BASE}tree.glb`,           pos: [ 0.8,  0.0, -2.0],  rotY: 0.2,          scale: 0.95 },
-
-  // ---- Street cars on the "road" between buildings ----
-  { url: `${BASE}car.glb`,            pos: [-0.6,  0.0,  0.1],  rotY: 1.57,         scale: 1.0 },
-  { url: `${BASE}car.glb`,            pos: [ 1.6,  0.0, -0.8],  rotY: -0.2,         scale: 1.0 },
-];
-
-// Preload all city prop models ahead of first render.
-const _preloadedUrls = new Set<string>();
-for (const p of PROPS) {
-  if (!_preloadedUrls.has(p.url)) {
-    ModelMesh.preload(p.url);
-    _preloadedUrls.add(p.url);
-  }
-}
-
-/**
- * Renders a static, deterministic arrangement of toy-city props in the board
- * center (x,z ∈ [-3.2,3.2], y=0). No game state; purely decorative.
- * Task 4 mounts this inside <Suspense fallback={null}> in GameScene.tsx.
- */
 export function CityDressing(): React.JSX.Element {
+  const gltf = useGLTF(CITY_URL);
+
+  // Clone the cached scene so recenter/scale never mutates drei's shared cache.
+  const { object, groupScale } = useMemo(() => {
+    const scene = gltf.scene.clone(true);
+    scene.traverse((o) => {
+      const m = o as THREE.Mesh;
+      if (m.isMesh) {
+        m.castShadow = true;
+        m.receiveShadow = true;
+      }
+    });
+
+    const box = new THREE.Box3().setFromObject(scene);
+    const size = new THREE.Vector3();
+    const center = new THREE.Vector3();
+    box.getSize(size);
+    box.getCenter(center);
+
+    // Recenter horizontally at origin; drop Y-min (ground) to local 0 so the
+    // outer group can place the ground precisely at CITY_Y.
+    scene.position.set(-center.x, -box.min.y, -center.z);
+
+    // Auto-fit the footprint to the inner square, then apply the tunable factor.
+    const footprint = Math.max(size.x, size.z) || 1;
+    const fit = INNER_SQUARE / footprint;
+
+    return { object: scene, groupScale: fit * CITY_SCALE };
+  }, [gltf]);
+
   return (
-    <group name="city-dressing">
-      {PROPS.map((p, i) => (
-        <ModelMesh
-          key={i}
-          url={p.url}
-          position={p.pos}
-          rotation={[0, p.rotY, 0]}
-          scale={p.scale}
-        />
-      ))}
+    <group
+      name="city-center"
+      position={[0, CITY_Y, 0]}
+      rotation={[0, CITY_ROT, 0]}
+      scale={groupScale}
+    >
+      <primitive object={object} />
     </group>
   );
 }
+
+useGLTF.preload(CITY_URL);
