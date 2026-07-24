@@ -12,6 +12,18 @@ import { CameraRig } from '../board/CameraRig';
 import { BoardClickTargets } from '../board/BoardClickTargets';
 
 /**
+ * BOARD_ROTATION — Y-axis rotation (radians) applied to all board content as
+ * a group, physically rotating GO from bottom-left to bottom-right.
+ *
+ * Reasoning: camera sits at [0, 8.5, 12], looking toward origin along -Z.
+ * +X is screen-right, +Z is screen-toward-camera (bottom of screen).
+ * GO starts at the bottom-left corner of the printed board texture.
+ * A -90° (clockwise from above) rotation about +Y swings bottom-left → bottom-right.
+ * ONE-LINE FLIP: if GO ends up elsewhere, try 0 / +Math.PI/2 / Math.PI instead.
+ */
+const BOARD_ROTATION = -Math.PI / 2;
+
+/**
  * Game screen: renders the static 3D board in a daylight diorama scene.
  *
  * Lighting:
@@ -36,10 +48,10 @@ export function GameScene() {
   return (
     <Canvas
       style={{ position: 'fixed', inset: 0 }}
-      // Default camera: rotated -90° about world-Y from [0,8.5,12] → [12,8.5,0].
-      // From [12,8.5,0] looking at origin, screen-right is +Z and screen-bottom
-      // is +X — so the GO corner (world +x,+z) renders at the BOTTOM-RIGHT.
-      camera={{ position: [12, 8.5, 0], fov: 50 }}
+      // Reverted to original nice framing. Board content is rotated via BOARD_ROTATION
+      // group instead of moving the camera — camera props only apply on mount and
+      // are HMR-inert; rotating the board content is reliable and frame-accurate.
+      camera={{ position: [0, 8.5, 12], fov: 50 }}
       shadows
       dpr={[1, 2]}
       performance={{ min: 0.5 }}
@@ -95,24 +107,35 @@ export function GameScene() {
       </Environment>
       {/* OrbitControls + gentle auto-focus toward active player's tile. */}
       <CameraRig />
-      {/* Procedural 3D dice: loads no glb, so it sits outside the
-          Suspense boundary. Idle = hidden. */}
-      <Dice3D />
-      {/* Invisible click planes over the 28 purchasable tiles.
-          No assets — fine outside Suspense. y=0.03 is just above the board
-          top face (y=0.02) so raycasts hit these planes before the slab. */}
-      <BoardClickTargets />
+      {/*
+        BOARD_ROTATION group — rotates ALL board content together about Y so GO
+        physically moves from bottom-left to bottom-right. ForestEnvironment stays
+        OUTSIDE this group so the surrounding nature stays fixed in the clearing.
+
+        Token alignment: PlayerTokens drives positions via tileToWorld() in local
+        space. Inside this rotated parent, both the printed board texture AND the
+        tileToWorld positions rotate identically → tokens remain on their correct
+        printed tiles. No changes needed to positions.ts or PlayerTokens.
+      */}
+      <group rotation={[0, BOARD_ROTATION, 0]}>
+        {/* Dice3D and BoardClickTargets load no assets — fine without Suspense. */}
+        <Dice3D />
+        <BoardClickTargets />
+        <Suspense fallback={null}>
+          {/* BoardTiles, PlayerTokens, Buildings, CityDressing all suspend
+              (useTexture / useGLTF) — must stay inside a Suspense boundary. */}
+          <BoardTiles />
+          <PlayerTokens />
+          <Buildings />
+          {/* CityDressing (city.glb) is the low-poly city in the board center. */}
+          <CityDressing />
+        </Suspense>
+      </group>
       <Suspense fallback={null}>
         {/* ForestEnvironment (forest.glb) surrounds the board — the diorama
-            ground/treeline. Loads via useGLTF, so it must be inside Suspense. */}
+            ground/treeline. Kept OUTSIDE the rotation group so the forest
+            stays fixed as the board turns within its clearing. */}
         <ForestEnvironment />
-        {/* BoardTiles now streams board.webp via useTexture (suspends) — must
-            live inside a Suspense boundary. */}
-        <BoardTiles />
-        <PlayerTokens />
-        <Buildings />
-        {/* CityDressing (city.glb) is the low-poly city in the board center. */}
-        <CityDressing />
       </Suspense>
       <EffectComposer>
         <Bloom intensity={0.35} luminanceThreshold={0.9} luminanceSmoothing={0.3} mipmapBlur />
