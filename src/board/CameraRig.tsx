@@ -18,12 +18,13 @@ export { BOARD_ROTATION } from './positions';
 //   X: right (positive = camera moves screen-right → GO shifts right in frame)
 //   Y: height (larger = steeper downward tilt)
 //   Z: toward-camera (+Z is screen-bottom; larger = more "in front" of board)
-// A value of [8, 12, 8] gives ~47° elevation, azimuth 45° into the GO corner.
+// A value of [-8, 12, -8] gives ~47° elevation, rotated 180° so GO appears
+// front-bottom-RIGHT of screen with Free Parking receding top-LEFT.
 //
 // INITIAL_CAM_TARGET — orbit target on first mount. [0,0,0] = board center so
 // the whole board fills the frame. Auto-focus lerps this toward the active
 // player each frame until the user manually interacts.
-export const INITIAL_CAM_OFFSET: [number, number, number] = [8, 12, 8];
+export const INITIAL_CAM_OFFSET: [number, number, number] = [-8, 12, -8];
 export const INITIAL_CAM_TARGET: [number, number, number] = [0, 0, 0];
 
 /**
