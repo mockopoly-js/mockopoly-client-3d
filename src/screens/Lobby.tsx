@@ -20,6 +20,7 @@ export function Lobby() {
   const me = selectMyPlayer(useGameStore.getState());
   const isHost = !!me?.isHost;
   const status = state?.status;
+  const soloPlay = !!state?.devHacks?.soloPlay;
 
   // route into the game once the server flips to in-progress
   useEffect(() => {
@@ -68,6 +69,17 @@ export function Lobby() {
           <div style={{ display: 'flex', flexDirection: 'column', gap: 10, width: '100%', maxWidth: 400 }}>
             {playerSlots}
           </div>
+          {isHost && status !== 'starting' && (
+            <label style={soloToggleMobile}>
+              <input
+                type="checkbox"
+                checked={soloPlay}
+                onChange={() => socketManager.emit(EVENTS.DEV_SET_HACK, { hack: 'soloPlay', enabled: !soloPlay })}
+                style={{ marginRight: 8, cursor: 'pointer', width: 18, height: 18 }}
+              />
+              <span style={{ fontSize: 14, fontWeight: 700 }}>Solo play (1 player)</span>
+            </label>
+          )}
           {countdown !== null && status === 'starting'
             ? <div style={{ fontWeight: 800, fontSize: 20, color: '#e07d0a' }}>Starting in {countdown}...</div>
             : (
@@ -76,7 +88,7 @@ export function Lobby() {
                   {me?.isReady ? 'Ready ✓' : 'Ready'}
                 </GameButton>
                 {isHost && (
-                  <GameButton variant="primary" onClick={start} disabled={locked || players.length < 2} fullWidth>
+                  <GameButton variant="primary" onClick={start} disabled={locked || players.length < (soloPlay ? 1 : 2)} fullWidth>
                     Start Game
                   </GameButton>
                 )}
@@ -96,6 +108,18 @@ export function Lobby() {
           {playerSlots}
         </div>
 
+        {isHost && status !== 'starting' && (
+          <label style={soloToggle}>
+            <input
+              type="checkbox"
+              checked={soloPlay}
+              onChange={() => socketManager.emit(EVENTS.DEV_SET_HACK, { hack: 'soloPlay', enabled: !soloPlay })}
+              style={{ marginRight: 8, cursor: 'pointer', width: 16, height: 16 }}
+            />
+            <span style={{ fontSize: 13, fontWeight: 700 }}>Solo play (1 player)</span>
+          </label>
+        )}
+
         {countdown !== null && status === 'starting'
           ? <div style={{ fontWeight: 800, fontSize: 20, color: '#e07d0a' }}>Starting in {countdown}...</div>
           : (
@@ -104,7 +128,7 @@ export function Lobby() {
                 {me?.isReady ? 'Ready ✓' : 'Ready'}
               </GameButton>
               {isHost && (
-                <GameButton variant="primary" onClick={start} disabled={locked || players.length < 2} fullWidth>
+                <GameButton variant="primary" onClick={start} disabled={locked || players.length < (soloPlay ? 1 : 2)} fullWidth>
                   Start Game
                 </GameButton>
               )}
@@ -200,3 +224,34 @@ const codeChipMobile: React.CSSProperties = {
 const slotMobile: React.CSSProperties = { display: 'flex', alignItems: 'center', gap: 10, background: '#fbf6ec', borderRadius: 14, padding: '13px 14px' };
 const emptySlotMobile: React.CSSProperties = { ...slotMobile, justifyContent: 'center', color: '#9a8f7c', fontWeight: 700 };
 const dotMobile: React.CSSProperties = { width: 26, height: 26, borderRadius: '50%', flexShrink: 0 };
+
+const soloToggle: React.CSSProperties = {
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+  gap: 8,
+  padding: '8px 14px',
+  background: '#fbf6ec',
+  borderRadius: 12,
+  border: `1px solid ${GOLD}`,
+  cursor: 'pointer',
+  fontFamily: FONT,
+  color: '#3b3224',
+  touchAction: 'manipulation',
+};
+
+const soloToggleMobile: React.CSSProperties = {
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+  gap: 8,
+  padding: '10px 14px',
+  background: '#fbf6ec',
+  borderRadius: 12,
+  border: `1px solid ${GOLD}`,
+  cursor: 'pointer',
+  fontFamily: FONT,
+  color: '#3b3224',
+  minHeight: 44,
+  touchAction: 'manipulation',
+};
