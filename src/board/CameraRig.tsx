@@ -1,10 +1,13 @@
 import { useCallback, useEffect, useRef } from 'react';
-import { useFrame } from '@react-three/fiber';
+import { useFrame, useThree } from '@react-three/fiber';
 import { OrbitControls } from '@react-three/drei';
 import * as THREE from 'three';
 import type { OrbitControls as OrbitControlsImpl } from 'three-stdlib';
 import { useGameStore, selectCurrentPlayer } from '../state/gameStore';
-import { tileToWorld } from './positions';
+import { tileToWorldRotated, BOARD_ROTATION as _BOARD_ROTATION } from './positions';
+
+// Re-export so callers can assert the shared constant is wired in.
+export { BOARD_ROTATION } from './positions';
 
 /**
  * CameraRig: free Blender-style viewport navigation + gentle first-turn auto-focus.
@@ -29,6 +32,17 @@ import { tileToWorld } from './positions';
  * the active player at turn start. As soon as the user manually interacts with the
  * camera (OrbitControls 'start' — any orbit/pan/zoom), auto-focus is disabled for
  * the rest of the session so the free camera is never yanked back.
+ *
+ * Focus targets are rotation-aware: tokens live inside a group rotated by
+ * BOARD_ROTATION about the world-Y axis. CameraRig is OUTSIDE that group, so raw
+ * tileToWorld() positions are pre-rotation and aim at empty space. We call
+ * tileToWorldRotated() to apply Ry(BOARD_ROTATION) and get the token's actual
+ * rendered world position.
+ *
+ * Initial snap: on first mount (when the game screen loads) the OrbitControls
+ * target and camera are immediately aimed at the active player's tile (typically
+ * GO at game start) so the board is correctly framed from frame 1 — no first-turn
+ * change is needed to trigger the focus.
  */
 export function CameraRig() {
   // Mutable ref (not passed directly as JSX `ref=`) so `handleMount` can assign
@@ -40,17 +54,54 @@ export function CameraRig() {
   const interacting = useRef(false);
   // Once the user manually moves the camera, auto-focus is permanently off.
   const userTookControl = useRef(false);
+  // Track whether we've snapped to the initial player tile on first mount.
+  const initialSnapDone = useRef(false);
 
   // Read active player from the store (selector keeps re-renders minimal).
   const activePlayer = useGameStore(selectCurrentPlayer);
 
+  // Access the R3F camera for the initial snap (sets camera position too).
+  const camera = useThree((s) => s.camera);
+
   // Update the focus goal whenever the active player's id or position changes.
-  // useEffect avoids mutating refs during render (safe under StrictMode).
+  // Uses tileToWorldRotated so the target matches the token's ACTUAL world position
+  // (tokens are inside the BOARD_ROTATION group; CameraRig is not).
   useEffect(() => {
     if (!activePlayer) return;
-    const [wx, , wz] = tileToWorld(activePlayer.position);
-    focusGoal.current.set(wx, 0, wz);
+    const rotated = tileToWorldRotated(activePlayer.position);
+    focusGoal.current.set(rotated.x, 0, rotated.z);
   }, [activePlayer?.id, activePlayer?.position]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Initial snap: as soon as both the controls instance and a valid active player
+  // are available, snap the OrbitControls target directly to the player's tile
+  // (typically GO at game start). The camera position is offset by the same
+  // [0, 8.5, 12] vector that the Canvas camera prop uses, keeping the familiar
+  // overhead framing but now centred on the player rather than the board origin.
+  // This is driven by useEffect (not useFrame) so it fires on mount / first render.
+  useEffect(() => {
+    if (initialSnapDone.current) return;
+    if (!activePlayer) return;
+    const controls = controlsRef.current;
+    if (!controls) return;
+
+    const rotated = tileToWorldRotated(activePlayer.position);
+    const target = new THREE.Vector3(rotated.x, 0, rotated.z);
+
+    // Snap the orbit target.
+    controls.target.copy(target);
+    // Place the camera at target + the default offset [0, 8.5, 12].
+    camera.position.set(target.x, target.y + 8.5, target.z + 12);
+    controls.update();
+
+    // Also prime focusGoal so the lerp loop stays in sync.
+    focusGoal.current.copy(target);
+
+    initialSnapDone.current = true;
+  });
+  // Intentionally no dependency array: we want this to keep re-checking each
+  // render until both controls and activePlayer are ready (they may arrive after
+  // the first render due to Suspense / store hydration). Once initialSnapDone is
+  // set it exits immediately, so subsequent re-renders are a cheap no-op.
 
   // SHIFT → pan: swap the LEFT mouse button action while Shift is held. Right
   // stays PAN and middle stays DOLLY (set once when the controls mount below).
@@ -82,6 +133,9 @@ export function CameraRig() {
     if (interacting.current) return;
 
     // Gently ease the orbit target toward the active player's tile.
+    // focusGoal is already in rotation-corrected world space (set by the
+    // useEffect above via tileToWorldRotated), so this aims at the token's
+    // actual rendered position, not the pre-rotation tile coordinate.
     controls.target.lerp(focusGoal.current, 0.05);
     controls.update();
   });

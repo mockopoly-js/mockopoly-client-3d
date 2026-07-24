@@ -1,3 +1,5 @@
+import * as THREE from 'three';
+
 /**
  * Normalized (0–1) center of each of the 40 board tiles, ported verbatim from
  * the 2D client's Board.ts ring math. Renderer-invariant.
@@ -30,8 +32,35 @@ export const SPACE_POSITIONS: TilePos[] = buildPositions();
 /** World-plane size of the board (three.js units). */
 export const BOARD_WORLD_SIZE = 10;
 
+/**
+ * BOARD_ROTATION — Y-axis rotation (radians) applied to all board content as a group,
+ * physically rotating GO from bottom-left to bottom-right.
+ *
+ * Reasoning: camera sits at [0, 8.5, 12], looking toward origin along -Z.
+ * +X is screen-right, +Z is screen-toward-camera (bottom of screen).
+ * GO starts at the bottom-left corner of the printed board texture.
+ * A -90° (clockwise from above) rotation about +Y swings bottom-left → bottom-right.
+ *
+ * Single source of truth shared by GameScene (the board group) and CameraRig
+ * (which must apply the same rotation when computing world-space focus targets).
+ */
+export const BOARD_ROTATION = -Math.PI / 2;
+
 /** Map a tile index to a world-space [x, y=0, z] on the board plane, centered at origin. */
 export function tileToWorld(index: number): [number, number, number] {
   const pos = SPACE_POSITIONS[index];
   return [(pos.x - 0.5) * BOARD_WORLD_SIZE, 0, (pos.y - 0.5) * BOARD_WORLD_SIZE];
+}
+
+/**
+ * Like tileToWorld but applies BOARD_ROTATION about the world-Y axis, so the
+ * returned Vector3 matches the token's ACTUAL rendered world position.
+ *
+ * Tokens are children of the rotated board group; callers such as CameraRig are
+ * NOT inside that group — they must rotate the raw tileToWorld position by the
+ * same angle to aim at the correct world location.
+ */
+export function tileToWorldRotated(index: number): THREE.Vector3 {
+  const [x, y, z] = tileToWorld(index);
+  return new THREE.Vector3(x, y, z).applyAxisAngle(new THREE.Vector3(0, 1, 0), BOARD_ROTATION);
 }

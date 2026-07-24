@@ -10,18 +10,7 @@ import { ForestEnvironment } from '../board/ForestEnvironment';
 import { Dice3D } from '../board/Dice3D';
 import { CameraRig } from '../board/CameraRig';
 import { BoardClickTargets } from '../board/BoardClickTargets';
-
-/**
- * BOARD_ROTATION — Y-axis rotation (radians) applied to all board content as
- * a group, physically rotating GO from bottom-left to bottom-right.
- *
- * Reasoning: camera sits at [0, 8.5, 12], looking toward origin along -Z.
- * +X is screen-right, +Z is screen-toward-camera (bottom of screen).
- * GO starts at the bottom-left corner of the printed board texture.
- * A -90° (clockwise from above) rotation about +Y swings bottom-left → bottom-right.
- * ONE-LINE FLIP: if GO ends up elsewhere, try 0 / +Math.PI/2 / Math.PI instead.
- */
-const BOARD_ROTATION = -Math.PI / 2;
+import { BOARD_ROTATION } from '../board/positions';
 
 /**
  * Game screen: renders the static 3D board in a daylight diorama scene.

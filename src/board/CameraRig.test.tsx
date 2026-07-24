@@ -4,6 +4,7 @@ import { forwardRef, useImperativeHandle } from 'react';
 import * as THREE from 'three';
 import { CameraRig } from './CameraRig';
 import { useGameStore } from '../state/gameStore';
+import { tileToWorldRotated, BOARD_ROTATION } from './positions';
 import type { GameState } from '../types/GameState';
 
 // ── R3F / drei stubs ─────────────────────────────────────────────────────────
@@ -16,8 +17,14 @@ import type { GameState } from '../types/GameState';
 
 // useFrame receives (state, delta). Our tests drive it manually.
 let frameCallback: ((state?: unknown, delta?: number) => void) | null = null;
+
+// Fake camera for the useThree(s => s.camera) call in the initial-snap effect.
+const fakeCamera = { position: new THREE.Vector3(0, 0, 0) };
+
 vi.mock('@react-three/fiber', () => ({
   useFrame: (cb: (state?: unknown, delta?: number) => void) => { frameCallback = cb; },
+  useThree: (selector: (state: { camera: typeof fakeCamera }) => unknown) =>
+    selector({ camera: fakeCamera }),
 }));
 
 // The fake OrbitControls instance. Fresh per render via beforeEach reset.
@@ -66,6 +73,7 @@ describe('CameraRig', () => {
     frameCallback = null;
     lastControls = null;
     lastProps = null;
+    fakeCamera.position.set(0, 0, 0);
     useGameStore.getState().reset();
     useGameStore.getState().update(fakeState(0));
   });
@@ -120,16 +128,36 @@ describe('CameraRig', () => {
     expect(lastControls!.mouseButtons.LEFT).toBe(THREE.MOUSE.ROTATE);
   });
 
-  it('auto-focuses the target toward the active player before manual control', () => {
-    // Player on a non-origin tile so the target should move away from (0,0,0).
+  it('auto-focuses the target toward the active player before manual control — target uses BOARD_ROTATION', () => {
+    // Start player on tile 5 so the initial snap lands at tileToWorldRotated(5).
     useGameStore.getState().update(fakeState(5));
     render(<CameraRig />);
     expect(frameCallback).toBeTruthy();
+
+    // After initial snap the target is already at tile 5's rotated position.
+    // Now move the player to a different tile (tile 10) — this triggers the
+    // useEffect that updates focusGoal, so the next frame lerps from tile-5 toward tile-10.
+    act(() => {
+      useGameStore.getState().update(fakeState(10));
+    });
+
     const before = lastControls!.target.clone();
+    lastControls!.update.mockClear();
     act(() => { frameCallback!(); });
-    // Target eased toward the tile → moved from origin, and update() was called.
+
+    // Target eased toward tile 10 → moved from tile-5 position, and update() was called.
     expect(lastControls!.target.distanceTo(before)).toBeGreaterThan(0);
     expect(lastControls!.update).toHaveBeenCalled();
+
+    // Confirm BOARD_ROTATION is non-zero so the rotation assertion is meaningful.
+    expect(BOARD_ROTATION).not.toBe(0);
+
+    // The lerp goal (focusGoal) must equal tileToWorldRotated(10), not raw tileToWorld(10).
+    // After one lerp step the target must have moved in the direction of the rotated goal.
+    const rotated10 = tileToWorldRotated(10);
+    const goal = new THREE.Vector3(rotated10.x, 0, rotated10.z);
+    // The moved target should be closer to the goal than the starting position was.
+    expect(lastControls!.target.distanceTo(goal)).toBeLessThan(before.distanceTo(goal));
   });
 
   it('disables auto-focus permanently after the first manual interaction (onStart)', () => {
@@ -146,5 +174,29 @@ describe('CameraRig', () => {
     // Target unchanged and update() not called — the free camera is not yanked back.
     expect(lastControls!.target.distanceTo(before)).toBe(0);
     expect(lastControls!.update).not.toHaveBeenCalled();
+  });
+
+  it('snaps the OrbitControls target to the rotation-corrected active player tile on initial mount', () => {
+    // Player on GO (tile 0) — the initial game state.
+    useGameStore.getState().update(fakeState(0));
+    render(<CameraRig />);
+
+    // The initial-snap effect runs synchronously in the test environment.
+    // Target should now equal tileToWorldRotated(0) (not board-center 0,0,0 unless
+    // the rotated position also happens to be zero — verify with the actual value).
+    const rotated = tileToWorldRotated(0);
+    expect(lastControls!.target.x).toBeCloseTo(rotated.x, 4);
+    expect(lastControls!.target.y).toBeCloseTo(0, 4);
+    expect(lastControls!.target.z).toBeCloseTo(rotated.z, 4);
+  });
+
+  it('snaps the camera position to target + [0, 8.5, 12] offset on initial mount', () => {
+    useGameStore.getState().update(fakeState(0));
+    render(<CameraRig />);
+
+    const rotated = tileToWorldRotated(0);
+    expect(fakeCamera.position.x).toBeCloseTo(rotated.x, 4);
+    expect(fakeCamera.position.y).toBeCloseTo(rotated.y + 8.5, 4);
+    expect(fakeCamera.position.z).toBeCloseTo(rotated.z + 12, 4);
   });
 });
