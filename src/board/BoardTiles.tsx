@@ -47,11 +47,11 @@ const EDGE_COLOR = '#c9a06a';
 
 /**
  * Saturation multiplier for the printed board artwork ONLY (top face, index 2).
- * 1.0 = unchanged; >1 = more saturated. Applied in the fragment shader after
- * map_fragment so it is tunable without touching the source image or any other
- * material (edge, city, forest, tokens are all unaffected).
+ * 1.0 = unchanged; >1 = more saturated. Applied AFTER tonemapping_fragment on
+ * gl_FragColor.rgb (post-lighting, post-tonemap) so lighting/IBL cannot wash
+ * it back out. Board-only — edge, city, forest, tokens are unaffected.
  */
-const BOARD_SATURATION = 1.7;
+const BOARD_SATURATION = 1.6;
 
 export function BoardTiles() {
   const texture = useTexture('/images/board.webp');
@@ -78,10 +78,10 @@ export function BoardTiles() {
     const edge = new THREE.MeshStandardMaterial({ color: EDGE_COLOR, roughness: 0.85 });
     const top = new THREE.MeshStandardMaterial({ map: texture, roughness: 0.7 });
 
-    // Inject a saturation boost into the TOP face shader only — after map_fragment
-    // samples the texture into diffuseColor, we pull toward/away from luminance-grey
-    // using a luminance-mix (ITU-R BT.709 coefficients).  Guard with userData so
-    // the patch is applied at most once even if the material is re-compiled.
+    // Inject a saturation boost into the TOP face shader only — applied AFTER
+    // tonemapping_fragment, operating directly on gl_FragColor.rgb so that
+    // lighting, IBL, and ACES tone-mapping are already baked in and cannot wash
+    // the boost back out.  Guard with userData so the patch runs at most once.
     top.onBeforeCompile = (shader) => {
       if (top.userData._satPatchApplied) return;
       top.userData._satPatchApplied = true;
@@ -92,12 +92,14 @@ export function BoardTiles() {
         `#include <common>\nconst float BOARD_SATURATION = ${BOARD_SATURATION.toFixed(4)};`,
       );
 
-      // After map_fragment has written diffuseColor, apply luminance-mix saturation.
+      // Replace the tonemapping chunk with itself + a luminance-mix saturation
+      // applied to gl_FragColor.rgb (ITU-R BT.709 luma weights). colorspace_fragment
+      // runs after this, so sRGB gamma encode still happens normally.
       shader.fragmentShader = shader.fragmentShader.replace(
-        '#include <map_fragment>',
-        `#include <map_fragment>
-float _l = dot(diffuseColor.rgb, vec3(0.2126, 0.7152, 0.0722));
-diffuseColor.rgb = clamp(mix(vec3(_l), diffuseColor.rgb, BOARD_SATURATION), 0.0, 1.0);`,
+        '#include <tonemapping_fragment>',
+        `#include <tonemapping_fragment>
+{ float _l = dot(gl_FragColor.rgb, vec3(0.2126, 0.7152, 0.0722));
+  gl_FragColor.rgb = clamp(mix(vec3(_l), gl_FragColor.rgb, BOARD_SATURATION), 0.0, 1.0); }`,
       );
     };
 
