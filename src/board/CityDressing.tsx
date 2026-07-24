@@ -77,6 +77,23 @@ export function CityDressing(): React.JSX.Element {
         m.castShadow = true;
         m.receiveShadow = true;
         m.frustumCulled = false;
+
+        // All 69 city materials are authored with alphaMode BLEND (even though
+        // their baseColor alpha is 1.0). BLEND disables depth-write, causing
+        // buildings to render translucent — you see roads/geometry through walls.
+        // Force every material fully opaque + depth-writing + DoubleSide so any
+        // open backfaces don't show through either.
+        const mats = Array.isArray(m.material) ? m.material : [m.material];
+        for (const mat of mats) {
+          if (mat) {
+            (mat as THREE.MeshStandardMaterial).transparent = false;
+            (mat as THREE.MeshStandardMaterial).opacity = 1;
+            (mat as THREE.MeshStandardMaterial).depthWrite = true;
+            (mat as THREE.MeshStandardMaterial).alphaTest = 0;
+            (mat as THREE.MeshStandardMaterial).side = THREE.DoubleSide;
+            mat.needsUpdate = true;
+          }
+        }
       }
     });
 
