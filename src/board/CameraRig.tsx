@@ -4,6 +4,7 @@ import { OrbitControls } from '@react-three/drei';
 import * as THREE from 'three';
 import type { OrbitControls as OrbitControlsImpl } from 'three-stdlib';
 import { useGameStore, selectCurrentPlayer } from '../state/gameStore';
+import type { CameraReadout } from '../state/gameStore';
 import { tileToWorldRotated, BOARD_ROTATION as _BOARD_ROTATION } from './positions';
 
 // Re-export so callers can assert the shared constant is wired in.
@@ -77,6 +78,9 @@ export function CameraRig() {
 
   // Read active player from the store (selector keeps re-renders minimal).
   const activePlayer = useGameStore(selectCurrentPlayer);
+  const setCameraReadout = useGameStore((s) => s.setCameraReadout);
+  // Throttle accumulator: only push readout ~every 0.12s (~8x/sec, not every frame).
+  const readoutAccum = useRef(0);
 
   // Access the R3F camera for the initial snap (sets camera position too).
   const camera = useThree((s) => s.camera);
@@ -146,9 +150,24 @@ export function CameraRig() {
     };
   }, []);
 
-  useFrame(() => {
+  useFrame((_state, delta) => {
     const controls = controlsRef.current;
     if (!controls) return;
+
+    // ── Throttled camera debug readout (~8x/sec, not every frame) ────────────
+    readoutAccum.current += delta;
+    if (readoutAccum.current >= 0.12) {
+      readoutAccum.current = 0;
+      const cam = controls.object;
+      const tgt = controls.target;
+      const readout: CameraReadout = {
+        pos: [cam.position.x, cam.position.y, cam.position.z],
+        target: [tgt.x, tgt.y, tgt.z],
+        offset: [cam.position.x - tgt.x, cam.position.y - tgt.y, cam.position.z - tgt.z],
+        dist: cam.position.distanceTo(tgt),
+      };
+      setCameraReadout(readout);
+    }
 
     // ── Passive auto-focus (disabled after first manual interaction) ──────────
     if (userTookControl.current) return;

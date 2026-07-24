@@ -23,6 +23,13 @@ const VALID_TOKENS: readonly TokenType[] = [
 
 export type Screen = 'menu' | 'lobby' | 'game' | 'game-over';
 
+export interface CameraReadout {
+  pos: [number, number, number];
+  target: [number, number, number];
+  offset: [number, number, number];
+  dist: number;
+}
+
 interface GameStore {
   // ── durable mirror of server state (was LocalGameState) ──
   state: GameState | null;
@@ -40,6 +47,10 @@ interface GameStore {
   showDevHacks: boolean;
   screen: Screen;
   gameOver: S_GameOver | null;
+
+  // ── camera debug readout (written throttled from CameraRig.useFrame) ──
+  cameraReadout: CameraReadout | null;
+  setCameraReadout: (v: CameraReadout) => void;
 
   // ── read-only deed-card inspect (board tile click) ──
   // Separate from selectedPropertyIndex/showPropertyCard which drive MortgagePanel.
@@ -107,6 +118,8 @@ export const useGameStore = create<GameStore>((set, get) => ({
   screen: 'menu',
   gameOver: null,
   deedCardIndex: null,
+  cameraReadout: null,
+
   selectedCharacter: getStoredCharacter(),
   selectedCharacterColor: getStoredCharacterColor(),
   selectedToken: getStoredToken(),
@@ -151,6 +164,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
 
   selectProperty: (index) =>
     set({ selectedPropertyIndex: index, showPropertyCard: index !== null }),
+  setCameraReadout: (v) => set({ cameraReadout: v }),
   openDeedCard: (index) => set({ deedCardIndex: index }),
   closeDeedCard: () => set({ deedCardIndex: null }),
   toggleTradePanel: (show) =>
@@ -180,6 +194,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
       screen: 'menu',
       gameOver: null,
       deedCardIndex: null,
+      cameraReadout: null,
     });
   },
 }));
