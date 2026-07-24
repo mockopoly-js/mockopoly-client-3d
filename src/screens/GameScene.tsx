@@ -1,7 +1,7 @@
 import { Suspense } from 'react';
 import { Canvas } from '@react-three/fiber';
 import { EffectComposer, Bloom, ToneMapping } from '@react-three/postprocessing';
-import { SoftShadows, Environment, Lightformer } from '@react-three/drei';
+import { SoftShadows, Environment } from '@react-three/drei';
 import { BoardTiles } from '../board/BoardTiles';
 import { PlayerTokens } from '../board/PlayerTokens';
 import { Buildings } from '../board/Buildings';
@@ -19,20 +19,36 @@ import { BOARD_ROTATION } from '../board/positions';
  * - hemisphereLight: soft sky/ground fill (sky #cbe8f5, ground #8a9a5b) at
  *   low intensity 0.35 — keeps unlit sides warm and grounded without washing
  *   out the directional shadow.
- * - ambientLight: trimmed from 0.8 → 0.5 so the directional shadow reads
- *   more clearly against the hemisphere fill.
+ * - ambientLight: trimmed to 0.4 (was 0.5) since the HDRI Environment now adds
+ *   image-based fill light — keeps the scene from over-brightening while the
+ *   directional shadow still reads clearly against the hemisphere fill.
  * - directionalLight: unchanged — position, intensity, shadow map.
  * - SoftShadows: drei helper (PCF soft shadows, no extra assets) with modest
  *   size/samples so shadow edges are feathered without tanking perf.
  * - CameraRig: drei OrbitControls tuned for tabletop overhead view + gentle
  *   auto-focus toward the active player's tile each turn.
- * - Environment (resolution=256, frames=1): baked-once procedural IBL via
- *   Lightformers — no .hdr file, no CDN preset. Three formers:
- *     1. Overhead key  — large soft white panel above, facing down.
- *     2. Cool rim      — blue-tinted side panel for glossy edge highlight.
- *     3. Warm fill     — amber-tinted low-angle fill to lift shadow darkness.
- *   environmentIntensity=0.4 keeps reflections subtle vs. the directional light.
+ * - Environment (HDRI): loads /images/sky.webp — a 2048x1024 equirectangular
+ *   sky map — for real image-based lighting/reflections AND (when
+ *   SHOW_HDRI_BACKGROUND) as the visible sky background. Replaces the earlier
+ *   procedural Lightformer IBL. drei's Environment loads the equirect .webp via
+ *   its texture path (no RGBELoader needed for LDR images) and suspends while
+ *   loading, so it lives inside a Suspense boundary.
  */
+
+/**
+ * HDRI tunables.
+ * - ENV_INTENSITY: strength of the image-based lighting/reflections the sky
+ *   contributes. Kept modest so the directional key light still dominates and
+ *   Bloom doesn't blow out.
+ * - BG_INTENSITY: brightness of the visible HDRI sky background.
+ * - SHOW_HDRI_BACKGROUND: when true, the HDRI sky is rendered as the scene
+ *   background (replacing the flat #cbe8f5 color). When false, the Environment
+ *   only lights the scene and the flat <color> background is used instead.
+ */
+const ENV_INTENSITY = 0.6;
+const BG_INTENSITY = 1.0;
+const SHOW_HDRI_BACKGROUND = true;
+
 export function GameScene() {
   return (
     <Canvas
@@ -46,13 +62,18 @@ export function GameScene() {
       performance={{ min: 0.5 }}
       gl={{ powerPreference: 'high-performance' }}
     >
-      <color attach="background" args={['#cbe8f5']} />
+      {/*
+        Flat sky fallback — only used when the HDRI sky is NOT shown as the
+        background. When SHOW_HDRI_BACKGROUND is true the Environment paints the
+        scene background with the equirect sky instead.
+      */}
+      {!SHOW_HDRI_BACKGROUND && <color attach="background" args={['#cbe8f5']} />}
       {/* Soft shadow injection (must be early in the scene, no assets). */}
       <SoftShadows size={12} samples={16} />
       {/* Sky/ground hemisphere fill — warms the scene and lifts shadow darkness. */}
       <hemisphereLight args={['#cbe8f5', '#8a9a5b', 0.35]} />
-      {/* Ambient trimmed so directional shadow contrast is preserved. */}
-      <ambientLight intensity={0.5} />
+      {/* Ambient trimmed (0.5 → 0.4) now that the HDRI Environment adds IBL fill. */}
+      <ambientLight intensity={0.4} />
       <directionalLight
         position={[6, 10, 6]} intensity={1.15} castShadow
         shadow-mapSize={[1024, 1024]}
@@ -60,40 +81,24 @@ export function GameScene() {
         <orthographicCamera attach="shadow-camera" args={[-8, 8, 8, -8, 0.1, 30]} />
       </directionalLight>
       {/*
-        Procedural IBL — baked once (frames=1) at 256px. No .hdr, no preset.
-        environmentIntensity is set low (0.4) so the IBL fills shadow areas and
-        adds glossy reflections without competing with the directional key light
-        or blowing out the Bloom pass.
+        HDRI IBL + sky. /images/sky.webp is a 2048x1024 equirect sky map served
+        as a static asset (not JS-bundled). drei's Environment loads it via its
+        texture path — LDR .webp/.png/.jpg work directly, no RGBELoader. It
+        suspends while the texture loads, hence the Suspense wrapper.
+        - environmentIntensity (ENV_INTENSITY): IBL/reflection strength.
+        - background + backgroundIntensity: paints the sky as the scene
+          background at BG_INTENSITY. When SHOW_HDRI_BACKGROUND is false the
+          background prop is dropped so the HDRI only lights the scene and the
+          flat <color> fallback above is used.
       */}
-      <Environment resolution={256} frames={1} environmentIntensity={0.4}>
-        {/* 1. Overhead key — large soft white panel, high above, facing down. */}
-        <Lightformer
-          intensity={2}
-          color="#ffffff"
-          position={[0, 8, 0]}
-          rotation={[Math.PI / 2, 0, 0]}
-          scale={[10, 10, 1]}
-          form="rect"
+      <Suspense fallback={null}>
+        <Environment
+          files="/images/sky.webp"
+          environmentIntensity={ENV_INTENSITY}
+          background={SHOW_HDRI_BACKGROUND || undefined}
+          backgroundIntensity={BG_INTENSITY}
         />
-        {/* 2. Cool rim — blue-tinted side panel for subtle glossy edge highlights. */}
-        <Lightformer
-          intensity={0.8}
-          color="#b0d0ff"
-          position={[-6, 4, -4]}
-          rotation={[0, Math.PI / 3, 0]}
-          scale={[6, 4, 1]}
-          form="rect"
-        />
-        {/* 3. Warm fill — amber-tinted low-angle panel to lift shadow darkness. */}
-        <Lightformer
-          intensity={0.5}
-          color="#ffe8b0"
-          position={[4, 1, 5]}
-          rotation={[-Math.PI / 6, -Math.PI / 4, 0]}
-          scale={[5, 3, 1]}
-          form="rect"
-        />
-      </Environment>
+      </Suspense>
       {/* OrbitControls + gentle auto-focus toward active player's tile. */}
       <CameraRig />
       {/*
