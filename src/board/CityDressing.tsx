@@ -52,17 +52,16 @@ import { BOARD_WORLD_SIZE } from './positions';
 const INNER_SQUARE = BOARD_WORLD_SIZE * 0.6; // 10 * 0.6 = 6 → empty center ≈ [-3, 3]
 
 // The clear inner square (inside the tile ring) is CORNER=0.134 deep on each
-// side → its edge sits at world ±(0.5-0.134)*10 = ±3.66. At CITY_SCALE=1.14 the
-// city's long (X) half-extent is ≈3.42, leaving ~0.24 margin to that edge on
-// BOTH sides with NO overlap; the short (Z) axis has a larger (≈0.70) margin —
-// inherent to the non-square 300×260 footprint, and preferable to stretching/
-// distorting the model. PANs stay 0 so the bbox stays perfectly centered
-// (|centerX|,|centerZ| < 0.1) with equal margins per axis.
-const CITY_SCALE = 1.14;  // long axis ≈ ±3.42 world → inside the ±3.66 tile edge, no overlap
-const CITY_PAN_X = 0;     // world-X fine-tune (post-scale); 0 = bbox-centered on origin
-const CITY_PAN_Z = 0;     // world-Z fine-tune (post-scale); 0 = bbox-centered on origin
-const CITY_Y = 0.02;      // rest the city ground on the board top (TOP_Y)
-const CITY_ROT = 0;       // radians; nudge to aim streets toward the camera
+// side → its edge sits at world ±(0.5-0.134)*10 = ±3.66. Non-uniform scale on X
+// and Z fills both axes to the target half-extent (~3.45), while Y scale is tied
+// to X to avoid vertical distortion. City footprint (model ~300×260) is recentered
+// at origin, then each axis is scaled independently to fill the inner square equally.
+// PANs stay 0 so the bbox stays perfectly centered (|centerX|,|centerZ| < 0.1).
+const CITY_FILL_HALF = 3.45;  // target half-extent on X and Z axes (safely inside ±3.66 tile edge)
+const CITY_PAN_X = 0;         // world-X fine-tune (post-scale); 0 = bbox-centered on origin
+const CITY_PAN_Z = 0;         // world-Z fine-tune (post-scale); 0 = bbox-centered on origin
+const CITY_Y = 0.02;          // rest the city ground on the board top (TOP_Y)
+const CITY_ROT = 0;           // radians; nudge to aim streets toward the camera
 
 const CITY_URL = '/models/city.glb';
 
@@ -90,13 +89,18 @@ export function CityDressing(): React.JSX.Element {
     // outer group can place the ground precisely at CITY_Y.
     scene.position.set(-center.x, -box.min.y, -center.z);
 
-    // Auto-fit the LONG footprint axis (max of x/z) to the inner square, then
-    // apply the tunable factor. Fitting to the larger dimension ensures the long
-    // axis — not the short one — sets the scale, so neither axis can spill over.
-    const footprint = Math.max(size.x, size.z) || 1;
-    const fit = INNER_SQUARE / footprint;
+    // Compute per-axis half-extents from the recentered footprint.
+    const halfX = size.x / 2;
+    const halfZ = size.z / 2;
 
-    return { object: scene, groupScale: fit * CITY_SCALE };
+    // Scale each axis independently to fill the inner square target half-extent.
+    // Y is tied to X scale to avoid vertical distortion (keep building height
+    // proportional to width).
+    const scaleX = CITY_FILL_HALF / (halfX || 1);
+    const scaleZ = CITY_FILL_HALF / (halfZ || 1);
+    const scaleY = scaleX;
+
+    return { object: scene, groupScale: [scaleX, scaleY, scaleZ] };
   }, [gltf]);
 
   return (
@@ -104,7 +108,7 @@ export function CityDressing(): React.JSX.Element {
       name="city-center"
       position={[CITY_PAN_X, CITY_Y, CITY_PAN_Z]}
       rotation={[0, CITY_ROT, 0]}
-      scale={groupScale}
+      scale={groupScale as [number, number, number] | number}
     >
       <primitive object={object} />
     </group>
