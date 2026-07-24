@@ -10,39 +10,44 @@
  * Big, prominent full-body preview: the selected skin (NATIVE colors), slowly
  * auto-rotating on a soft podium, lit by a gentle key/fill/rim. The rarity
  * accent tints the podium ring so the preview echoes the card frame.
+ *
+ * Interaction: OrbitControls allows the user to drag-rotate the character.
+ * autoRotate is built into OrbitControls and automatically pauses while the
+ * user is actively dragging, then resumes when they release.
  */
 
-import { useRef } from 'react';
-import { Canvas, useFrame } from '@react-three/fiber';
-import type * as THREE from 'three';
+import { Canvas } from '@react-three/fiber';
+import { OrbitControls } from '@react-three/drei';
 import { CharacterToken } from '../board/CharacterToken';
 
 interface PreviewSceneProps {
   url: string;
   /** Rarity accent (hex) used to tint the podium ring. */
   accent?: string;
-  /** Hex color to recolor the skin's primary outfit material (live preview). */
+  /** Hex color to recolor the skin's primary flesh material (live preview). */
   baseColor?: string;
 }
 
-function RotatingGroup({ url, accent = '#2a2a40', baseColor }: PreviewSceneProps) {
-  const groupRef = useRef<THREE.Group>(null);
-
-  useFrame((_, delta) => {
-    if (groupRef.current) {
-      groupRef.current.rotation.y += delta * 0.5;
-    }
-  });
-
+/**
+ * The podium + character group. No manual useFrame rotation — OrbitControls
+ * handles both autoRotate and user-drag in the Canvas context.
+ */
+function PreviewScene({ url, accent = '#2a2a40', baseColor }: PreviewSceneProps) {
   return (
-    <group ref={groupRef}>
-      {/* Character — primary outfit recolored if baseColor is set; Skin/Face/Hair untouched. */}
+    <group>
+      {/*
+       * Character — standing with feet at y=0 on the podium.
+       * y=0 is the podium surface; the camera target is aimed at mid-body
+       * (~half the character height) so the full figure is centered in frame.
+       */}
       <CharacterToken url={url} clip="Idle" scale={0.2} baseColor={baseColor} />
-      {/* Podium disc, accent-tinted rim glow. */}
+
+      {/* Podium disc */}
       <mesh receiveShadow position={[0, -0.004, 0]} rotation={[-Math.PI / 2, 0, 0]}>
         <circleGeometry args={[0.6, 64]} />
         <meshStandardMaterial color="#181826" roughness={0.85} metalness={0.15} />
       </mesh>
+      {/* Podium accent ring */}
       <mesh position={[0, 0.002, 0]} rotation={[-Math.PI / 2, 0, 0]}>
         <ringGeometry args={[0.56, 0.6, 64]} />
         <meshStandardMaterial color={accent} emissive={accent} emissiveIntensity={0.35} />
@@ -55,7 +60,19 @@ export function CharacterPreviewCanvas({ url, accent, baseColor }: PreviewSceneP
   return (
     <Canvas
       style={{ width: '100%', height: '100%' }}
-      camera={{ position: [0, 0.95, 1.7], fov: 40 }}
+      /*
+       * Camera framing — full-body portrait, character vertically centered:
+       *   - position: pulled back enough to see head-to-feet with margin,
+       *     elevated slightly so eye-level is near mid-chest.
+       *   - fov: 38° for a flattering perspective (not fisheye).
+       *
+       * The OrbitControls `target` below locks the orbit pivot to the
+       * character's mid-height (~0.85 model-units above the podium for a
+       * ~1.7-unit-tall humanoid at scale 0.2 → actual height ~0.34 world
+       * units, mid ≈ 0.17). We use 0.2 as a slight above-center bias
+       * (more headroom than footroom → natural portrait framing).
+       */
+      camera={{ position: [0, 0.55, 1.55], fov: 38 }}
       shadows={false}
       dpr={[1, 2]}
       gl={{ powerPreference: 'default', antialias: true }}
@@ -64,7 +81,34 @@ export function CharacterPreviewCanvas({ url, accent, baseColor }: PreviewSceneP
       <ambientLight intensity={0.75} />
       <directionalLight position={[1.5, 3, 2]} intensity={1.25} />
       <directionalLight position={[-1.8, 1.5, -0.6]} intensity={0.35} color="#9aa6ff" />
-      <RotatingGroup url={url} accent={accent} baseColor={baseColor} />
+
+      <PreviewScene url={url} accent={accent} baseColor={baseColor} />
+
+      {/*
+       * OrbitControls — handles both autoRotate and drag-to-rotate:
+       *   - autoRotate: built-in spin at 1.2 rpm; automatically pauses
+       *     while the user is dragging and resumes when they release.
+       *   - enableDamping: smooth inertial deceleration after drag release.
+       *   - enablePan: disabled (no need to slide around a portrait preview).
+       *   - enableZoom: small range allowed so users can inspect details.
+       *   - Polar angle clamps: prevent flipping under the floor or looking
+       *     straight down (clamp to ~10°–90° from the top).
+       *   - target: orbit pivot at the character's mid-height so the whole
+       *     figure stays centered in the viewport during rotation.
+       */}
+      <OrbitControls
+        autoRotate
+        autoRotateSpeed={1.2}
+        enableDamping
+        dampingFactor={0.1}
+        enablePan={false}
+        enableZoom={true}
+        minDistance={0.9}
+        maxDistance={3.0}
+        minPolarAngle={Math.PI * 0.1}
+        maxPolarAngle={Math.PI * 0.5}
+        target={[0, 0.2, 0]}
+      />
     </Canvas>
   );
 }

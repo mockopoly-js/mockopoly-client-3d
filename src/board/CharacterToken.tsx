@@ -68,19 +68,55 @@ function cloneMaterial(mat: THREE.Material): THREE.Material {
 const SKIN_MATERIAL_TOKENS = ['skin', 'face'];
 
 /**
+ * Explicit exclude list — any material whose name (case-insensitive, partial)
+ * contains ANY of these tokens is NEVER recolored, even if it also matches a
+ * skin/face token. The exclude wins unconditionally.
+ *
+ * Covers: hair & facial hair, eyes & ocular components, facial features, and
+ * accessories that may share naming fragments with skin/face materials.
+ *
+ *   hair, beard, mustache, moustache, stubble, goatee, sideburn, whisker,
+ *   facial,
+ *   eye, eyes, eyebrow, brow, lash, pupil, iris, sclera, lens,
+ *   teeth, tooth, mouth, lip, tongue, nose, ear, nail,
+ *   glasses, mask
+ */
+const SKIN_EXCLUDE_TOKENS = [
+  // Hair & facial hair
+  'hair', 'beard', 'mustache', 'moustache', 'stubble', 'goatee', 'sideburn', 'whisker', 'facial',
+  // Eyes & ocular
+  'eye', 'brow', 'lash', 'pupil', 'iris', 'sclera', 'lens',
+  // Other facial features / accessories
+  'teeth', 'tooth', 'mouth', 'lip', 'tongue', 'nose', 'ear', 'nail', 'glasses', 'mask',
+];
+
+/**
  * Given a list of material names from a cloned scene, return all names that
  * are skin-tone materials (body + face). These are the only materials that
  * get recolored when the player picks a skin color. Outfit, hair, eyes, and
  * all other accessories are NEVER touched.
+ *
+ * A material is included when:
+ *   1. Its name (case-insensitive) contains "skin" or "face"  AND
+ *   2. Its name does NOT contain any of the eye-exclude tokens
+ *      (eye, brow, lash, pupil, iris, sclera, lens).
+ *
+ * The exclude check wins — e.g. "EyeFace_skin" is still excluded.
  *
  * Returns an empty array when the model has no skin/face materials (rare).
  *
  * Exported so it can be unit-tested independently of Three.js.
  */
 export function pickSkinMaterialNames(names: string[]): string[] {
-  return names.filter((n) =>
-    SKIN_MATERIAL_TOKENS.some((token) => n.toLowerCase().includes(token)),
-  );
+  return names.filter((n) => {
+    const lower = n.toLowerCase();
+    const isSkin = SKIN_MATERIAL_TOKENS.some((token) => lower.includes(token));
+    if (!isSkin) return false;
+    // Exclude all non-flesh materials: hair, facial hair, eyes, ocular,
+    // other facial features, and accessories — even if they match skin/face.
+    const isExcluded = SKIN_EXCLUDE_TOKENS.some((token) => lower.includes(token));
+    return !isExcluded;
+  });
 }
 
 /**

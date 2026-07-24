@@ -216,6 +216,37 @@ describe('pickSkinMaterialNames (skin-tone material picker)', () => {
     expect(result).not.toContain('Hair');
   });
 
+  it('NEVER recolors eyes, eyebrows, hair, or facial-hair materials — only pure flesh', () => {
+    // Eyes and eyebrows — explicit exclusions.
+    expect(pickSkinMaterialNames(['Eye_L', 'Eye_R', 'Skin'])).toEqual(['Skin']);
+    expect(pickSkinMaterialNames(['Eyebrow', 'Face', 'Skin'])).toEqual(['Face', 'Skin']);
+    // A material that would match "face" AND an exclude token is still excluded.
+    expect(pickSkinMaterialNames(['EyeFace_skin', 'Skin', 'Face'])).toEqual(['Skin', 'Face']);
+
+    // All primary exclude tokens individually (case-insensitive) must return [].
+    const excludedMaterials = [
+      // Eyes & ocular
+      'Eye', 'EYES', 'Eyebrow', 'Brow_L', 'Lash', 'Pupil', 'Iris', 'Sclera', 'Lens',
+      // Hair & facial hair
+      'Hair', 'Beard', 'Mustache', 'Moustache', 'Stubble', 'Goatee', 'Sideburn', 'Whisker', 'FacialHair',
+      // Other facial features / accessories
+      'Teeth', 'Tooth', 'Mouth', 'Lip', 'Tongue', 'Nose', 'Ear', 'Nail', 'Glasses', 'Mask',
+    ];
+    for (const mat of excludedMaterials) {
+      expect(pickSkinMaterialNames([mat]), `expected "${mat}" to be excluded`).toEqual([]);
+    }
+
+    // Skin + Face are STILL recolored (only flesh changes).
+    expect(pickSkinMaterialNames(['Skin', 'Face'])).toEqual(['Skin', 'Face']);
+
+    // Full humanoid material list — only Skin + Face survive.
+    const full = [
+      'Skin', 'Face', 'Eye_L', 'Eye_R', 'Eyebrow', 'Beard', 'Hair',
+      'Shirt', 'Pants', 'Belt', 'Hat', 'Glasses',
+    ];
+    expect(pickSkinMaterialNames(full)).toEqual(['Skin', 'Face']);
+  });
+
   it('preserves order of appearance in the input array', () => {
     // Face listed before Skin in input → Face comes first in result
     expect(pickSkinMaterialNames(['Face', 'Clothes', 'Skin'])).toEqual(['Face', 'Skin']);
