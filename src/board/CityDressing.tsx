@@ -76,6 +76,7 @@ export function CityDressing(): React.JSX.Element {
       if (m.isMesh) {
         m.castShadow = true;
         m.receiveShadow = true;
+        m.frustumCulled = false;
       }
     });
 

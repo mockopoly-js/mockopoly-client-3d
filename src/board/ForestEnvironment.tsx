@@ -60,7 +60,10 @@ export function ForestEnvironment(): React.JSX.Element {
     const scene = gltf.scene.clone(true);
     scene.traverse((o) => {
       const m = o as THREE.Mesh;
-      if (m.isMesh) m.receiveShadow = true; // ground/foliage takes the board's shadow
+      if (m.isMesh) {
+        m.receiveShadow = true; // ground/foliage takes the board's shadow
+        m.frustumCulled = false;
+      }
     });
     scene.updateMatrixWorld(true);
 
