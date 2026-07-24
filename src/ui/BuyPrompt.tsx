@@ -30,7 +30,7 @@ export function BuyPrompt() {
   const accent = space.colorGroup ? COLOR_GROUP_HEX[space.colorGroup] : '#d4af37';
 
   const buy = () => socketManager.emit(EVENTS.TURN_BUY_PROPERTY);
-  const decline = () => socketManager.emit(EVENTS.TURN_PASS_BUY);
+  const decline = () => socketManager.emit(EVENTS.TURN_END);
 
   const inner = (
     <>

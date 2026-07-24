@@ -39,12 +39,12 @@ describe('BuyPrompt', () => {
     expect(emit).toHaveBeenCalledWith(EVENTS.TURN_BUY_PROPERTY);
   });
 
-  it('emits TURN_PASS_BUY on decline', () => {
+  it('emits TURN_END on decline', () => {
     land('action', 15_000_000);
     const emit = vi.spyOn(socketManager, 'emit').mockImplementation(() => {});
     render(<BuyPrompt />);
     fireEvent.click(screen.getByRole('button', { name: /decline/i }));
-    expect(emit).toHaveBeenCalledWith(EVENTS.TURN_PASS_BUY);
+    expect(emit).toHaveBeenCalledWith(EVENTS.TURN_END);
   });
 
   it('disables Buy when unaffordable but still allows Decline', () => {
