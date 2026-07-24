@@ -88,6 +88,7 @@ export function GameButton({
     fontSize: isMobile ? 17 : 16,
     letterSpacing: '0.04em',
     textTransform: 'uppercase',
+    whiteSpace: 'nowrap',
 
     // Color
     color: disabled ? v.colorDisabled : v.color,
@@ -101,6 +102,7 @@ export function GameButton({
     padding: isMobile ? '15px 22px' : '13px 22px',
     minHeight: isMobile ? 52 : undefined,
     width: fullWidth ? '100%' : undefined,
+    flex: fullWidth ? 1 : undefined,
     boxSizing: 'border-box',
 
     // Shadow / bevel
