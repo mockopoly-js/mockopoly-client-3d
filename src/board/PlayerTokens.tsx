@@ -278,7 +278,7 @@ export function PlayerTokens() {
                 pods/ownership use). ringGeometry lies in the XY plane; the
                 rotation lays it flat on the board facing up. DoubleSide ensures
                 it shows from grazing/below angles. */}
-            <mesh position={[0, -BASE_Y + 0.02, 0]} rotation={[-Math.PI / 2, 0, 0]}>
+            <mesh position={[0, -BASE_Y + 0.06, 0]} rotation={[-Math.PI / 2, 0, 0]}>
               <ringGeometry args={[RING_INNER, RING_OUTER, 48]} />
               <meshStandardMaterial
                 color={hex}
