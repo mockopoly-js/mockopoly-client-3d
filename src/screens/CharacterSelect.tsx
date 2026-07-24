@@ -65,6 +65,16 @@ export function CharacterSelect() {
   // Local drafts — committed on Equip.
   const [selectedId, setSelectedId] = useState(storeCharacter);
   const [characterColor, setCharacterColor] = useState<string | null>(storeCharacterColor);
+  // hexDraft drives the hex text input so the user can type character-by-character.
+  // It is synced FROM characterColor whenever the color changes via swatch/wheel/reset.
+  const [hexDraft, setHexDraft] = useState<string>(storeCharacterColor ?? '');
+  // Use this instead of calling setCharacterColor directly from swatch/wheel/reset so
+  // hexDraft stays in sync. The hex text input manages hexDraft itself and only
+  // calls setCharacterColor when the typed value becomes a valid #RRGGBB.
+  const applyColor = useCallback((hex: string | null) => {
+    setCharacterColor(hex);
+    setHexDraft(hex ?? '');
+  }, []);
   const [token, setToken] = useState<TokenType>(storeToken);
   const [category, setCategory] = useState<CatFilter>(ALL_CAT);
   const [search, setSearch] = useState('');
@@ -148,17 +158,17 @@ export function CharacterSelect() {
         </button>
       </div>
 
-      {/* SKIN COLOR TAB ─ recolors the outfit material; Skin/Face/Hair untouched */}
+      {/* SKIN COLOR TAB ─ recolors the Skin/Face materials; outfit/hair/eyes untouched */}
       {rightTab === 'skin' && (
         <div style={s.colorBlock} data-testid="skin-color-panel">
-          <div style={s.colorLabel}>Outfit color</div>
-          <div style={s.swatchRow} role="group" aria-label="Skin outfit color palette">
+          <div style={s.colorLabel}>Skin color</div>
+          <div style={s.swatchRow} role="group" aria-label="Skin color palette">
             {SKIN_COLOR_PALETTE.map(({ label, hex }) => (
               <button
                 key={hex}
                 aria-label={label}
                 aria-pressed={characterColor === hex}
-                onClick={() => setCharacterColor(hex)}
+                onClick={() => applyColor(hex)}
                 style={s.swatch(characterColor === hex, hex)}
                 title={label}
               />
@@ -172,18 +182,21 @@ export function CharacterSelect() {
               id="skin-free-color"
               type="color"
               value={characterColor ?? '#ffffff'}
-              onChange={(e) => setCharacterColor(e.target.value)}
+              onChange={(e) => applyColor(e.target.value)}
               style={s.freeColorInput}
               aria-label="Custom skin color"
               data-testid="skin-free-color-input"
             />
+            {/* hexDraft lets the user type freely character-by-character.
+                characterColor is only updated when a complete #RRGGBB is typed. */}
             <input
               type="text"
-              value={characterColor ?? ''}
+              value={hexDraft}
               placeholder="#rrggbb"
               maxLength={7}
               onChange={(e) => {
                 const v = e.target.value;
+                setHexDraft(v);
                 if (/^#[0-9a-fA-F]{6}$/.test(v)) setCharacterColor(v);
                 else if (v === '' || v === '#') setCharacterColor(null);
               }}
@@ -193,7 +206,7 @@ export function CharacterSelect() {
             />
             <button
               style={s.resetBtn}
-              onClick={() => setCharacterColor(null)}
+              onClick={() => applyColor(null)}
               data-testid="skin-color-reset"
               aria-label="Reset skin color to default"
             >

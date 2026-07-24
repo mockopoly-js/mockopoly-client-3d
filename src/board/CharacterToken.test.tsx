@@ -59,7 +59,7 @@ vi.mock('three/examples/jsm/utils/SkeletonUtils.js', () => ({
 }));
 
 // Import AFTER mocks are registered.
-import { CharacterToken, type CharacterTokenHandle, pickPrimaryMaterialName } from './CharacterToken';
+import { CharacterToken, type CharacterTokenHandle, pickSkinMaterialNames, pickPrimaryMaterialName } from './CharacterToken';
 
 describe('CHARACTERS catalog', () => {
   it('has 52 entries with unique ids and well-formed urls', () => {
@@ -174,48 +174,61 @@ describe('CharacterToken', () => {
   });
 });
 
-// ── pickPrimaryMaterialName heuristic ─────────────────────────────────────────
+// ── pickSkinMaterialNames — skin-tone material picker ─────────────────────────
+//
+// The "Skin Color" feature recolors ONLY the character's flesh/body materials
+// (Skin + Face). Outfit, hair, eyes, and all accessories keep native colors.
 
-describe('pickPrimaryMaterialName (material heuristic)', () => {
-  it('picks an allowlisted outfit material over others', () => {
-    expect(pickPrimaryMaterialName(['Skin', 'Hair', 'Shirt', 'Pants'])).toBe('Shirt');
-    expect(pickPrimaryMaterialName(['Skin', 'Face', 'Clothes', 'Belt'])).toBe('Clothes');
-    expect(pickPrimaryMaterialName(['Skin', 'Jacket', 'Hair'])).toBe('Jacket');
-    expect(pickPrimaryMaterialName(['Armor', 'Skin', 'Face', 'Hair'])).toBe('Armor');
-    expect(pickPrimaryMaterialName(['Skin', 'Main', 'Hair'])).toBe('Main');
+describe('pickSkinMaterialNames (skin-tone material picker)', () => {
+  it('picks Skin and Face materials — body + face match the chosen skin color', () => {
+    // BaseCharacter (only Skin + Face) → both recolored → fully red body
+    expect(pickSkinMaterialNames(['Skin', 'Face'])).toEqual(['Skin', 'Face']);
+    // Suit_Male: Skin/Face picked; Black/Belt/Shirt/Hair/Details left alone
+    expect(pickSkinMaterialNames(['Skin', 'Black', 'Belt', 'Shirt', 'Details', 'Face', 'Hair'])).toEqual(['Skin', 'Face']);
+    // Ninja_Male: Skin/Face picked; Main/Details/Grey left alone
+    expect(pickSkinMaterialNames(['Skin', 'Main', 'Details', 'Grey', 'Face'])).toEqual(['Skin', 'Face']);
+    // Wizard: Skin/Face picked; Clothes/Belt/Gold/Hat/Hair left alone
+    expect(pickSkinMaterialNames(['Skin', 'Clothes', 'Belt', 'Gold', 'Hat', 'Hair', 'Face'])).toEqual(['Skin', 'Face']);
   });
 
-  it('is case-insensitive for both allowlist and blocklist', () => {
-    expect(pickPrimaryMaterialName(['SKIN', 'HAIR', 'SHIRT'])).toBe('SHIRT');
-    expect(pickPrimaryMaterialName(['skin.001', 'Main_Cloth'])).toBe('Main_Cloth');
+  it('is case-insensitive — matches SKIN, skin.001, face_mesh, etc.', () => {
+    expect(pickSkinMaterialNames(['SKIN', 'FACE', 'SHIRT'])).toEqual(['SKIN', 'FACE']);
+    expect(pickSkinMaterialNames(['skin.001', 'face_mesh', 'Clothes'])).toEqual(['skin.001', 'face_mesh']);
   });
 
-  it('falls back to first non-skin material when no allowlist match', () => {
-    expect(pickPrimaryMaterialName(['Skin', 'Hair', 'Pants', 'Belt'])).toBe('Pants');
+  it('returns only Skin when the model has no Face material', () => {
+    expect(pickSkinMaterialNames(['Skin', 'Armor', 'Hair'])).toEqual(['Skin']);
   });
 
-  it('returns null when all materials are skin/face/hair/eye', () => {
-    expect(pickPrimaryMaterialName(['Skin', 'Face', 'Hair', 'Eye'])).toBe(null);
+  it('returns empty array when the model has no skin/face material (no recolor)', () => {
+    // A fully-armored / non-humanoid model with no Skin/Face material
+    expect(pickSkinMaterialNames(['Armor', 'Armor_Dark', 'Detail', 'Red'])).toEqual([]);
+    expect(pickSkinMaterialNames([])).toEqual([]);
   });
 
-  it('returns null for an empty list', () => {
+  it('never includes outfit or accessory materials in the result', () => {
+    const result = pickSkinMaterialNames(['Skin', 'Shirt', 'Pants', 'Belt', 'Hat', 'Jacket', 'Armor', 'Main', 'Clothes', 'Face', 'Hair']);
+    expect(result).toEqual(['Skin', 'Face']);
+    // Shirt, Pants, Belt, Hat, Jacket, Armor, Main, Clothes, Hair are ALL absent
+    expect(result).not.toContain('Shirt');
+    expect(result).not.toContain('Pants');
+    expect(result).not.toContain('Armor');
+    expect(result).not.toContain('Hair');
+  });
+
+  it('preserves order of appearance in the input array', () => {
+    // Face listed before Skin in input → Face comes first in result
+    expect(pickSkinMaterialNames(['Face', 'Clothes', 'Skin'])).toEqual(['Face', 'Skin']);
+  });
+});
+
+// ── pickPrimaryMaterialName (deprecated back-compat) ──────────────────────────
+
+describe('pickPrimaryMaterialName (deprecated — delegates to pickSkinMaterialNames)', () => {
+  it('returns the first skin-tone material or null', () => {
+    expect(pickPrimaryMaterialName(['Skin', 'Face', 'Shirt'])).toBe('Skin');
+    expect(pickPrimaryMaterialName(['Face', 'Clothes'])).toBe('Face');
+    expect(pickPrimaryMaterialName(['Shirt', 'Pants'])).toBe(null);
     expect(pickPrimaryMaterialName([])).toBe(null);
-  });
-
-  it('handles partial name matches (e.g. "eye" inside "eyebrow")', () => {
-    // "eyebrow" contains "eye" so it is blocked — falls through to "Cloth".
-    expect(pickPrimaryMaterialName(['eyebrow', 'Cloth'])).toBe('Cloth');
-  });
-
-  it('returns the first allowlist-matching material in the names array', () => {
-    // Both Clothes and Shirt are in the allowlist; the first matching name in
-    // the input array wins (linear scan of nonSkin names).
-    expect(pickPrimaryMaterialName(['Clothes', 'Shirt'])).toBe('Clothes');
-    expect(pickPrimaryMaterialName(['Shirt', 'Clothes'])).toBe('Shirt');
-  });
-
-  it('never recolors Skin/Face/Hair/Eye materials (blocklist)', () => {
-    // Only blocklist materials present → null.
-    expect(pickPrimaryMaterialName(['skin_base', 'face_mesh', 'hair_strand', 'eye_left'])).toBe(null);
   });
 });

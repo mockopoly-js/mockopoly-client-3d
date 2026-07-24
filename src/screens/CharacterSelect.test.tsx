@@ -199,8 +199,8 @@ describe('CharacterSelect (locker)', () => {
 
   it('Color tab shows the palette with 16 curated swatches', () => {
     renderSelect();
-    // Skin color tab is default — check the outfit palette.
-    const palette = screen.getByRole('group', { name: /skin outfit color palette/i });
+    // Skin color tab is default — check the skin palette.
+    const palette = screen.getByRole('group', { name: /Skin color palette/i });
     const swatches = within(palette).getAllByRole('button');
     expect(swatches).toHaveLength(16);
   });
@@ -227,7 +227,7 @@ describe('CharacterSelect (locker)', () => {
     // Reset.
     fireEvent.click(screen.getByTestId('skin-color-reset'));
     // After reset, no swatch should be pressed.
-    const palette = screen.getByRole('group', { name: /skin outfit color palette/i });
+    const palette = screen.getByRole('group', { name: /Skin color palette/i });
     const pressed = within(palette).getAllByRole('button').filter(
       (b) => b.getAttribute('aria-pressed') === 'true',
     );
@@ -280,9 +280,9 @@ describe('CharacterSelect (locker)', () => {
   describe('gameStore selectedCharacterColor', () => {
     it('defaults to null (native skin color)', () => {
       useGameStore.getState().reset();
-      // After reset, it is still null (reset doesn't touch persisted character color).
+      // After reset the color must be null — not a string, not undefined.
       const color = useGameStore.getState().selectedCharacterColor;
-      expect(color === null || typeof color === 'string').toBe(true);
+      expect(color).toBe(null);
     });
 
     it('setSelectedCharacterColor updates state and persists to localStorage', () => {

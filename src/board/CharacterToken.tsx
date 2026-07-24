@@ -21,14 +21,14 @@ import { clone as cloneSkeleton } from 'three/examples/jsm/utils/SkeletonUtils.j
  * Animation tracks target bones BY NAME, so the ORIGINAL gltf.animations clips
  * play correctly on the clone (same bone names) — no clip cloning required.
  *
- * COLOR: the character is rendered with its NATIVE materials — no color wash.
- * Each character already has meaningful colors (a Suit is grey, a Wizard purple,
- * etc.), so tinting them toward the player color made them wrong. Player
- * identity on the board is shown by the colored base ring under the token
- * (PlayerTokens), NOT by recoloring the character. We still clone every material
- * per instance so each token can dispose its own materials on unmount without
- * touching the shared cached gltf, but the clone is a faithful copy (colors
- * untouched). The `tint` prop is retained for API/back-compat but is a no-op.
+ * COLOR: outfit/accessory materials render with NATIVE authored colors — a Suit
+ * stays grey, a Wizard stays purple, etc. Only the character's SKIN-TONE
+ * materials (named "Skin" / "Face" in the .glb) are recolored when the player
+ * picks a skin color via the `baseColor` prop. Player identity on the board is
+ * shown by the colored base ring under the token (PlayerTokens), NOT by
+ * recoloring the outfit. We still clone every material per instance so each
+ * token can dispose its own materials on unmount without touching the shared
+ * cached gltf. The `tint` prop is retained for API/back-compat but is a no-op.
  */
 export type CharacterClip =
   | 'Idle'
@@ -49,47 +49,58 @@ export interface CharacterTokenHandle {
 
 /**
  * Clone a material per instance (so unmount can dispose it without touching the
- * shared cached gltf) — but keep the character's NATIVE color untouched. No
- * tint/wash: characters render with their own authored colors.
+ * shared cached gltf). Outfit/accessory materials keep their NATIVE authored
+ * colors. Only Skin/Face materials are recolored via `baseColor`.
  */
 function cloneMaterial(mat: THREE.Material): THREE.Material {
   return (mat as THREE.MeshStandardMaterial).clone();
 }
 
 /**
- * Allowlist of primary outfit material names (case-insensitive). The first name
- * in this list that appears in the skin's material set is chosen as the recolor
- * target. Skin/Face/Hair materials are never recolored.
+ * Skin-tone material name fragments (case-insensitive, partial match).
+ * Materials whose names contain any of these tokens are the character's actual
+ * flesh/body — they are the TARGET of the "Skin Color" recolor. All other
+ * materials (outfit, hair, eyes, accessories) are left untouched.
+ *
+ * "face" is included because Face materials share the same skin tone as the
+ * body, so hands + face always match the chosen skin color.
  */
-const OUTFIT_ALLOWLIST = ['shirt', 'clothes', 'main', 'jacket', 'armor'];
-const SKIN_BLOCKLIST = ['skin', 'face', 'hair', 'eye'];
+const SKIN_MATERIAL_TOKENS = ['skin', 'face'];
 
 /**
- * Given a list of material names from a cloned scene, return the name of the
- * primary outfit material to recolor, or null if none qualifies.
+ * Given a list of material names from a cloned scene, return all names that
+ * are skin-tone materials (body + face). These are the only materials that
+ * get recolored when the player picks a skin color. Outfit, hair, eyes, and
+ * all other accessories are NEVER touched.
  *
- * Strategy:
- * 1. Filter out any Skin/Face/Hair/Eye materials.
- * 2. Among the remaining, find the first whose name is in the OUTFIT_ALLOWLIST
- *    (case-insensitive match).
- * 3. If none match, fall back to the first non-skin material (largest by index).
+ * Returns an empty array when the model has no skin/face materials (rare).
  *
  * Exported so it can be unit-tested independently of Three.js.
  */
-export function pickPrimaryMaterialName(names: string[]): string | null {
-  const nonSkin = names.filter(
-    (n) => !SKIN_BLOCKLIST.some((b) => n.toLowerCase().includes(b)),
+export function pickSkinMaterialNames(names: string[]): string[] {
+  return names.filter((n) =>
+    SKIN_MATERIAL_TOKENS.some((token) => n.toLowerCase().includes(token)),
   );
-  if (nonSkin.length === 0) return null;
-  const allowlisted = nonSkin.find((n) =>
-    OUTFIT_ALLOWLIST.some((a) => n.toLowerCase().includes(a)),
-  );
-  return allowlisted ?? nonSkin[0];
 }
 
 /**
- * Apply `baseColor` to the primary outfit material of a cloned scene.
- * Skin/Face/Hair/Eye materials are never touched.
+ * @deprecated Use pickSkinMaterialNames. Kept for back-compat — delegates to
+ * pickSkinMaterialNames and returns the first match or null.
+ */
+export function pickPrimaryMaterialName(names: string[]): string | null {
+  const matches = pickSkinMaterialNames(names);
+  return matches.length > 0 ? matches[0] : null;
+}
+
+/**
+ * Apply `baseColor` to all skin-tone materials (Skin, Face) of a cloned scene.
+ * Outfit materials (Shirt, Clothes, Main, Jacket, Armor, Hat, Belt, Pants, etc.)
+ * and all other accessories/hair/eyes are NEVER touched — they keep their
+ * original authored colors. Only the body flesh + face mesh is recolored so the
+ * player's chosen skin color is reflected uniformly across hands, arms, and face.
+ *
+ * If the model has no skin/face material at all, this is a no-op (native colors
+ * are kept as-is).
  */
 function applyBaseColor(scene: THREE.Group, baseColor: string): void {
   // Collect all unique material names from the scene.
@@ -105,16 +116,18 @@ function applyBaseColor(scene: THREE.Group, baseColor: string): void {
     }
   });
 
-  const targetName = pickPrimaryMaterialName(matNames);
-  if (!targetName) return;
+  // Resolve which material names are skin-tone targets (Skin + Face).
+  const skinNames = pickSkinMaterialNames(matNames);
+  if (skinNames.length === 0) return;
 
+  const skinNameSet = new Set(skinNames);
   const color = new THREE.Color(baseColor);
   scene.traverse((o) => {
     const mesh = o as THREE.Mesh;
     if (!mesh.isMesh) return;
     const mats = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
     for (const m of mats) {
-      if (m && m.name === targetName) {
+      if (m && skinNameSet.has(m.name)) {
         (m as THREE.MeshStandardMaterial).color.set(color);
       }
     }
@@ -130,11 +143,13 @@ interface CharacterTokenProps {
    */
   tint?: string;
   /**
-   * Optional hex color to recolor the skin's PRIMARY outfit material (the first
-   * material whose name is in the outfit allowlist, or the first non-skin
-   * material). Skin/Face/Hair/Eye materials are never touched. When undefined or
-   * null the native colors are kept unchanged. Recomputed when `baseColor` or
-   * the source scene changes.
+   * Optional hex color for the character's SKIN TONE. When set, all materials
+   * whose name contains "skin" or "face" (case-insensitive) are recolored to
+   * this value — so hands, arms, and face all match. Outfit materials (Shirt,
+   * Clothes, Jacket, Armor, Hat, Belt, Pants, etc.) and hair/eyes are NEVER
+   * touched; they keep their native authored colors. When undefined or null the
+   * native skin tone is kept unchanged. Recomputed when `baseColor` or the
+   * source scene changes.
    */
   baseColor?: string;
   scale?: number;
@@ -164,9 +179,9 @@ export const CharacterToken = forwardRef<CharacterTokenHandle, CharacterTokenPro
     const gltf = useGLTF(url);
 
     // Per-instance clone (independent skeleton). Materials are cloned so each
-    // instance owns/disposes its own. NATIVE colors are kept unless `baseColor`
-    // is provided, in which case only the primary outfit material is recolored
-    // (Skin/Face/Hair/Eye are always left untouched).
+    // instance owns/disposes its own. Outfit/accessory colors are always NATIVE.
+    // When `baseColor` is provided, only Skin/Face materials are recolored
+    // so the player's skin tone is applied (body + face match; outfit untouched).
     // Recompute when the source scene OR baseColor changes.
     const scene = useMemo(() => {
       const cloned = cloneSkeleton(gltf.scene) as THREE.Group;
@@ -181,7 +196,7 @@ export const CharacterToken = forwardRef<CharacterTokenHandle, CharacterTokenPro
           mesh.material = cloneMaterial(mesh.material);
         }
       });
-      // Apply outfit recolor after all materials are cloned (safe — per-instance).
+      // Apply skin-tone recolor after all materials are cloned (safe — per-instance).
       if (baseColor) {
         applyBaseColor(cloned, baseColor);
       }
