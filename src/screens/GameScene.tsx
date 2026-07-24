@@ -90,11 +90,13 @@ export function GameScene() {
       </Environment>
       {/* OrbitControls + gentle auto-focus toward active player's tile. */}
       <CameraRig />
-      <BoardTiles />
-      {/* Procedural 3D dice: loads no glb, so it sits outside the model
-          Suspense boundary alongside BoardTiles. Idle = hidden. */}
+      {/* Procedural 3D dice: loads no glb, so it sits outside the
+          Suspense boundary. Idle = hidden. */}
       <Dice3D />
       <Suspense fallback={null}>
+        {/* BoardTiles now streams board.webp via useTexture (suspends) — must
+            live inside a Suspense boundary. */}
+        <BoardTiles />
         <PlayerTokens />
         <Buildings />
         <CityDressing />
