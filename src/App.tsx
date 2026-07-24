@@ -23,6 +23,7 @@ import { PartnershipPanel } from './ui/PartnershipPanel';
 import { DealPanel } from './ui/DealPanel';
 import { HudButtons } from './ui/HudButtons';
 import { BigMomentOverlay } from './ui/BigMomentOverlay';
+import { CardDrawnOverlay } from './ui/CardDrawnOverlay';
 import { MuteButton } from './ui/MuteButton';
 import { RotateHint } from './ui/RotateHint';
 import { useSfx } from './audio/useSfx';
@@ -133,6 +134,7 @@ export default function App() {
           <PartnershipPanel />
           <DealPanel />
           <BigMomentOverlay />
+          <CardDrawnOverlay />
         </>
       )}
       {screen === 'game-over' && <GameOverScreen />}

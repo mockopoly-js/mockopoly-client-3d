@@ -27,7 +27,7 @@ describe('sfx — jsdom guards (no AudioContext)', () => {
   });
 
   it('all SfxName values do not throw without AudioContext', () => {
-    const names: SfxName[] = ['roll', 'hop', 'buy', 'rent', 'jail', 'bankrupt', 'win'];
+    const names: SfxName[] = ['roll', 'hop', 'buy', 'rent', 'jail', 'bankrupt', 'win', 'card'];
     for (const name of names) {
       expect(() => playSfx(name)).not.toThrow();
     }

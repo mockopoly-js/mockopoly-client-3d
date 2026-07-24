@@ -13,6 +13,7 @@ import { playSfx } from './sfx';
  *   'jail-sent'       → playSfx('jail')
  *   'player-bankrupt' → playSfx('bankrupt')
  *   'game-over'       → playSfx('win')
+ *   'card-drawn'      → playSfx('card')
  *
  * Mount once at the top level of App.
  */
@@ -24,4 +25,5 @@ export function useSfx(): void {
   useGameBusEvent('jail-sent',       () => playSfx('jail'));
   useGameBusEvent('player-bankrupt', () => playSfx('bankrupt'));
   useGameBusEvent('game-over',       () => playSfx('win'));
+  useGameBusEvent('card-drawn',      () => playSfx('card'));
 }
