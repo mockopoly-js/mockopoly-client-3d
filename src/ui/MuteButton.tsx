@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { Volume2, VolumeX } from 'lucide-react';
 import { setMuted, isMuted } from '../audio/sfx';
 import { FONT_FAMILY } from '../constants/fonts';
 
@@ -21,6 +22,9 @@ const style: React.CSSProperties = {
   color: '#e8e8f0',
   cursor: 'pointer',
   boxShadow: '0 2px 8px rgba(0,0,0,0.5)',
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'center',
 };
 
 /**
@@ -37,8 +41,8 @@ export function MuteButton() {
   };
 
   return (
-    <button style={style} onClick={toggle} title={muted ? 'Unmute' : 'Mute'}>
-      {muted ? '🔇' : '🔊'}
+    <button style={style} onClick={toggle} aria-label={muted ? 'Unmute' : 'Mute'} title={muted ? 'Unmute' : 'Mute'}>
+      {muted ? <VolumeX size={20} aria-hidden /> : <Volume2 size={20} aria-hidden />}
     </button>
   );
 }

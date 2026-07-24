@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { X, Check } from 'lucide-react';
 import { useGameStore } from '../state/gameStore';
 import { socketManager } from '../network/SocketManager';
 import { EVENTS } from '../types/SocketEvents';
@@ -89,7 +90,7 @@ export function PartnershipPanel() {
       <div style={innerCard}>
         <div style={hdr}>
           <span style={{ flex: 1, fontWeight: 800, fontSize: 18 }}>Partnerships</span>
-          <button aria-label="Close" onClick={() => close(false)} style={x}>×</button>
+          <button aria-label="Close" onClick={() => close(false)} style={x}><X size={18} aria-hidden /></button>
         </div>
 
         {/* Active partnerships */}
@@ -110,8 +111,13 @@ export function PartnershipPanel() {
             <div style={sh}>Proposal on {proposal.colorGroup} by {name(proposal.initiatorId)}</div>
             <div style={{ fontSize: 12, color: '#8888a0', marginBottom: 8 }}>
               {proposal.proposedEquity
-                .map((e) => `${name(e.playerId)} ${e.percentage}%${proposal.acceptedPlayerIds.includes(e.playerId) ? ' ✓' : ''}`)
-                .join(' · ')}
+                .map((e, i) => (
+                  <span key={e.playerId} style={{ display: 'inline-flex', alignItems: 'center', gap: 2 }}>
+                    {i > 0 && ' · '}
+                    {`${name(e.playerId)} ${e.percentage}%`}
+                    {proposal.acceptedPlayerIds.includes(e.playerId) && <Check size={14} aria-hidden style={{ marginLeft: 2 }} />}
+                  </span>
+                ))}
             </div>
             {proposal.initiatorId === myId ? (
               <button style={btn} onClick={() => emit(EVENTS.PARTNERSHIP_CANCEL_PROPOSAL, { proposalId: proposal.proposalId })}>
@@ -208,7 +214,7 @@ const card: React.CSSProperties = {
 const wrapMobile: React.CSSProperties = { position: 'fixed', inset: 0, background: 'rgba(0,0,0,.5)', zIndex: 40, fontFamily: F, display: 'flex', alignItems: 'flex-end' };
 const sheetMobile: React.CSSProperties = { background: '#12121e', color: '#e8e8f0', borderRadius: '20px 20px 0 0', padding: 20, width: '100vw', maxHeight: '85vh', overflowY: 'auto', boxShadow: '0 -8px 40px -8px rgba(0,0,0,.7)', paddingBottom: 'calc(20px + env(safe-area-inset-bottom))' };
 const hdr: React.CSSProperties = { display: 'flex', alignItems: 'center', marginBottom: 12 };
-const x: React.CSSProperties = { background: 'none', border: 'none', color: '#8888a0', fontSize: 22, cursor: 'pointer' };
+const x: React.CSSProperties = { background: 'none', border: 'none', color: '#8888a0', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', padding: 0 };
 const sect: React.CSSProperties = { border: '1px solid #2a2a40', borderRadius: 12, padding: 12, marginBottom: 10 };
 const sh: React.CSSProperties = { fontWeight: 800, fontSize: 14, marginBottom: 8 };
 const item: React.CSSProperties = { display: 'flex', gap: 8, alignItems: 'center', fontSize: 13, padding: '3px 0' };

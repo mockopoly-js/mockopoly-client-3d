@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { Check } from 'lucide-react';
 import { socketManager } from '../network/SocketManager';
 import { gameBus } from '../state/gameBus';
 import { useGameStore, selectMyPlayer } from '../state/gameStore';
@@ -85,7 +86,7 @@ export function Lobby() {
             : (
               <div style={{ display: 'flex', flexDirection: 'column', gap: 10, width: '100%', maxWidth: 400 }}>
                 <GameButton variant={me?.isReady ? 'success' : 'primary'} onClick={toggleReady} disabled={locked} fullWidth>
-                  {me?.isReady ? 'Ready ✓' : 'Ready'}
+                  {me?.isReady ? <><span>Ready</span><Check size={16} aria-hidden style={{ marginLeft: 4 }} /></> : 'Ready'}
                 </GameButton>
                 {isHost && (
                   <GameButton variant="primary" onClick={start} disabled={locked || players.length < (soloPlay ? 1 : 2)} fullWidth>

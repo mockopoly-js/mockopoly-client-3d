@@ -1,3 +1,4 @@
+import { X } from 'lucide-react';
 import { useGameStore } from '../state/gameStore';
 import { socketManager } from '../network/SocketManager';
 import { EVENTS } from '../types/SocketEvents';
@@ -82,7 +83,7 @@ export function MortgagePanel() {
       <div style={hdr}>
         <span style={{ ...strip, background: accent }} />
         <span style={{ flex: 1, fontWeight: 800, fontSize: 18 }}>{space.name}</span>
-        <button onClick={() => selectProperty(null)} aria-label="Close" style={x}>×</button>
+        <button onClick={() => selectProperty(null)} aria-label="Close" style={x}><X size={18} aria-hidden /></button>
       </div>
       <div style={meta}>
         {prop.hasHotel ? 'Hotel' : `${prop.houses} house${prop.houses === 1 ? '' : 's'}`}
@@ -127,7 +128,7 @@ const wrap: React.CSSProperties = { position: 'fixed', inset: 0, display: 'grid'
 const card: React.CSSProperties = { background: '#12121e', color: '#e8e8f0', borderRadius: 16, padding: 20, width: 340, boxShadow: '0 24px 60px -20px rgba(0,0,0,.7)' };
 const hdr: React.CSSProperties = { display: 'flex', alignItems: 'center', gap: 10, marginBottom: 8 };
 const strip: React.CSSProperties = { width: 14, height: 14, borderRadius: 4 };
-const x: React.CSSProperties = { background: 'none', border: 'none', color: '#8888a0', fontSize: 22, cursor: 'pointer', lineHeight: 1 };
+const x: React.CSSProperties = { background: 'none', border: 'none', color: '#8888a0', cursor: 'pointer', lineHeight: 1, display: 'inline-flex', alignItems: 'center', padding: 0 };
 const meta: React.CSSProperties = { color: '#8888a0', fontSize: 13, marginBottom: 16 };
 const grid: React.CSSProperties = { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 };
 const btn: React.CSSProperties = { fontFamily: 'inherit', fontWeight: 800, fontSize: 13, border: 'none', borderRadius: 12, padding: '11px 12px', cursor: 'pointer', background: '#2a2a40', color: '#e8e8f0' };

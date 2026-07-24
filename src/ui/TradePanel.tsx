@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { X } from 'lucide-react';
 import { useGameStore } from '../state/gameStore';
 import { socketManager } from '../network/SocketManager';
 import { EVENTS } from '../types/SocketEvents';
@@ -188,7 +189,7 @@ function Shell({ title, onClose, children, isMobile }: { title: string; onClose:
         <div style={sheetMobile}>
           <div style={hdr}>
             <span style={{ flex: 1, fontWeight: 800, fontSize: 18 }}>{title}</span>
-            <button aria-label="Close" onClick={onClose} style={x}>×</button>
+            <button aria-label="Close" onClick={onClose} style={x}><X size={18} aria-hidden /></button>
           </div>
           {children}
         </div>
@@ -200,7 +201,7 @@ function Shell({ title, onClose, children, isMobile }: { title: string; onClose:
       <div style={card}>
         <div style={hdr}>
           <span style={{ flex: 1, fontWeight: 800, fontSize: 18 }}>{title}</span>
-          <button aria-label="Close" onClick={onClose} style={x}>×</button>
+          <button aria-label="Close" onClick={onClose} style={x}><X size={18} aria-hidden /></button>
         </div>
         {children}
       </div>
@@ -235,7 +236,7 @@ const card: React.CSSProperties = { background: '#12121e', color: '#e8e8f0', bor
 const wrapMobile: React.CSSProperties = { position: 'fixed', inset: 0, background: 'rgba(0,0,0,.5)', zIndex: 40, fontFamily: F, display: 'flex', alignItems: 'flex-end' };
 const sheetMobile: React.CSSProperties = { background: '#12121e', color: '#e8e8f0', borderRadius: '20px 20px 0 0', padding: 20, width: '100vw', maxHeight: '85vh', overflowY: 'auto', boxShadow: '0 -8px 40px -8px rgba(0,0,0,.7)', paddingBottom: 'calc(20px + env(safe-area-inset-bottom))' };
 const hdr: React.CSSProperties = { display: 'flex', alignItems: 'center', marginBottom: 12 };
-const x: React.CSSProperties = { background: 'none', border: 'none', color: '#8888a0', fontSize: 22, cursor: 'pointer' };
+const x: React.CSSProperties = { background: 'none', border: 'none', color: '#8888a0', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', padding: 0 };
 const sub: React.CSSProperties = { color: '#8888a0', fontWeight: 700, marginBottom: 10 };
 const twoCol: React.CSSProperties = { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14, marginBottom: 12 };
 const colHdr: React.CSSProperties = { fontSize: 11, letterSpacing: '.1em', textTransform: 'uppercase', color: '#8888a0', fontWeight: 800, marginBottom: 6 };
