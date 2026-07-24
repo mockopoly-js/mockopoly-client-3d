@@ -60,6 +60,18 @@ export function CameraRig() {
   // Track whether we've snapped to the fixed initial view on first mount.
   const initialSnapDone = useRef(false);
 
+  // Tracks physical Shift key state so the cameraMode restore can set LEFT correctly
+  // even when Shift is held across a thirdPerson→free toggle.
+  const shiftHeldRef = useRef(false);
+
+  // Original orbit clamp values captured once on first cameraMode effect run.
+  // Stored so thirdPerson can relax them and free-mode restores exactly the originals.
+  const origClampsRef = useRef<{
+    minDistance: number;
+    maxDistance: number;
+    maxPolarAngle: number;
+  } | null>(null);
+
   const setCameraReadout = useGameStore((s) => s.setCameraReadout);
   // Throttle accumulator: only push readout ~every 0.12s (~8x/sec, not every frame).
   const readoutAccum = useRef(0);
@@ -119,13 +131,17 @@ export function CameraRig() {
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
       if (e.key !== 'Shift') return;
-      // While the camera is locked in third-person follow, Shift-pan is inert.
+      // Always keep shiftHeldRef accurate so the cameraMode restore reads correct state.
+      shiftHeldRef.current = true;
+      // While the camera is locked in third-person follow, Shift-pan is inert on controls.
       if (cameraModeRef.current === 'thirdPerson') return;
       const controls = controlsRef.current;
       if (controls) controls.mouseButtons.LEFT = THREE.MOUSE.PAN;
     };
     const onKeyUp = (e: KeyboardEvent) => {
       if (e.key !== 'Shift') return;
+      // Always keep shiftHeldRef accurate so the cameraMode restore reads correct state.
+      shiftHeldRef.current = false;
       if (cameraModeRef.current === 'thirdPerson') return;
       const controls = controlsRef.current;
       if (controls) controls.mouseButtons.LEFT = THREE.MOUSE.ROTATE;
@@ -140,14 +156,40 @@ export function CameraRig() {
 
   // Orbit-lock toggle: when third-person follow is ON, disable the LEFT mouse
   // rotate/pan so manual orbit cannot fight the follow; when returning to free,
-  // restore LEFT=ROTATE. The mode button (a React onClick) is unaffected. The
-  // camera keeps whatever position the follow left it in — free orbit resumes
-  // from there rather than snapping back to the fixed initial view.
+  // restore LEFT to PAN or ROTATE based on current Shift state (Fix 1). Also
+  // relaxes orbit clamps while following so pose tuning never hits a silent
+  // clamp; restores exact originals on return to free (Fix 2).
   useEffect(() => {
     const controls = controlsRef.current;
     if (!controls) return;
-    controls.mouseButtons.LEFT =
-      cameraMode === 'thirdPerson' ? undefined : THREE.MOUSE.ROTATE;
+
+    // Capture originals once on first run (controls is mounted by this point).
+    if (!origClampsRef.current) {
+      origClampsRef.current = {
+        minDistance: controls.minDistance,
+        maxDistance: controls.maxDistance,
+        maxPolarAngle: controls.maxPolarAngle,
+      };
+    }
+
+    if (cameraMode === 'thirdPerson') {
+      // Lock LEFT so orbit cannot fight the follow lerp.
+      controls.mouseButtons.LEFT = undefined;
+      // Relax clamps so the follow pose lands cleanly across any tuning range.
+      controls.minDistance = 0.5;
+      controls.maxPolarAngle = Math.PI / 2 - 0.01;
+      // maxDistance left unchanged — no need to constrain far bound while following.
+    } else {
+      // Restore LEFT respecting current physical Shift state (Fix 1).
+      controls.mouseButtons.LEFT = shiftHeldRef.current
+        ? THREE.MOUSE.PAN
+        : THREE.MOUSE.ROTATE;
+      // Restore exact original clamps so free scroll-zoom + orbit are unchanged.
+      const orig = origClampsRef.current;
+      controls.minDistance = orig.minDistance;
+      controls.maxDistance = orig.maxDistance;
+      controls.maxPolarAngle = orig.maxPolarAngle;
+    }
   }, [cameraMode]);
 
   useFrame((_state, delta) => {
