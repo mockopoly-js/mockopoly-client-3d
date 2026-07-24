@@ -22,10 +22,26 @@ import { BOARD_WORLD_SIZE } from './positions';
  * a 10×10 board, so INNER_SQUARE defaults to ~6. Buildings then grow UP from the
  * board top, sitting INSIDE the ring — they must not cover the printed tiles.
  *
- * ── TUNABLE CONSTS (iterate live with these three only) ─────────────────────
- *   CITY_SCALE — multiplier on the auto-fit footprint. 1.0 = city footprint
- *                exactly fills INNER_SQUARE. <1 shrinks it inside the ring, >1
- *                grows it (risk of spilling onto the tiles).
+ * The source city is a dense, near-symmetric filled RECTANGLE (raw footprint
+ * ≈ 300 × 260 world units, X longer than Z — NOT square) with NO stray/detached
+ * geometry: a vertex-density histogram stays a solid 300×260 block down to the
+ * 5%-density level, and the vertex-mass centroid (123.5, -91.3) sits within ~4
+ * units of the bbox center (120, -100). So the runtime Box3 center IS a
+ * trustworthy footprint center and the plain recenter is correct.
+ *
+ * The previous off-center/overlap symptom was NOT a bbox skew — it was the old
+ * CITY_SCALE=1.32 making the LONG (X) axis half-extent 3.96 spill ~0.30 over the
+ * ±3.66 tile edge while the SHORT (Z) axis (half 3.43) left a gap: an oblique
+ * camera reads that long-axis overhang + short-axis gap as a diagonal "overlap
+ * one corner / cream gap the opposite corner." Fitting the LONG axis just inside
+ * the tile edge fixes both at once.
+ *
+ * ── TUNABLE CONSTS (iterate live with these) ────────────────────────────────
+ *   CITY_SCALE — multiplier on the auto-fit footprint. 1.0 = city LONG axis
+ *                exactly fills INNER_SQUARE. Kept below the tile-overlap
+ *                threshold so no geometry crosses onto the printed tiles.
+ *   CITY_PAN_X — world-X fine-tune nudge (post-scale). 0 = bbox-centered.
+ *   CITY_PAN_Z — world-Z fine-tune nudge (post-scale). 0 = bbox-centered.
  *   CITY_Y     — world Y the city GROUND rests on. Board top is 0.02; keep at/
  *                just above it so buildings sit on the board, not floating/sunk.
  *   CITY_ROT   — Y-rotation (radians) to aim the city's "front"/streets nicely
@@ -35,7 +51,16 @@ import { BOARD_WORLD_SIZE } from './positions';
 /** World size of the board's inner empty square (inside the printed tile ring). */
 const INNER_SQUARE = BOARD_WORLD_SIZE * 0.6; // 10 * 0.6 = 6 → empty center ≈ [-3, 3]
 
-const CITY_SCALE = 1.32;  // fill inner square (est. 100% at ~6.4 units, minimal margin to tile ring)
+// The clear inner square (inside the tile ring) is CORNER=0.134 deep on each
+// side → its edge sits at world ±(0.5-0.134)*10 = ±3.66. At CITY_SCALE=1.14 the
+// city's long (X) half-extent is ≈3.42, leaving ~0.24 margin to that edge on
+// BOTH sides with NO overlap; the short (Z) axis has a larger (≈0.70) margin —
+// inherent to the non-square 300×260 footprint, and preferable to stretching/
+// distorting the model. PANs stay 0 so the bbox stays perfectly centered
+// (|centerX|,|centerZ| < 0.1) with equal margins per axis.
+const CITY_SCALE = 1.14;  // long axis ≈ ±3.42 world → inside the ±3.66 tile edge, no overlap
+const CITY_PAN_X = 0;     // world-X fine-tune (post-scale); 0 = bbox-centered on origin
+const CITY_PAN_Z = 0;     // world-Z fine-tune (post-scale); 0 = bbox-centered on origin
 const CITY_Y = 0.02;      // rest the city ground on the board top (TOP_Y)
 const CITY_ROT = 0;       // radians; nudge to aim streets toward the camera
 
@@ -65,7 +90,9 @@ export function CityDressing(): React.JSX.Element {
     // outer group can place the ground precisely at CITY_Y.
     scene.position.set(-center.x, -box.min.y, -center.z);
 
-    // Auto-fit the footprint to the inner square, then apply the tunable factor.
+    // Auto-fit the LONG footprint axis (max of x/z) to the inner square, then
+    // apply the tunable factor. Fitting to the larger dimension ensures the long
+    // axis — not the short one — sets the scale, so neither axis can spill over.
     const footprint = Math.max(size.x, size.z) || 1;
     const fit = INNER_SQUARE / footprint;
 
@@ -75,7 +102,7 @@ export function CityDressing(): React.JSX.Element {
   return (
     <group
       name="city-center"
-      position={[0, CITY_Y, 0]}
+      position={[CITY_PAN_X, CITY_Y, CITY_PAN_Z]}
       rotation={[0, CITY_ROT, 0]}
       scale={groupScale}
     >
