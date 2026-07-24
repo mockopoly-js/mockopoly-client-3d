@@ -35,7 +35,7 @@ import { BOARD_WORLD_SIZE } from './positions';
 /** World size of the board's inner empty square (inside the printed tile ring). */
 const INNER_SQUARE = BOARD_WORLD_SIZE * 0.6; // 10 * 0.6 = 6 → empty center ≈ [-3, 3]
 
-const CITY_SCALE = 1.10;  // fill ~110% of the auto-fit (spans inner square ~6.6 units, small margin off tiles)
+const CITY_SCALE = 1.32;  // fill inner square (est. 100% at ~6.4 units, minimal margin to tile ring)
 const CITY_Y = 0.02;      // rest the city ground on the board top (TOP_Y)
 const CITY_ROT = 0;       // radians; nudge to aim streets toward the camera
 
