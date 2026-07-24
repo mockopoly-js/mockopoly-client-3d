@@ -2,6 +2,7 @@ import { lazy, Suspense, useEffect, useState } from 'react';
 import { socketManager } from './network/SocketManager';
 import { gameStateSync } from './network/GameStateSync';
 import { useGameStore } from './state/gameStore';
+import { useScreenRouting } from './state/useScreenRouting';
 import { EVENTS } from './types/SocketEvents';
 import { ConnectionStatus } from './ui/ConnectionStatus';
 import { MainMenu } from './screens/MainMenu';
@@ -39,6 +40,9 @@ export default function App() {
   const screen = useGameStore((s) => s.screen);
   const toggleDevHacks = useGameStore((s) => s.toggleDevHacks);
   const toggleDealPanel = useGameStore((s) => s.toggleDealPanel);
+
+  // Keep the URL and the game-flow screen in sync (Back/Forward + deep links).
+  useScreenRouting();
 
   // Wire gameBus events → synthesized SFX.
   useSfx();
