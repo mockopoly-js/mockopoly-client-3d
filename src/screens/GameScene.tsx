@@ -1,7 +1,8 @@
-import { Suspense } from 'react';
-import { Canvas } from '@react-three/fiber';
+import { Suspense, useEffect } from 'react';
+import * as THREE from 'three';
+import { Canvas, useThree } from '@react-three/fiber';
 import { EffectComposer, Bloom, ToneMapping } from '@react-three/postprocessing';
-import { SoftShadows, Environment } from '@react-three/drei';
+import { SoftShadows, useTexture } from '@react-three/drei';
 import { BoardTiles } from '../board/BoardTiles';
 import { PlayerTokens } from '../board/PlayerTokens';
 import { Buildings } from '../board/Buildings';
@@ -27,12 +28,10 @@ import { BOARD_ROTATION } from '../board/positions';
  *   size/samples so shadow edges are feathered without tanking perf.
  * - CameraRig: drei OrbitControls tuned for tabletop overhead view + gentle
  *   auto-focus toward the active player's tile each turn.
- * - Environment (HDRI): loads /images/sky.webp — a 2048x1024 equirectangular
- *   sky map — for real image-based lighting/reflections AND (when
- *   SHOW_HDRI_BACKGROUND) as the visible sky background. Replaces the earlier
- *   procedural Lightformer IBL. drei's Environment loads the equirect .webp via
- *   its texture path (no RGBELoader needed for LDR images) and suspends while
- *   loading, so it lives inside a Suspense boundary.
+ * - HdriSky: loads /images/sky.webp — a 2048x1024 equirectangular sky map —
+ *   via useTexture, sets EquirectangularReflectionMapping + SRGBColorSpace, and
+ *   assigns scene.environment (IBL/reflections) and optionally scene.background
+ *   (visible sky). Suspends while loading via useTexture's Suspense contract.
  */
 
 /**
@@ -48,6 +47,32 @@ import { BOARD_ROTATION } from '../board/positions';
 const ENV_INTENSITY = 0.6;
 const BG_INTENSITY = 1.0;
 const SHOW_HDRI_BACKGROUND = true;
+
+/**
+ * Manually applies an equirectangular sky texture as scene.environment
+ * (and optionally scene.background) so Three.js actually picks it up.
+ * drei's <Environment files=...> path resolves ambiguously for LDR webp and
+ * leaves scene.background null; this component is deterministic.
+ */
+function HdriSky() {
+  const { scene } = useThree();
+  const tex = useTexture('/images/sky.webp');
+  useEffect(() => {
+    tex.mapping = THREE.EquirectangularReflectionMapping;
+    tex.colorSpace = THREE.SRGBColorSpace;
+    scene.environment = tex;
+    scene.environmentIntensity = ENV_INTENSITY;
+    if (SHOW_HDRI_BACKGROUND) {
+      scene.background = tex;
+      scene.backgroundIntensity = BG_INTENSITY;
+    }
+    return () => {
+      scene.environment = null;
+      if (SHOW_HDRI_BACKGROUND) scene.background = null;
+    };
+  }, [tex, scene]);
+  return null;
+}
 
 export function GameScene() {
   return (
@@ -81,23 +106,15 @@ export function GameScene() {
         <orthographicCamera attach="shadow-camera" args={[-8, 8, 8, -8, 0.1, 30]} />
       </directionalLight>
       {/*
-        HDRI IBL + sky. /images/sky.webp is a 2048x1024 equirect sky map served
-        as a static asset (not JS-bundled). drei's Environment loads it via its
-        texture path — LDR .webp/.png/.jpg work directly, no RGBELoader. It
-        suspends while the texture loads, hence the Suspense wrapper.
-        - environmentIntensity (ENV_INTENSITY): IBL/reflection strength.
-        - background + backgroundIntensity: paints the sky as the scene
-          background at BG_INTENSITY. When SHOW_HDRI_BACKGROUND is false the
-          background prop is dropped so the HDRI only lights the scene and the
-          flat <color> fallback above is used.
+        HDRI sky — HdriSky uses useTexture (suspends while loading) to load
+        /images/sky.webp, sets EquirectangularReflectionMapping + SRGBColorSpace,
+        then assigns scene.environment (ENV_INTENSITY IBL) and, when
+        SHOW_HDRI_BACKGROUND is true, scene.background (BG_INTENSITY). This is
+        deterministic vs. drei <Environment files=...> which left scene.background
+        null for LDR webp paths.
       */}
       <Suspense fallback={null}>
-        <Environment
-          files="/images/sky.webp"
-          environmentIntensity={ENV_INTENSITY}
-          background={SHOW_HDRI_BACKGROUND || undefined}
-          backgroundIntensity={BG_INTENSITY}
-        />
+        <HdriSky />
       </Suspense>
       {/* OrbitControls + gentle auto-focus toward active player's tile. */}
       <CameraRig />
