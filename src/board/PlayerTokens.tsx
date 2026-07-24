@@ -191,6 +191,10 @@ export function PlayerTokens() {
   // Set to true when a gain is detected during an active run; cleared and played
   // once the walk finishes (so pass-GO salary celebrates on arrival, not mid-run).
   const pendingVictory = useRef<Record<string, boolean>>({});
+  // Last players array REFERENCE seen by the subscribe listener — used to skip
+  // store writes that did not touch the players array (e.g. setCameraReadout,
+  // toasts, panels) without relying on subscribeWithSelector middleware.
+  const prevPlayersRef = useRef<Player[] | undefined>(undefined);
 
   // ── Victory-on-gain: subscribe to store player snapshots ─────────────────
   // Runs whenever the authoritative state.players array changes (GAME_STATE_UPDATE
@@ -218,6 +222,10 @@ export function PlayerTokens() {
     const unsub = useGameStore.subscribe((store) => {
       const players = store.state?.players;
       if (!players) return;
+      // Skip all store writes that did not touch the players array reference
+      // (e.g. setCameraReadout ~8×/sec, toasts, panels). No middleware needed.
+      if (players === prevPlayersRef.current) return;
+      prevPlayersRef.current = players;
 
       const isFirstSnapshot =
         Object.keys(prevMoney.current).length === 0 &&
@@ -436,22 +444,14 @@ export function PlayerTokens() {
             }
           }
 
-          // Path complete → back to 'Idle'. Guard so we setState only on the
-          // transition, never every frame.
-          if (movingRef.current[p.id]) {
-            setMoving((m) => {
-              if (!m[p.id]) return m;
-              const nextMap = { ...m };
-              delete nextMap[p.id];
-              return nextMap;
-            });
-          }
-
           // Deferred Victory: if a gain was detected while this token was running
           // (e.g. GO salary credited mid-move), play it now that the walk is done.
+          // ORDERING (critical): set isCelebrating BEFORE setMoving so the render
+          // triggered by setMoving reads isCelebrating=true and the CharacterToken
+          // reactive-clip effect returns early (does NOT stomp Victory with Idle).
           if (pendingVictory.current[p.id] && !isCelebrating.current[p.id]) {
             pendingVictory.current[p.id] = false;
-            isCelebrating.current[p.id] = true;
+            isCelebrating.current[p.id] = true; // set BEFORE setMoving below
             const pid = p.id; // capture for closure
             chars.current[pid]?.play('Victory', {
               loop: false,
@@ -459,6 +459,20 @@ export function PlayerTokens() {
                 isCelebrating.current[pid] = false;
                 chars.current[pid]?.play(movingRef.current[pid] ? 'Run' : 'Idle');
               },
+            });
+          }
+
+          // Path complete → back to 'Idle'. Guard so we setState only on the
+          // transition, never every frame. Done AFTER the isCelebrating flag is
+          // set (above) so the re-render from this setMoving already sees
+          // isCelebrating=true and the CharacterToken reactive effect skips the
+          // Run→Idle clip stomp.
+          if (movingRef.current[p.id]) {
+            setMoving((m) => {
+              if (!m[p.id]) return m;
+              const nextMap = { ...m };
+              delete nextMap[p.id];
+              return nextMap;
             });
           }
         }
@@ -544,6 +558,7 @@ export function PlayerTokens() {
               url={char.url}
               scale={CHAR_SCALE}
               clip={clip}
+              isCelebrating={!!isCelebrating.current[p.id]}
               y={-BASE_Y}
               baseColor={p.characterColor ?? undefined}
             />
