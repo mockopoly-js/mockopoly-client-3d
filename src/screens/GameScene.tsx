@@ -8,6 +8,7 @@ import {
   ToneMapping,
   HueSaturation,
   BrightnessContrast,
+  SMAA,
 } from '@react-three/postprocessing';
 import { SoftShadows, Stats, useTexture } from '@react-three/drei';
 import { BoardTiles } from '../board/BoardTiles';
@@ -428,13 +429,24 @@ export function GameScene() {
             stays fixed as the board turns within its clearing. */}
         <ForestEnvironment />
       </Suspense>
-      <EffectComposer multisampling={2}>
+      <EffectComposer multisampling={0} stencilBuffer={false}>
         {/*
-          Order matters: N8AO -> Bloom -> ToneMapping -> global color grade. AO
-          runs FIRST so contact/crevice darkening is baked into the beauty pass
-          before Bloom reads luminance and before the tone-map + grade. Grading
-          then runs on the tone-mapped LDR image so saturation/contrast make
-          colors POP instead of amplifying HDR values tone mapping later clamps.
+          Order matters: N8AO -> Bloom -> ToneMapping -> global color grade ->
+          SMAA. AO runs FIRST so contact/crevice darkening is baked into the
+          beauty pass before Bloom reads luminance and before the tone-map +
+          grade. Grading then runs on the tone-mapped LDR image so
+          saturation/contrast make colors POP instead of amplifying HDR values
+          tone mapping later clamps. SMAA runs LAST (post-grade) to smooth
+          final edges.
+
+          multisampling={0} + stencilBuffer={false}: MSAA is intentionally
+          OFF here. With multisampling>0 the composer renders to a
+          multisampled target with a combined depth-stencil attachment, and
+          N8AO's depth read during that MSAA resolve blit collides with it —
+          GL_INVALID_OPERATION: glBlitFramebuffer (read/write depth-stencil
+          same image). Dropping MSAA removes that resolve blit entirely.
+          depthBuffer stays default (true) since N8AO needs depth. SMAA below
+          replaces MSAA for edge anti-aliasing (and is cheaper than 2x MSAA).
         */}
         <N8AO
           aoRadius={AO_RADIUS}
@@ -449,6 +461,8 @@ export function GameScene() {
         <HueSaturation saturation={SATURATION} />
         {/* Brightness/contrast trim (both 0 = unchanged); slight contrast punch. */}
         <BrightnessContrast brightness={BRIGHTNESS} contrast={CONTRAST} />
+        {/* Edge AA replacement for the dropped MSAA (see note above). */}
+        <SMAA />
       </EffectComposer>
       {/* FPS counter — always-on dev/perf readout. Mounted into statsParentRef
           (the fixed div sibling above) so it appears below the CameraDebugOverlay
