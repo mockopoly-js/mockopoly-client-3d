@@ -63,6 +63,20 @@ const STRENGTH = 2.0;
 // Gaussian blur (sigma, px, evaluated at the albedo output resolution) applied
 // to the height field to suppress single-pixel aliasing on the print edges.
 const HEIGHT_BLUR_SIGMA = 1.0;
+
+// ── DISPLACEMENT (height map) DILATE + CONTRAST ──────────────────────────────
+// These affect ONLY the displacementMap output (board-height.webp), NOT the
+// normal-map bake. The vertex-shader displacement grid (1024²) is far coarser
+// than the 2048² texture, so thin ink must be fattened + solidified to survive.
+//   DILATE_BLUR_SIGMA — px blur to GROW the raised ink into a fatter halo before
+//                       the remap (approximates a ~2–3 px morphological dilate).
+//   REMAP_LO/REMAP_HI — normalized [0..1] contrast window applied AFTER the blur:
+//                       everything ≥ HI (ink + its halo) → full height 1, every-
+//                       thing ≤ LO (paper) → 0. Window [0.12..0.55] lifts the
+//                       blurred halo to solid and crushes paper flat.
+const DILATE_BLUR_SIGMA = 2.0;
+const REMAP_LO = 0.12;
+const REMAP_HI = 0.55;
 // OpenGL (green = +Y up). Set false for a DirectX-style (green = -Y) map.
 const OPENGL_Y = true;
 
@@ -98,13 +112,44 @@ async function main() {
     .toBuffer(); // 1 channel, W*H bytes
 
   // ── 1b. HEIGHT MAP OUTPUT (displacementMap) — LINEAR grayscale ─────────────
-  // Emit the EXACT height field the Sobel step consumes: height = 1 - luminance
-  // (DARK INK = HIGH). heightRaw holds luminance 0..255, so invert per-pixel.
+  // Displacement is sampled in the VERTEX shader over a 1024²-vertex grid, so a
+  // thin single-pixel ink stroke on a 2048² map almost never lands on a vertex —
+  // and even when it does, bilinear averaging with the surrounding paper crushes
+  // it toward zero. To make letters/lines/borders survive as REAL raised
+  // geometry we must (a) start from the DARK-INK=HIGH field, (b) DILATE the ink
+  // so thin strokes fatten into ridges that MULTIPLE vertices sample, and (c)
+  // make the ink SOLID (full height) with paper crushed flat to 0.
+  //
+  // sharp has no morphological dilate, so we approximate it: BLUR the inverted
+  // height (~DILATE_BLUR_SIGMA px) to spread each ink stroke into a soft halo,
+  // THEN apply a hard contrast/remap curve [REMAP_LO..REMAP_HI] -> [0..1] with
+  // clamp. The blur's halo now sits inside the remap window, so ink + its
+  // neighbourhood lift to FULL height (a fattened solid ridge) while the paper
+  // floor (below REMAP_LO) is crushed to 0. Net = solid, slightly-thickened
+  // raised letters/lines/borders with a flat paper base.
+  //
   // Written at the albedo's native size, single grayscale channel, LINEAR (raw
   // ->webp keeps values as authored — displacement, like normals, is not colour).
+  const invRaw = Buffer.alloc(W * H);
+  for (let p = 0; p < invRaw.length; p++) {
+    invRaw[p] = 255 - heightRaw[p]; // DARK INK = HIGH
+  }
+  // Blur to grow (dilate-approx) the raised ink into a fatter halo.
+  const dilated = await sharp(invRaw, { raw: { width: W, height: H, channels: 1 } })
+    .blur(DILATE_BLUR_SIGMA)
+    .raw()
+    .toBuffer();
+  // Hard contrast/remap: [REMAP_LO..REMAP_HI] normalized -> [0..1], clamped.
+  // Anything at/above REMAP_HI (ink + its blurred halo) → 255 (full raise);
+  // anything at/below REMAP_LO (paper) → 0 (flat). This both SOLIDIFIES and
+  // slightly FATTENS the ink so the coarse vertex grid resolves it as ridges.
+  const lo = Math.round(REMAP_LO * 255);
+  const hi = Math.round(REMAP_HI * 255);
+  const span = Math.max(1, hi - lo);
   const heightField = Buffer.alloc(W * H);
   for (let p = 0; p < heightField.length; p++) {
-    heightField[p] = 255 - heightRaw[p];
+    const v = ((dilated[p] - lo) / span) * 255;
+    heightField[p] = v < 0 ? 0 : v > 255 ? 255 : Math.round(v);
   }
   await sharp(heightField, { raw: { width: W, height: H, channels: 1 } })
     .webp({ quality: 90 })

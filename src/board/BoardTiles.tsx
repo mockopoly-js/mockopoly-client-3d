@@ -113,7 +113,7 @@ const BOARD_NORMAL_Y_SIGN = 1; // set to -1 if relief looks inverted
  *                             looks lumpy or clips tokens/buildings.
  */
 const BOARD_SEGMENTS = 1024;
-const BOARD_DISPLACEMENT_SCALE = 0.07;
+const BOARD_DISPLACEMENT_SCALE = 0.15;
 /**
  * Nudge the slab's flat top face just below the displaced plane so the original
  * flat top never coincides with (z-fights) the subdivided displaced surface.
@@ -198,10 +198,18 @@ export function BoardTiles() {
     heightTex.matrix.copy(texture.matrix);
     // Texture-kind-specific: displacement is LINEAR data, NOT colour.
     heightTex.colorSpace = THREE.NoColorSpace;
-    heightTex.anisotropy = maxAniso;
-    heightTex.generateMipmaps = true;
-    heightTex.minFilter = THREE.LinearMipmapLinearFilter;
+    // CRITICAL: the displacement map is sampled in the VERTEX shader. Mipmapped
+    // sampling (LinearMipmapLinear + anisotropy, as the albedo uses) averages a
+    // thin ink stroke against the surrounding paper across coarse mip levels,
+    // collapsing its baked height toward ~0 — so the print looks FLAT no matter
+    // how high displacementScale is. Disable mipmaps and force plain bilinear
+    // (LinearFilter, no anisotropy) so each vertex samples the height field at
+    // full resolution and the raised ink survives as real geometry. (The NORMAL
+    // map above is a FRAGMENT-shader map and correctly keeps its mipmaps.)
+    heightTex.generateMipmaps = false;
+    heightTex.minFilter = THREE.LinearFilter;
     heightTex.magFilter = THREE.LinearFilter;
+    heightTex.anisotropy = 1;
     heightTex.needsUpdate = true;
     return texture;
   }, [texture, normalTex, heightTex, maxAniso]);
