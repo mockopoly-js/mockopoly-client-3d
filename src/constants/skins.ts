@@ -173,6 +173,7 @@ export function resolveSkinMeta(id: string): SkinMeta {
  * gate EQUIP on this, and show a lock/premium badge when it returns false — the
  * UI is already wired for that, so enabling the gate is a one-line change here.
  */
+// eslint-disable-next-line @typescript-eslint/no-unused-vars -- `_id` is the future IAP entitlement key; the param is part of the public seam (callers already pass the skin id) even though today every skin is unlocked
 export function isSkinUnlocked(_id: string): boolean {
   return true;
 }

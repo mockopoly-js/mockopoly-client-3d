@@ -5,7 +5,7 @@ import { gameBus } from '../state/gameBus';
 import { useGameStore, selectMyPlayer } from '../state/gameStore';
 import { EVENTS } from '../types/SocketEvents';
 import { TOKEN_HEX, GOLD } from '../constants/theme';
-import type { Player, TokenType } from '../types/GameState';
+import type { Player } from '../types/GameState';
 import { FONT_FAMILY } from '../constants/fonts';
 import { useIsMobile } from '../ui/useIsMobile';
 import { GameButton } from '../ui/GameButton';
@@ -21,6 +21,10 @@ export function Lobby() {
   const me = selectMyPlayer(useGameStore.getState());
   const isHost = !!me?.isHost;
   const status = state?.status;
+  // devHacks is typed non-optional on GameState but real server snapshots (and
+  // partial lobby states) can arrive without it, so the optional chain guards a
+  // genuine runtime path — do NOT collapse it.
+  // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- state.devHacks may be absent on early/partial snapshots
   const soloPlay = !!state?.devHacks?.soloPlay;
 
   // route into the game once the server flips to in-progress
@@ -38,14 +42,26 @@ export function Lobby() {
   const toggleReady = () => socketManager.emit(EVENTS.ROOM_READY, { isReady: !me?.isReady });
   const start = () => socketManager.emit(EVENTS.ROOM_START);
   const leave = () => { socketManager.emit(EVENTS.ROOM_LEAVE); useGameStore.getState().reset(); };
-  const copyCode = () => { if (roomCode) navigator.clipboard?.writeText(roomCode); };
+  // navigator.clipboard is typed non-optional but is genuinely absent in
+  // insecure contexts / older browsers; guard it, and `void` the returned
+  // promise (fire-and-forget; copy failure is non-critical).
+  const copyCode = () => {
+    // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- navigator.clipboard can be undefined at runtime (insecure context / old browser)
+    if (roomCode && navigator.clipboard) void navigator.clipboard.writeText(roomCode);
+  };
 
   const locked = status === 'starting';
+  // config, like devHacks, is typed non-optional but can be absent on partial
+  // snapshots; keep the optional chain (falls back to 4 max players).
+  // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- state.config may be absent on early/partial snapshots
   const maxPlayers = state?.config?.maxPlayers ?? 4;
   const isMobile = useIsMobile();
 
   const playerSlots = Array.from({ length: maxPlayers }).map((_, i) => {
     const p = players[i];
+    // players[i] is typed non-undefined, but `i` iterates up to maxPlayers which
+    // exceeds the seated-players count — empty slots (p === undefined) are real.
+    // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- array index past players.length is undefined at runtime
     if (!p) return <div key={i} style={isMobile ? emptySlotMobile : emptySlot}>Empty</div>;
     const tags = [p.isHost ? 'HOST' : null, p.id === myId ? 'YOU' : null].filter(Boolean).join(' • ');
     return (

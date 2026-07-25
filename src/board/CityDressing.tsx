@@ -1,7 +1,6 @@
 import { useMemo } from 'react';
 import * as THREE from 'three';
 import { useGLTF } from '@react-three/drei';
-import { BOARD_WORLD_SIZE } from './positions';
 
 /**
  * The real low-poly city (SimplePoly City → `public/models/city.glb`, ~5.5 MB,
@@ -48,9 +47,6 @@ import { BOARD_WORLD_SIZE } from './positions';
  *                for the default camera.
  */
 
-/** World size of the board's inner empty square (inside the printed tile ring). */
-const INNER_SQUARE = BOARD_WORLD_SIZE * 0.6; // 10 * 0.6 = 6 → empty center ≈ [-3, 3]
-
 // The clear inner square (inside the tile ring) is CORNER=0.134 deep on each
 // side → its edge sits at world ±(0.5-0.134)*10 = ±3.66. Non-uniform scale on X
 // and Z fills both axes to the target half-extent (~3.45), while Y scale is tied
@@ -73,6 +69,10 @@ export function CityDressing(): React.JSX.Element {
     const scene = gltf.scene.clone(true);
     scene.traverse((o) => {
       const m = o as THREE.Mesh;
+      // `m.isMesh` is the cross-realm-safe three.js duck-type check. The cast
+      // above asserts Mesh, so the type-checker sees isMesh as always true — but
+      // at runtime `o` is a generic Object3D and only real meshes carry it.
+      // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- runtime narrowing: `o` is Object3D; only actual meshes have isMesh===true
       if (m.isMesh) {
         m.castShadow = true;
         m.receiveShadow = true;
@@ -85,14 +85,13 @@ export function CityDressing(): React.JSX.Element {
         // open backfaces don't show through either.
         const mats = Array.isArray(m.material) ? m.material : [m.material];
         for (const mat of mats) {
-          if (mat) {
-            (mat as THREE.MeshStandardMaterial).transparent = false;
-            (mat as THREE.MeshStandardMaterial).opacity = 1;
-            (mat as THREE.MeshStandardMaterial).depthWrite = true;
-            (mat as THREE.MeshStandardMaterial).alphaTest = 0;
-            (mat as THREE.MeshStandardMaterial).side = THREE.DoubleSide;
-            mat.needsUpdate = true;
-          }
+          const std = mat as THREE.MeshStandardMaterial;
+          std.transparent = false;
+          std.opacity = 1;
+          std.depthWrite = true;
+          std.alphaTest = 0;
+          std.side = THREE.DoubleSide;
+          std.needsUpdate = true;
         }
       }
     });

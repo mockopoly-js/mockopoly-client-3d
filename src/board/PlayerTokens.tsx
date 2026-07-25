@@ -8,7 +8,7 @@ import { stackOffset } from './hopPath';
 import { TOKEN_HEX } from '../constants/theme';
 import { CharacterToken, type CharacterTokenHandle } from './CharacterToken';
 import { resolveCharacter, DEFAULT_CHARACTER } from '../constants/characters';
-import type { Player, TokenType } from '../types/GameState';
+import type { Player } from '../types/GameState';
 
 const BASE_Y = 0.15;
 const CHAR_SCALE = 0.2; // matches CharacterToken's board-token default
@@ -17,14 +17,13 @@ const RING_INNER = 0.26; // inner radius of the identity ring
 const RING_OUTER = 0.32; // outer radius (~0.06 band — thin, not fat)
 
 // ── Walk-motion tuning ───────────────────────────────────────────────────────
-// SERVER_MOVE_WINDOW_PER_TILE_MS mirrors the server's ANIMATION_TOKEN_MOVE_PER_SPACE_MS.
-// The server gates the next GAME_STATE_UPDATE by (this × spaces); the walk now
-// takes LONGER than that window on purpose — the authoritative snapshot lands
-// BEFORE the walk finishes. That is safe because the reconcile branch (else
-// below) only runs when there is NO in-flight anim (anims.current[id] absent),
-// so the walk owns the token's position until completion and is never interrupted.
-const SERVER_MOVE_WINDOW_PER_TILE_MS = 150; // ANIMATION_TOKEN_MOVE_PER_SPACE_MS (kept for reference)
-
+// NOTE: the server mirrors ANIMATION_TOKEN_MOVE_PER_SPACE_MS (~150 ms/tile) to
+// gate the next GAME_STATE_UPDATE. The walk below takes LONGER than that window
+// on purpose — the authoritative snapshot lands BEFORE the walk finishes. That
+// is safe because the reconcile branch (else below) only runs when there is NO
+// in-flight anim (anims.current[id] absent), so the walk owns the token's
+// position until completion and is never interrupted.
+//
 // WALK_MS_PER_TILE is the desired glide time per board tile. Speed is driven
 // SOLELY by this constant — the server-window cap has been removed. The walk
 // intentionally outlasts the server's 150 ms/tile gate; the in-flight walk
@@ -154,12 +153,22 @@ function destOffset(playerId: string, to: number, players: Player[]): [number, n
 export function PlayerTokens() {
   const players = (useGameStore((s) => s.state?.players) ?? []).filter((p) => !p.isBankrupt);
 
-  // Preload only the characters actually in the current game.
+  // Stable identity key for the current roster's (id, character) pairs. Extracted
+  // so the preload effect below depends on the CONTENT (re-runs only when a
+  // player's chosen character actually changes), not on the players array's
+  // reference (which churns on every unrelated GAME_STATE_UPDATE).
+  const rosterCharKey = players.map((p) => `${p.id}:${p.character ?? ''}`).join(',');
+
+  // Preload only the characters actually in the current game. The `players`
+  // read inside is the roster captured at the render that created this effect;
+  // rosterCharKey (its content-hash) is the dependency, so a new effect with a
+  // fresh `players` runs only when a player's chosen character actually changes.
   useEffect(() => {
     for (const p of players) {
       CharacterToken.preload(resolveCharacter(p.character ?? DEFAULT_CHARACTER).url);
     }
-  }, [players.map((p) => `${p.id}:${p.character ?? ''}`).join(',')]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- rosterCharKey is the content-hash of exactly the (id, character) info the loop reads; adding `players` would re-run this preload on every unrelated GAME_STATE_UPDATE
+  }, [rosterCharKey]);
 
   // Per-player "is walking" → drives Idle↔Walk. React state so the clip prop
   // re-renders; a ref mirror lets useFrame flip it without a stale closure and
@@ -172,24 +181,27 @@ export function PlayerTokens() {
   const playersRef = useRef<Player[]>(players);
   playersRef.current = players;
   const groups = useRef<Record<string, THREE.Group | null>>({});
-  const anims = useRef<Record<string, Anim>>({});
+  // Value types carry `| undefined` because these are sparse, id-keyed maps:
+  // a key is absent until that token first walks / is seeded, so reads must be
+  // (and are) guarded. Typing them honestly keeps the runtime guards meaningful.
+  const anims = useRef<Record<string, Anim | undefined>>({});
   const seeded = useRef<Record<string, boolean>>({});
-  const facing = useRef<Record<string, number>>({}); // last committed heading (y-rot)
+  const facing = useRef<Record<string, number | undefined>>({}); // last committed heading (y-rot)
   // Per-token TARGET yaw — decoupled from the committed heading so idle tokens
   // can continue lerping toward the desired rest direction (next-tile facing)
   // even when not walking. While walking, target = current-segment tangent;
   // on walk completion, target = next-tile direction from destination.
-  const targetYaw = useRef<Record<string, number>>({});
+  const targetYaw = useRef<Record<string, number | undefined>>({});
   // Imperative handles to each character, for one-shot Victory/Defeat clips.
   const chars = useRef<Record<string, CharacterTokenHandle | null>>({});
 
   // ── Victory-on-gain detection ─────────────────────────────────────────────
   // Previous snapshot values keyed by player id. Null until the first snapshot
   // lands — so the initial load never triggers a celebration.
-  const prevMoney = useRef<Record<string, number>>({});
-  const prevPropCount = useRef<Record<string, number>>({});
+  const prevMoney = useRef<Record<string, number | undefined>>({});
+  const prevPropCount = useRef<Record<string, number | undefined>>({});
   // Set to true while a Victory one-shot is in flight; prevents re-triggering.
-  const isCelebrating = useRef<Record<string, boolean>>({});
+  const isCelebrating = useRef<Record<string, boolean | undefined>>({});
   // Set to true when a gain is detected during an active run; cleared and played
   // once the walk finishes (so pass-GO salary celebrates on arrival, not mid-run).
   const pendingVictory = useRef<Record<string, boolean>>({});
@@ -235,11 +247,16 @@ export function PlayerTokens() {
 
       for (const p of players) {
         if (p.isBankrupt) {
-          // Clean up tracking for removed/bankrupt players.
+          // Clean up tracking for removed/bankrupt players. A true `delete` (not
+          // assign-undefined) is required so Object.keys(prevMoney).length stays
+          // an accurate "have any baselines been recorded?" signal for the
+          // first-snapshot check above, and so removed players leave no residue.
+          /* eslint-disable @typescript-eslint/no-dynamic-delete -- id-keyed tracking maps; a real delete (not =undefined) preserves Object.keys length semantics used by first-snapshot detection */
           delete prevMoney.current[p.id];
           delete prevPropCount.current[p.id];
           delete pendingVictory.current[p.id];
           delete isCelebrating.current[p.id];
+          /* eslint-enable @typescript-eslint/no-dynamic-delete */
           continue;
         }
 
@@ -429,21 +446,22 @@ export function PlayerTokens() {
           // tile center, so the full destOffset is added here.)
           group.position.x = b.x + anim.destOffset.x;
           group.position.z = b.z + anim.destOffset.z;
-          delete anims.current[p.id];
+          // Clear the in-flight anim so the reconcile else-branch takes over.
+          // Assigning undefined (vs delete) is equivalent here: the map is only
+          // read as `anims.current[id]` (truthiness), never key-iterated.
+          anims.current[p.id] = undefined;
 
           // REST FACING (Fix B): on arrival, retarget yaw to the NEXT-tile
           // direction from the destination so the token pivots at the corner
           // rather than holding the incoming heading until next move. Matches
           // the mount-seed convention (same formula as the ref callback below).
           const toTile = anim.toTile;
-          if (toTile !== undefined) {
-            const [nx, , nz] = tileToWorld((toTile + 1) % 40);
-            const [cx, , cz] = tileToWorld(toTile);
-            const rdx = nx - cx;
-            const rdz = nz - cz;
-            if (Math.abs(rdx) > 1e-6 || Math.abs(rdz) > 1e-6) {
-              targetYaw.current[p.id] = Math.atan2(rdx, rdz) + FACING_OFFSET;
-            }
+          const [nx, , nz] = tileToWorld((toTile + 1) % 40);
+          const [cx, , cz] = tileToWorld(toTile);
+          const rdx = nx - cx;
+          const rdz = nz - cz;
+          if (Math.abs(rdx) > 1e-6 || Math.abs(rdz) > 1e-6) {
+            targetYaw.current[p.id] = Math.atan2(rdx, rdz) + FACING_OFFSET;
           }
 
           // Deferred Victory: if a gain was detected while this token was running
@@ -472,9 +490,9 @@ export function PlayerTokens() {
           if (movingRef.current[p.id]) {
             setMoving((m) => {
               if (!m[p.id]) return m;
-              const nextMap = { ...m };
-              delete nextMap[p.id];
-              return nextMap;
+              // Setting false (vs deleting) is equivalent: `moving` is only read
+              // for truthiness (`moving[id] ? 'Run' : 'Idle'`), never key-iterated.
+              return { ...m, [p.id]: false };
             });
           }
         }
@@ -505,9 +523,8 @@ export function PlayerTokens() {
         if (movingRef.current[p.id]) {
           setMoving((m) => {
             if (!m[p.id]) return m;
-            const nextMap = { ...m };
-            delete nextMap[p.id];
-            return nextMap;
+            // See above: set false rather than delete (truthiness-only reads).
+            return { ...m, [p.id]: false };
           });
         }
       }
@@ -541,10 +558,8 @@ export function PlayerTokens() {
                 g.rotation.y = seedRot;
                 facing.current[p.id] = seedRot;
                 // Also seed targetYaw so the idle lerp starts already settled
-                // (no spurious pivot on first frame).
-                if (targetYaw.current[p.id] === undefined) {
-                  targetYaw.current[p.id] = seedRot;
-                }
+                // (no spurious pivot on first frame). Only seed if unset.
+                targetYaw.current[p.id] ??= seedRot;
               }
             }}
           >

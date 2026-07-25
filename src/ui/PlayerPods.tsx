@@ -2,7 +2,7 @@ import { useGameStore } from '../state/gameStore';
 import { TOKEN_HEX } from '../constants/theme';
 import { formatMoney } from '../utils/format';
 import { useIsMobile } from './useIsMobile';
-import type { Player, TokenType } from '../types/GameState';
+import type { Player } from '../types/GameState';
 import { FONT_FAMILY } from '../constants/fonts';
 
 export function PlayerPods() {

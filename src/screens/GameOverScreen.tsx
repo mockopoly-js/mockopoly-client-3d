@@ -1,7 +1,7 @@
 import { useGameStore } from '../state/gameStore';
 import { TOKEN_HEX } from '../constants/theme';
 import { formatMoney } from '../utils/format';
-import type { Player, TokenType } from '../types/GameState';
+import type { Player } from '../types/GameState';
 import { FONT_FAMILY } from '../constants/fonts';
 import { useIsMobile } from '../ui/useIsMobile';
 import { GameButton } from '../ui/GameButton';
