@@ -167,8 +167,11 @@ function HdriSky() {
 /**
  * DEV-only culling audit component.
  * Press "c" in dev mode to log material side counts and expose scene/gl to window.
+ * Press "v" in dev mode to toggle backface culling on/off (DoubleSide ↔ original).
  * Renders null; passive keydown listener only.
  */
+let cullingOff = false;
+
 function CullingAudit() {
   const { scene, gl } = useThree();
 
@@ -176,44 +179,83 @@ function CullingAudit() {
     if (!import.meta.env.DEV) return;
 
     const onKeyDown = (e: KeyboardEvent): void => {
-      if (e.key !== 'c' && e.key !== 'C') return;
+      if (e.key === 'c' || e.key === 'C') {
+        // Culling audit: log material side counts and expose scene/gl.
+        const counts = { Front: 0, Double: 0, Back: 0 };
+        let meshes = 0;
 
-      const counts = { Front: 0, Double: 0, Back: 0 };
-      let meshes = 0;
+        scene.traverse((obj) => {
+          const mesh = obj as THREE.Mesh;
+          const mat = mesh.material;
+          // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- defensive check for malformed geometry
+          if (!mat) return;
 
-      scene.traverse((obj) => {
-        const mesh = obj as THREE.Mesh;
-        const mat = mesh.material;
-        // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- defensive check for malformed geometry
-        if (!mat) return;
-
-        meshes += 1;
-        (Array.isArray(mat) ? mat : [mat]).forEach((material) => {
-          const side = material.side;
-          if (side === THREE.FrontSide) {
-            counts.Front += 1;
-          } else if (side === THREE.BackSide) {
-            counts.Back += 1;
-          } else {
-            counts.Double += 1;
-          }
+          meshes += 1;
+          (Array.isArray(mat) ? mat : [mat]).forEach((material) => {
+            const side = material.side;
+            if (side === THREE.FrontSide) {
+              counts.Front += 1;
+            } else if (side === THREE.BackSide) {
+              counts.Back += 1;
+            } else {
+              counts.Double += 1;
+            }
+          });
         });
-      });
 
-      console.log(
-        '[culling audit] materials — FrontSide (backface culling ON):',
-        counts.Front,
-        '| DoubleSide (culling OFF):',
-        counts.Double,
-        '| BackSide:',
-        counts.Back,
-        '| meshes:',
-        meshes
-      );
-      console.log('[render info]', JSON.parse(JSON.stringify(gl.info.render)));
-      (window as unknown as { __scene?: unknown }).__scene = scene;
-      (window as unknown as { __gl?: unknown }).__gl = gl;
-      console.log('exposed window.__scene and window.__gl');
+        console.log(
+          '[culling audit] materials — FrontSide (backface culling ON):',
+          counts.Front,
+          '| DoubleSide (culling OFF):',
+          counts.Double,
+          '| BackSide:',
+          counts.Back,
+          '| meshes:',
+          meshes
+        );
+        console.log('[render info]', JSON.parse(JSON.stringify(gl.info.render)));
+        (window as unknown as { __scene?: unknown }).__scene = scene;
+        (window as unknown as { __gl?: unknown }).__gl = gl;
+        console.log('exposed window.__scene and window.__gl');
+      } else if (e.key === 'v' || e.key === 'V') {
+        // Toggle backface culling on/off.
+        if (!cullingOff) {
+          // Turn culling OFF — set all materials to DoubleSide.
+          scene.traverse((obj) => {
+            const mesh = obj as THREE.Mesh;
+            const mat = mesh.material;
+            // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- defensive check for malformed geometry
+            if (!mat) return;
+
+            (Array.isArray(mat) ? mat : [mat]).forEach((material: THREE.Material) => {
+              // Store original side once in userData.
+              // eslint-disable-next-line @typescript-eslint/prefer-nullish-coalescing -- userData is dynamically set
+              if (!material.userData.__origSide) {
+                material.userData.__origSide = material.side;
+              }
+              material.side = THREE.DoubleSide;
+            });
+          });
+          cullingOff = true;
+          console.log('[culling] OFF — all DoubleSide (backface culling disabled)');
+        } else {
+          // Turn culling back ON — restore original sides.
+          scene.traverse((obj) => {
+            const mesh = obj as THREE.Mesh;
+            const mat = mesh.material;
+            // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- defensive check for malformed geometry
+            if (!mat) return;
+
+            (Array.isArray(mat) ? mat : [mat]).forEach((material: THREE.Material) => {
+              const origSide = (material.userData.__origSide as THREE.Side | undefined) ?? THREE.FrontSide;
+              material.side = origSide;
+            });
+          });
+          cullingOff = false;
+          console.log('[culling] ON — restored original sides');
+        }
+        console.log('[render info]', JSON.parse(JSON.stringify(gl.info.render)));
+      }
     };
 
     window.addEventListener('keydown', onKeyDown);
