@@ -7,9 +7,12 @@
 // via mat.normalMap; final strength is tuned there with normalScale.
 //
 // Pipeline (offline, uses the same `sharp` other gen scripts rely on):
-//   1. HEIGHT FIELD — take luminance of the sharpest available board albedo,
-//      lightly Gaussian-blur (~1px) to kill aliasing. Convention: LIGHT = HIGH,
-//      dark lines/text = LOW  ->  dark print sinks into engraved grooves.
+//   1. HEIGHT FIELD — take luminance of the SHIPPED board albedo (the exact same
+//      image the material samples), lightly Gaussian-blur (~1px) to kill
+//      aliasing. Convention: DARK INK = HIGH, light paper = LOW  ->  the black
+//      grid lines, tile text, icons, GO arrow, and price text EMBOSS OUTWARD
+//      (raised relief, popping off the board) rather than sinking in. This is
+//      height = (1 - luminance).
 //   2. NORMAL — Sobel gradient of the height field:
 //        n = normalize( -dH/dx, -dH/dy, 1/strength )
 //      encoded to RGB [0..1] with B≈up (a flat area => ~(0.5,0.5,1.0)).
@@ -20,14 +23,17 @@
 //      dimensions, quality ~90, LINEAR data (normal maps are NOT colour, so
 //      NO sRGB encode is applied — sharp's raw->webp keeps values as authored).
 //
-// Source selection: prefers the highest-res, sharpest, Mockopoly-branded,
-// edge-to-edge board art. Candidates are probed at run time; see pickSource().
+// Source selection: the normal map is generated ONLY from the shipped albedo
+// (public/images/board.webp) so it lives in the IDENTICAL pixel basis as the
+// texture the board material displays. This is what guarantees the relief lands
+// pixel-for-pixel on the print (no neighbour-tile bleed) — any other source
+// (e.g. a Downloads Board.png with different framing/orientation) would produce
+// a map that does not line up 1:1 with the albedo UVs.
 //
 // Run: npm run models:board-normal
 
 import { existsSync } from 'node:fs';
 import { stat } from 'node:fs/promises';
-import { homedir } from 'node:os';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import sharp from 'sharp';
@@ -36,16 +42,10 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(__dirname, '..');
 
 // The shipped albedo the board material actually samples. The normal map is
-// written at THIS pixel size so it aligns 1:1 with the albedo UVs in-material.
+// generated FROM and written AT this exact image so it lives in the identical
+// pixel basis — the ONLY way to guarantee 1:1 alignment with the albedo UVs.
 const ALBEDO = resolve(ROOT, 'public', 'images', 'board.webp');
 const OUT = resolve(ROOT, 'public', 'images', 'board-normal.webp');
-
-// Candidate hi-res sources (built from the sharpest, but resampled to the
-// albedo's dimensions so the map stays aligned). Order = preference.
-const CANDIDATES = [
-  resolve(homedir(), 'Downloads', 'Board.png'), // 5503²  MOCKOPOLY-branded, edge-to-edge
-  ALBEDO, // shipped 2048² fallback if the hi-res source is unavailable
-];
 
 // ── Baked gradient strength ──────────────────────────────────────────────────
 // Slope divisor in n.z = 1/STRENGTH. Higher STRENGTH => steeper baked normals.
@@ -65,36 +65,27 @@ async function sharpness(file) {
   return st.channels[0].stdev;
 }
 
-/** Pick the first existing candidate; log its resolution + sharpness. */
-async function pickSource() {
-  for (const f of CANDIDATES) {
-    if (!existsSync(f)) continue;
-    const meta = await sharp(f).metadata();
-    const s = await sharpness(f);
-    return { file: f, width: meta.width, height: meta.height, sharpness: s };
-  }
-  throw new Error('No board albedo source found.');
-}
-
 async function main() {
-  const src = await pickSource();
+  if (!existsSync(ALBEDO)) {
+    throw new Error(`Shipped board albedo not found: ${ALBEDO}`);
+  }
   const albedoMeta = await sharp(ALBEDO).metadata();
   const W = albedoMeta.width;
   const H = albedoMeta.height;
+  const lumaStdev = await sharpness(ALBEDO);
 
-  console.log(`Source albedo : ${src.file.replace(homedir(), '~')}`);
-  console.log(`  resolution  : ${src.width}x${src.height}  (lumaStdev=${src.sharpness.toFixed(1)})`);
-  console.log(`Output size   : ${W}x${H} (matches shipped board.webp)`);
+  console.log(`Source albedo : ${ALBEDO.replace(ROOT + '/', '')}`);
+  console.log(`  resolution  : ${W}x${H}  (lumaStdev=${lumaStdev.toFixed(1)})`);
+  console.log(`Output size   : ${W}x${H} (matches shipped board.webp exactly)`);
 
   // ── 1. HEIGHT FIELD ────────────────────────────────────────────────────────
-  // Flatten any alpha over WHITE (the board's paper is light; rounded corners
-  // are transparent — white keeps them "high" so no false groove rings appear),
-  // grayscale (luminance), resample to the albedo size, then light blur. Values
-  // are LINEAR 0..255 luminance: bright print = high, dark ink = low.
-  const heightRaw = await sharp(src.file)
+  // Flatten any alpha over WHITE (paper is light), grayscale (luminance) at the
+  // albedo's native size, then light blur. Values are LINEAR 0..255 luminance;
+  // the DARK-INK = HIGH inversion (height = 1 - luma) is applied in the Sobel
+  // loop below via h(). No resize is needed — we work in the albedo's own basis.
+  const heightRaw = await sharp(ALBEDO)
     .flatten({ background: '#ffffff' })
     .grayscale()
-    .resize(W, H, { fit: 'fill', kernel: 'lanczos3' })
     .blur(HEIGHT_BLUR_SIGMA)
     .raw()
     .toBuffer(); // 1 channel, W*H bytes
@@ -102,10 +93,13 @@ async function main() {
   // ── 2. SOBEL GRADIENT -> TANGENT-SPACE NORMAL ──────────────────────────────
   const out = Buffer.alloc(W * H * 3);
   const h = (x, y) => {
-    // Clamp to edge so borders don't fold; normalize 0..1.
+    // Clamp to edge so borders don't fold; normalize 0..1 then INVERT so DARK
+    // INK = HIGH. height = 1 - luminance makes the black grid lines, tile text,
+    // icons, GO arrow, and price text emboss OUTWARD (raised), while the light
+    // paper stays LOW. This is the "pops out" convention the design calls for.
     const xx = x < 0 ? 0 : x >= W ? W - 1 : x;
     const yy = y < 0 ? 0 : y >= H ? H - 1 : y;
-    return heightRaw[yy * W + xx] / 255;
+    return 1 - heightRaw[yy * W + xx] / 255;
   };
 
   for (let y = 0; y < H; y++) {
@@ -127,9 +121,10 @@ async function main() {
       const dHdyImg = bl + 2 * bc + br - (tl + 2 * tc + tr);
       const dHdy = OPENGL_Y ? -dHdyImg : dHdyImg;
 
-      // n = normalize(-dH/dx, -dH/dy, 1/strength). LIGHT=HIGH means dark grooves
-      // slope inward; the -dH terms make the surface normal tilt toward the
-      // brighter (higher) neighbour, which is the standard height->normal sign.
+      // n = normalize(-dH/dx, -dH/dy, 1/strength). With DARK-INK=HIGH (height =
+      // 1 - luma), the -dH terms tilt the surface normal toward the HIGHER (now
+      // the inked) neighbour, so the print reads as RAISED ridges — the standard
+      // height->normal sign, just fed the inverted height field.
       let nx = -dHdx;
       let ny = -dHdy;
       const nz = 1 / STRENGTH;

@@ -60,18 +60,21 @@ const BOARD_SATURATION = 1.15;
 
 /**
  * Fake-3D relief for the printed board via a NORMAL MAP (board-normal.webp,
- * baked offline by scripts/gen-board-normal.mjs from the board art). No geometry
- * change — the flat top face gets per-pixel surface normals so grid lines, tile
- * text, icons, the GO arrow, and colour strips catch the scene's directional +
- * point lighting as engraved grooves.
+ * baked offline by scripts/gen-board-normal.mjs FROM the shipped albedo
+ * board.webp — same pixel basis, so the relief aligns 1:1 with the print). No
+ * geometry change — the flat top face gets per-pixel surface normals so grid
+ * lines, tile text, icons, the GO arrow, and price text catch the scene's
+ * directional + point lighting as RAISED ridges POPPING OUT of the board (the
+ * bake uses DARK-INK = HIGH so the print embosses outward, not engraved in).
  *
  * TUNING KNOBS:
  *   BOARD_NORMAL_STRENGTH – overall relief depth (normalScale). ~0.2 subtle,
  *                           ~1.5 heavy. 0.6 = a tasteful embossed print.
- *   BOARD_NORMAL_Y_SIGN   – flip if the relief looks INVERTED (grooves bulge
- *                           OUT instead of sinking IN, or vice-versa). The baked
- *                           map is OpenGL green-up; some lighting reads better
- *                           with the green channel inverted. Flip 1 -> -1.
+ *   BOARD_NORMAL_Y_SIGN   – flip if the relief reads INVERTED under lighting
+ *                           (print sinks IN instead of popping OUT). The bake
+ *                           already inverts the height (dark ink = raised) and
+ *                           is OpenGL green-up, so +1 gives the raised look; if
+ *                           lighting ever reads it sunk-in, flip 1 -> -1.
  *
  * The relief only shows under lighting + non-mirror roughness. The top material
  * keeps roughness 0.7 (matte paper) which reveals the grooves well; if the
@@ -86,6 +89,7 @@ export function BoardTiles() {
   const maxAniso = useThree((s) => s.gl.capabilities.getMaxAnisotropy());
 
   useMemo(() => {
+    // ── ALBEDO — the single source of truth for the board's UV transform ──────
     texture.colorSpace = THREE.SRGBColorSpace;
     texture.anisotropy = maxAniso;
     texture.flipY = TEX_FLIP_Y;
@@ -97,22 +101,36 @@ export function BoardTiles() {
     // be flipped to `true` without further edits, even though it is false today.
     // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- TEX_FLIP_X is a documented tuning constant meant to be toggled; the branch is intentional
     texture.repeat.set(TEX_FLIP_X ? -1 : 1, 1);
+    texture.offset.set(0, 0);
     texture.wrapS = THREE.ClampToEdgeWrapping;
     texture.wrapT = THREE.ClampToEdgeWrapping;
     texture.needsUpdate = true;
 
-    // Normal map: LINEAR data (NOT colour) and MUST share the albedo's exact UV
-    // transform so the relief lands pixel-for-pixel on the print. Mirror every
-    // sampling parameter the albedo uses above.
+    // ── NORMAL — COPY the albedo's exact UV transform (never re-derive it) ─────
+    // The relief must land pixel-for-pixel on the print, so instead of restating
+    // flipY/center/rotation/repeat/offset/wrap for the normal map (which could
+    // silently drift from the albedo), we COPY every UV-sampling parameter off
+    // the just-configured albedo texture. Anything that tweaks the albedo's
+    // framing (TEX_FLIP_X/Y, TEX_ROTATION) now propagates to the normal map
+    // automatically — they can't diverge. Only the colour/mip/filter properties
+    // (which are texture-kind-specific, not UV placement) are set independently:
+    // the normal map is LINEAR data, not colour.
+    normalTex.flipY = texture.flipY;
+    normalTex.center.copy(texture.center);
+    normalTex.rotation = texture.rotation;
+    normalTex.repeat.copy(texture.repeat);
+    normalTex.offset.copy(texture.offset);
+    normalTex.wrapS = texture.wrapS;
+    normalTex.wrapT = texture.wrapT;
+    // Keep the matrix in lock-step too (belt-and-braces if matrixAutoUpdate is
+    // ever disabled upstream): recompute both from the copied params.
+    texture.updateMatrix();
+    normalTex.matrixAutoUpdate = texture.matrixAutoUpdate;
+    normalTex.matrix.copy(texture.matrix);
+
+    // Texture-kind-specific (NOT UV placement): normal map stays LINEAR.
     normalTex.colorSpace = THREE.NoColorSpace;
     normalTex.anisotropy = maxAniso;
-    normalTex.flipY = TEX_FLIP_Y;
-    normalTex.center.set(0.5, 0.5);
-    normalTex.rotation = TEX_ROTATION;
-    // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- mirrors the albedo's TEX_FLIP_X tuning branch so the normal map stays aligned when it is toggled
-    normalTex.repeat.set(TEX_FLIP_X ? -1 : 1, 1);
-    normalTex.wrapS = THREE.ClampToEdgeWrapping;
-    normalTex.wrapT = THREE.ClampToEdgeWrapping;
     normalTex.generateMipmaps = true;
     normalTex.minFilter = THREE.LinearMipmapLinearFilter;
     normalTex.magFilter = THREE.LinearFilter;
