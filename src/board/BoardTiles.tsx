@@ -113,7 +113,7 @@ const BOARD_NORMAL_Y_SIGN = 1; // set to -1 if relief looks inverted
  *                             looks lumpy or clips tokens/buildings.
  */
 const BOARD_SEGMENTS = 1024;
-const BOARD_DISPLACEMENT_SCALE = 0.04;
+const BOARD_DISPLACEMENT_SCALE = 0.07;
 /**
  * Nudge the slab's flat top face just below the displaced plane so the original
  * flat top never coincides with (z-fights) the subdivided displaced surface.
