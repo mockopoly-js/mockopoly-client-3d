@@ -79,34 +79,42 @@ const HEIGHT_BLUR_SIGMA = 1.0;
 // resolve thin strokes as crisp ridges instead of relying on fat dilation:
 //
 //   1. HARD THRESHOLD → clean binary ink mask
-//        binary = (h > INK_CUT) ? 1 : 0                      (INK_CUT = 0.55)
-//      Zeroes near-white tile FACES (h≈0.05–0.30) AND mid-tone COLOUR STRIPS
-//      (h≈0.3–0.5) outright — NO face/strip noise can ever displace. Only
-//      near-black ink (text, lines, borders, icons, GO arrow, h≳0.55) → 1.
-//      Raw-binary coverage should be SMALL (~6–8%); it is logged at bake time.
+//        binary = (h > INK_CUT) ? 1 : 0                      (INK_CUT = 0.85)
+//      The threshold is deliberately HIGH so ONLY near-pure-BLACK ink passes:
+//      the sketchy off-white/gray HAND-DRAWN tile-FACE detail (h = 1-luma ≈
+//      0.3–0.6) and the mid-tone COLOUR STRIPS fall BELOW 0.85 → excluded → 0.
+//      That face detail passing the old low cut (0.55) is what made the whole
+//      tile SURFACE ripple; gating it out is the DECISIVE wobble fix. Only
+//      near-black grid lines, black text, black icons and the GO arrow (h≳0.85)
+//      → 1. Raw-binary coverage should be SMALL (~5–8%); logged at bake time.
 //
-//   2. MINIMAL DILATE (barely grow) the binary ink so 1px gaps in thin strokes
-//      close into solid ridges — NOT a flood:
+//   2. DILATE (grow) the binary ink so thin/anti-aliased strokes — whose gray
+//      edges the HIGH cut chopped off — get their mass back as solid ridges:
 //        dilated = (blur(binary, DILATE_PX) > DILATE_CUT) ? 1 : 0
-//      Blur+threshold = morphological dilation. DILATE_PX = 1 with a HIGH cut
-//      (0.4) grows the mask by only ~1px — just enough to make thin strokes solid
-//      without smearing them into blobs. Because faces are ALREADY 0 (step 1),
-//      the blur has nothing to smear up from them. Post-dilate coverage should
-//      land ~8–12% board-wide (NOT ~41%); it is logged at bake time. Keeping
-//      coverage near real-ink level is what KILLS the wobble — crispness then
-//      comes from tessellation, not from dilation.
+//      Blur+threshold = morphological dilation. DILATE_PX = 1.5 with cut 0.35
+//      grows the mask ~1.5px — enough to re-solidify strokes the high threshold
+//      thinned, without flooding faces. Because faces are ALREADY 0 (step 1),
+//      the blur has nothing to smear up from them. Logged at bake time.
 //
 //   3. TIGHT BEVEL BLUR → smooth ridge sides just enough (kill stair-steps):
-//        height = blur(dilated, BEVEL_PX)                    (~0.6px, small)
+//        beveled = blur(dilated, BEVEL_PX)                   (~0.6px, small)
 //      A small blur softens the binary walls into crisp beveled ramps so the ridge
 //      sides read clean from a grazing angle, WITHOUT mushing the thin ridge tops.
 //
+//   4. RE-MASK (CRITICAL) → force every non-ink pixel back to EXACTLY 0:
+//        height = (dilated ? beveled : 0)
+//      The bevel blur bleeds a faint halo onto pixels OUTSIDE the ink mask, which
+//      would lift tile FACES a hair and re-introduce wobble. Multiplying the
+//      beveled result by the dilated binary mask clamps every face pixel to a hard
+//      0 → faces are PROVABLY flat, so NO wobble is possible on them. Verified at
+//      bake time by sampling interior-face points and asserting they read 0.
+//
 // Tune: INK_CUT UP if faces still lift / DOWN if faint ink vanishes; DILATE_PX up
-// only if 1px strokes still break up (at the cost of coverage/wobble); BEVEL_PX up
-// for softer sides. Because step 1 is a HARD binary, faces + strips are flat.
-const INK_CUT = 0.55;
-const DILATE_PX = 1;
-const DILATE_CUT = 0.4;
+// only if strokes still break up (at the cost of coverage); BEVEL_PX up for softer
+// sides. Steps 1 + 4 together GUARANTEE faces + strips are dead flat.
+const INK_CUT = 0.85;
+const DILATE_PX = 1.5;
+const DILATE_CUT = 0.35;
 const BEVEL_PX = 0.6;
 // OpenGL (green = +Y up). Set false for a DirectX-style (green = -Y) map.
 const OPENGL_Y = true;
@@ -144,23 +152,27 @@ async function main() {
 
   // ── 1b. HEIGHT MAP OUTPUT (displacementMap) — MORPHOLOGY, LINEAR ───────────
   // Displacement is sampled in the VERTEX shader over a 2048²-vertex grid (~1px
-  // per vertex — thin strokes now span enough verts to form defined ridges). A
-  // previous bake OVER-DILATED (2px @ 0.2) to ~41% coverage → broad soft mounds
-  // = WOBBLY. Replace with a SURGICAL binary MORPHOLOGY on the inverted height
-  // h = 1 - luminance (DARK INK = HIGH): THRESHOLD → MINIMAL DILATE → TIGHT BEVEL.
+  // per vertex — thin strokes now span enough verts to form defined ridges). The
+  // whole tile SURFACE used to ripple because the board art has sketchy off-white/
+  // gray HAND-DRAWN detail on the tile faces, and a low threshold (0.55) caught it
+  // → faces displaced → wobble. Fix: a HIGH-threshold binary MORPHOLOGY on the
+  // inverted height h = 1 - luminance (DARK INK = HIGH), then a RE-MASK that forces
+  // every non-ink pixel to exactly 0: THRESHOLD → DILATE → BEVEL → RE-MASK.
   //
-  //   1. binary  = (h > INK_CUT) ? 1 : 0     hard gate — faces + colour strips
-  //                                          go to a FLAT 0 (no face noise), only
-  //                                          near-black ink stays 1. (~6–8% cov.)
+  //   1. binary  = (h > INK_CUT) ? 1 : 0     HIGH gate (0.85) — only near-pure
+  //                                          BLACK ink stays 1; faces + colour
+  //                                          strips + gray sketch detail → 0.
+  //                                          (~5–8% cov.)
   //   2. dilated = (blur(binary, DILATE_PX) > DILATE_CUT) ? 1 : 0
-  //                                          BARELY grow ink (1px @ 0.4) — just
-  //                                          close 1px gaps so thin strokes are
-  //                                          solid, NOT flood the faces. Faces are
-  //                                          already 0 so the blur only touches
-  //                                          real ink. (~8–12% cov, NOT 41%.)
-  //   3. height  = blur(dilated, BEVEL_PX)   tight blur (0.6px) → crisp beveled
+  //                                          grow ink (1.5px @ 0.35) so thin/anti-
+  //                                          aliased strokes the high cut thinned
+  //                                          get their mass back as solid ridges.
+  //   3. beveled = blur(dilated, BEVEL_PX)   tight blur (0.6px) → crisp beveled
   //                                          ridge sides (kills stair-steps, keeps
   //                                          thin ridge tops sharp).
+  //   4. height  = dilated ? beveled : 0     RE-MASK — clamp every non-ink pixel to
+  //                                          a hard 0 so the bevel halo can NEVER
+  //                                          lift a face. Faces are PROVABLY flat.
   //
   // Coverage of the raw binary and of the dilated mask are logged so the bake can
   // be verified to stay near ink level (crispness comes from tessellation).
@@ -201,11 +213,40 @@ async function main() {
   const dilatedCoveragePct = (dilatedInkPx / dilated.length) * 100;
 
   // Step 3 — LIGHT BEVEL BLUR: smooth ridge sides without eroding the ridge tops.
-  const heightField = await sharp(dilated, { raw: { width: W, height: H, channels: 1 } })
+  const beveled = await sharp(dilated, { raw: { width: W, height: H, channels: 1 } })
     .blur(BEVEL_PX)
     .raw()
     .toBuffer();
-  // Mean height (0..1) after the bevel — a proxy for overall raised area/height.
+
+  // Step 4 — RE-MASK (CRITICAL): the bevel blur bleeds a faint halo OUTWARD onto
+  // pixels that were NOT ink, which would lift tile FACES a hair and re-introduce
+  // wobble. Force every pixel that was NOT in the DILATED ink mask back to EXACTLY
+  // 0 by multiplying the beveled result by the binary dilated mask (0/255). Faces
+  // are then provably flat (identically 0) — no blur halo can raise them. Only the
+  // INTERIOR of the dilated ink keeps its beveled ramp; the ink's own outer edge
+  // just goes crisp again (acceptable — crisp edge, dead-flat face).
+  const heightField = Buffer.alloc(W * H);
+  let liftedFacePx = 0; // pixels outside the mask that the bevel had lifted > 0
+  for (let p = 0; p < heightField.length; p++) {
+    if (dilated[p] === 0) {
+      if (beveled[p] > 0) liftedFacePx++;
+      heightField[p] = 0; // hard 0 — face pixel, provably flat
+    } else {
+      heightField[p] = beveled[p];
+    }
+  }
+  // Verify faces are dead flat: sample a handful of known interior-face points and
+  // confirm they read exactly 0 (well inside tiles, away from any ink/border).
+  const sampleFaces = [
+    [Math.round(W * 0.16), Math.round(H * 0.16)], // upper-left corner-tile face
+    [Math.round(W * 0.5), Math.round(H * 0.16)], // top-edge tile face
+    [Math.round(W * 0.5), Math.round(H * 0.5)], // board centre (GO-to logo area)
+    [Math.round(W * 0.84), Math.round(H * 0.84)], // lower-right corner-tile face
+    [Math.round(W * 0.5), Math.round(H * 0.84)], // bottom-edge tile face
+  ];
+  const faceSamples = sampleFaces.map(([sx, sy]) => heightField[sy * W + sx]);
+  const facesAllZero = faceSamples.every((v) => v === 0);
+  // Mean height (0..1) after re-mask — a proxy for overall raised area/height.
   let heightSum = 0;
   for (let p = 0; p < heightField.length; p++) heightSum += heightField[p];
   const meanPct = (heightSum / heightField.length / 255) * 100;
@@ -214,10 +255,13 @@ async function main() {
     .toFile(OUT_HEIGHT);
   const heightStat = await stat(OUT_HEIGHT);
   console.log(
-    `Wrote height  : ${OUT_HEIGHT.replace(ROOT + '/', '')} (${heightStat.size} bytes) [morphology: threshold(>${INK_CUT}) → dilate(${DILATE_PX}px@${DILATE_CUT}) → bevel(${BEVEL_PX}px)]`,
+    `Wrote height  : ${OUT_HEIGHT.replace(ROOT + '/', '')} (${heightStat.size} bytes) [morphology: threshold(>${INK_CUT}) → dilate(${DILATE_PX}px@${DILATE_CUT}) → bevel(${BEVEL_PX}px) → re-mask(non-ink→0)]`,
   );
   console.log(
-    `  coverage    : raw-binary=${rawCoveragePct.toFixed(1)}% (target ~6–8%)  post-dilate=${dilatedCoveragePct.toFixed(1)}% (target ~8–12%, NOT 41%)  mean=${meanPct.toFixed(1)}%`,
+    `  coverage    : raw-binary=${rawCoveragePct.toFixed(1)}% (near-pure-black ink only)  post-dilate=${dilatedCoveragePct.toFixed(1)}%  mean=${meanPct.toFixed(1)}%`,
+  );
+  console.log(
+    `  re-mask     : forced ${liftedFacePx} non-ink halo px back to 0; face samples=[${faceSamples.join(', ')}] facesFlat=${facesAllZero ? 'YES (all exactly 0)' : 'NO'}`,
   );
 
   // ── 2. SOBEL GRADIENT -> TANGENT-SPACE NORMAL ──────────────────────────────

@@ -47,7 +47,7 @@ const TOP_Y = 0.02;
 const EDGE_COLOR = '#c9a06a';
 
 /** Cache-busting version for board normal and height maps. Bump when re-baking. */
-const MAP_VER = 2;
+const MAP_VER = 3;
 
 /**
  * Saturation multiplier for the printed board artwork ONLY (top face, index 2).
@@ -124,7 +124,7 @@ const BOARD_NORMAL_Y_SIGN = 1; // set to -1 if relief looks inverted
  *                             raised lines/letters, not spikes.)
  */
 const BOARD_SEGMENTS = 2048;
-const BOARD_DISPLACEMENT_SCALE = 0.15;
+const BOARD_DISPLACEMENT_SCALE = 0.12;
 /**
  * Nudge the slab's flat top face just below the displaced plane so the original
  * flat top never coincides with (z-fights) the subdivided displaced surface.
