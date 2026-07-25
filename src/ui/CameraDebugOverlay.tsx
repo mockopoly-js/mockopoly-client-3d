@@ -15,7 +15,7 @@ function fmtVec(v: [number, number, number]): string {
  */
 export function CameraDebugOverlay() {
   const r = useGameStore((s) => s.cameraReadout);
-  if (!r) return null;
+  if (!import.meta.env.DEV || !r) return null;
 
   return (
     <div
