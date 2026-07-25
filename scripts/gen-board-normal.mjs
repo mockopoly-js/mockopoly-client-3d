@@ -46,6 +46,13 @@ const ROOT = resolve(__dirname, '..');
 // pixel basis — the ONLY way to guarantee 1:1 alignment with the albedo UVs.
 const ALBEDO = resolve(ROOT, 'public', 'images', 'board.webp');
 const OUT = resolve(ROOT, 'public', 'images', 'board-normal.webp');
+// Grayscale HEIGHT MAP written alongside the normal map — the SAME blurred
+// (1 - luminance) height field the normal bake derives from (DARK INK = HIGH).
+// Consumed by BoardTiles.tsx as mat.displacementMap on the subdivided top plane
+// so the print physically RAISES as geometry (real silhouette relief), while the
+// normal map keeps supplying the fine per-pixel detail. Same dims/basis as the
+// albedo (2048×2048), LINEAR (displacement is NOT colour, so NO sRGB encode).
+const OUT_HEIGHT = resolve(ROOT, 'public', 'images', 'board-height.webp');
 
 // ── Baked gradient strength ──────────────────────────────────────────────────
 // Slope divisor in n.z = 1/STRENGTH. Higher STRENGTH => steeper baked normals.
@@ -89,6 +96,23 @@ async function main() {
     .blur(HEIGHT_BLUR_SIGMA)
     .raw()
     .toBuffer(); // 1 channel, W*H bytes
+
+  // ── 1b. HEIGHT MAP OUTPUT (displacementMap) — LINEAR grayscale ─────────────
+  // Emit the EXACT height field the Sobel step consumes: height = 1 - luminance
+  // (DARK INK = HIGH). heightRaw holds luminance 0..255, so invert per-pixel.
+  // Written at the albedo's native size, single grayscale channel, LINEAR (raw
+  // ->webp keeps values as authored — displacement, like normals, is not colour).
+  const heightField = Buffer.alloc(W * H);
+  for (let p = 0; p < heightField.length; p++) {
+    heightField[p] = 255 - heightRaw[p];
+  }
+  await sharp(heightField, { raw: { width: W, height: H, channels: 1 } })
+    .webp({ quality: 90 })
+    .toFile(OUT_HEIGHT);
+  const heightStat = await stat(OUT_HEIGHT);
+  console.log(
+    `Wrote height  : ${OUT_HEIGHT.replace(ROOT + '/', '')} (${heightStat.size} bytes) [dark ink = high]`,
+  );
 
   // ── 2. SOBEL GRADIENT -> TANGENT-SPACE NORMAL ──────────────────────────────
   const out = Buffer.alloc(W * H * 3);

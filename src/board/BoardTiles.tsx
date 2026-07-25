@@ -2,6 +2,7 @@ import { useMemo } from 'react';
 import * as THREE from 'three';
 import { useTexture } from '@react-three/drei';
 import { useThree } from '@react-three/fiber';
+import { useIsMobile } from '../ui/useIsMobile';
 import { BOARD_WORLD_SIZE } from './positions';
 
 /**
@@ -84,9 +85,54 @@ const BOARD_SATURATION = 1.15;
 const BOARD_NORMAL_STRENGTH = 1.5; // range ~0.2..1.5
 const BOARD_NORMAL_Y_SIGN = 1; // set to -1 if relief looks inverted
 
+/**
+ * REAL DISPLACEMENT — the print physically raises as GEOMETRY (not just the fake
+ * normal-map relief). A densely subdivided PlaneGeometry is laid flat at the
+ * board's top surface (TOP_Y) sharing the top material (albedo + saturation
+ * inject + normal map) PLUS a grayscale displacementMap (board-height.webp,
+ * baked by scripts/gen-board-normal.mjs from the SAME 1-luminance height field
+ * as the normal map: DARK INK = HIGH). Each vertex is pushed +Y by
+ * height * BOARD_DISPLACEMENT_SCALE, so the black grid lines, borders, big icons,
+ * the GO arrow, and colour strips gain real silhouette/relief while the flat
+ * light paper (height ≈ 0) stays at the surface. The normal map still supplies
+ * the fine per-pixel letter detail that tessellation alone can't resolve.
+ *
+ * Z-FIGHT AVOIDANCE: the subdivided plane sits AT TOP_Y and IS the visible top
+ * surface; the slab's own flat top face is dropped a hair BELOW it (see
+ * SLAB_TOP_DROP) so the two never coincide — only the displaced plane shows on
+ * top, while the slab keeps providing thickness + the four edge/bottom faces.
+ *
+ * TUNING KNOBS:
+ *   BOARD_SEGMENTS          – tessellation per axis. 1024 → ~2M tris (desktop).
+ *                             DO NOT push beyond 1024 (fine text stays the normal
+ *                             map's job; displacement is for borders/big features
+ *                             + overall relief + silhouette). Mobile forces 0.
+ *   BOARD_DISPLACEMENT_SCALE – world-unit height of the raised ink. Board is ~10
+ *                             wide, tiles ~0.9; 0.04 reads as a firm embossed
+ *                             print. Raise for more pop, lower if silhouette
+ *                             looks lumpy or clips tokens/buildings.
+ */
+const BOARD_SEGMENTS = 1024;
+const BOARD_DISPLACEMENT_SCALE = 0.04;
+/**
+ * Nudge the slab's flat top face just below the displaced plane so the original
+ * flat top never coincides with (z-fights) the subdivided displaced surface.
+ * Small enough to be invisible against DEPTH (0.5) and BOARD_DISPLACEMENT_SCALE.
+ */
+const SLAB_TOP_DROP = 0.01;
+
 export function BoardTiles() {
-  const [texture, normalTex] = useTexture(['/images/board.webp', '/images/board-normal.webp']);
+  const [texture, normalTex, heightTex] = useTexture([
+    '/images/board.webp',
+    '/images/board-normal.webp',
+    '/images/board-height.webp',
+  ]);
   const maxAniso = useThree((s) => s.gl.capabilities.getMaxAnisotropy());
+  // 1024² ≈ 2M tris is fine on desktop but too heavy for mobile GPUs. 0 segments
+  // → a single flat quad → displacement is a no-op (normal map still works),
+  // while desktop gets the full displaced silhouette.
+  const isMobile = useIsMobile();
+  const segments = isMobile ? 0 : BOARD_SEGMENTS;
 
   useMemo(() => {
     // ── ALBEDO — the single source of truth for the board's UV transform ──────
@@ -135,8 +181,30 @@ export function BoardTiles() {
     normalTex.minFilter = THREE.LinearMipmapLinearFilter;
     normalTex.magFilter = THREE.LinearFilter;
     normalTex.needsUpdate = true;
+
+    // ── HEIGHT / DISPLACEMENT — COPY the albedo's exact UV transform ───────────
+    // Displacement must raise the print pixel-for-pixel where the ink is, so the
+    // height map samples the IDENTICAL UV placement as the albedo (never re-derive
+    // it): copy flipY/center/rotation/repeat/offset/wrap + matrix off the albedo.
+    // Any framing tweak (TEX_FLIP_X/Y, TEX_ROTATION) propagates automatically.
+    heightTex.flipY = texture.flipY;
+    heightTex.center.copy(texture.center);
+    heightTex.rotation = texture.rotation;
+    heightTex.repeat.copy(texture.repeat);
+    heightTex.offset.copy(texture.offset);
+    heightTex.wrapS = texture.wrapS;
+    heightTex.wrapT = texture.wrapT;
+    heightTex.matrixAutoUpdate = texture.matrixAutoUpdate;
+    heightTex.matrix.copy(texture.matrix);
+    // Texture-kind-specific: displacement is LINEAR data, NOT colour.
+    heightTex.colorSpace = THREE.NoColorSpace;
+    heightTex.anisotropy = maxAniso;
+    heightTex.generateMipmaps = true;
+    heightTex.minFilter = THREE.LinearMipmapLinearFilter;
+    heightTex.magFilter = THREE.LinearFilter;
+    heightTex.needsUpdate = true;
     return texture;
-  }, [texture, normalTex, maxAniso]);
+  }, [texture, normalTex, heightTex, maxAniso]);
 
   // 6-material array; BoxGeometry face order = [px, nx, py, ny, pz, nz].
   // Index 2 (py = top) gets the board artwork; the rest get the edge color.
@@ -153,6 +221,15 @@ export function BoardTiles() {
       BOARD_NORMAL_STRENGTH,
       BOARD_NORMAL_STRENGTH * BOARD_NORMAL_Y_SIGN,
     );
+
+    // REAL DISPLACEMENT: push the subdivided top plane's vertices +Y by
+    // height * scale. Height ≈ 0 (light paper) stays at the surface; height ≈ 1
+    // (dark ink) raises. Bias 0 so flat tile faces sit exactly at TOP_Y. This
+    // only visibly deforms the dense plane below; the slab's coarse top face has
+    // no interior verts to move and is dropped out of view anyway (SLAB_TOP_DROP).
+    top.displacementMap = heightTex;
+    top.displacementScale = BOARD_DISPLACEMENT_SCALE;
+    top.displacementBias = 0;
     top.needsUpdate = true;
 
     // Inject a saturation boost into the TOP face shader only — applied AFTER
@@ -181,13 +258,50 @@ export function BoardTiles() {
     };
 
     return [edge, edge, top, edge, edge, edge];
-  }, [texture, normalTex]);
+  }, [texture, normalTex, heightTex]);
+
+  // The shared TOP material (materials[2]) drives the displaced plane. It carries
+  // albedo + saturation inject + normal + displacement, so the plane looks
+  // identical to the slab's top face — just tessellated + physically raised.
+  const topMaterial = materials[2];
 
   return (
     <group>
-      {/* Board slab: 10 (x) × DEPTH (y) × 10 (z); top face pinned to TOP_Y. */}
-      <mesh position={[0, TOP_Y - DEPTH / 2, 0]} material={materials} receiveShadow castShadow>
+      {/*
+        Board SLAB: 10 (x) × DEPTH (y) × 10 (z). Provides thickness + the four
+        edge faces + bottom. Its own flat top face is dropped SLAB_TOP_DROP below
+        TOP_Y so it never coincides with (z-fights) the displaced plane above —
+        the plane is the visible top surface. The slab's top material is still the
+        printed board so the seam at the board rim reads correctly.
+      */}
+      <mesh
+        position={[0, TOP_Y - SLAB_TOP_DROP - DEPTH / 2, 0]}
+        material={materials}
+        receiveShadow
+        castShadow
+      >
         <boxGeometry args={[BOARD_WORLD_SIZE, DEPTH, BOARD_WORLD_SIZE]} />
+      </mesh>
+
+      {/*
+        DISPLACED TOP PLANE: a densely subdivided quad laid flat at TOP_Y, facing
+        +Y. Rotated -90° about X so the plane's local (u,v) maps onto world (x,z)
+        with the SAME UV basis as the box top face (u→+x, v→-z), keeping the print
+        aligned 1:1 under tokens. Shares the TOP material (albedo + saturation +
+        normal + displacement); displacementMap raises the ink into real geometry.
+        Mobile → segments 0 → flat single quad → displacement no-op (normal map
+        still works).
+      */}
+      <mesh
+        position={[0, TOP_Y, 0]}
+        rotation={[-Math.PI / 2, 0, 0]}
+        material={topMaterial}
+        receiveShadow
+        castShadow
+      >
+        <planeGeometry
+          args={[BOARD_WORLD_SIZE, BOARD_WORLD_SIZE, segments, segments]}
+        />
       </mesh>
     </group>
   );
