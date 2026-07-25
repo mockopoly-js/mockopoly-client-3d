@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { noop } from '../test-utils';
 import { render, screen, fireEvent } from '@testing-library/react';
 import { PartnershipPanel } from './PartnershipPanel';
 import { useGameStore } from '../state/gameStore';
@@ -26,17 +27,17 @@ describe('PartnershipPanel', () => {
   });
 
   it('accepts an incoming proposal', () => {
-    base({ activePartnershipProposal: { proposalId: 'pr1', initiatorId: 'p2', colorGroup: 'orange', proposedEquity: [{ playerId: 'p2', percentage: 50 }, { playerId: 'p1', percentage: 50 }], acceptedPlayerIds: ['p2'], status: 'pending' } } as any);
-    const emit = vi.spyOn(socketManager, 'emit').mockImplementation(() => {});
+    base({ activePartnershipProposal: { proposalId: 'pr1', initiatorId: 'p2', colorGroup: 'orange', proposedEquity: [{ playerId: 'p2', percentage: 50 }, { playerId: 'p1', percentage: 50 }], acceptedPlayerIds: ['p2'], status: 'pending' } } as unknown as Partial<GameState>);
+    const emit = vi.spyOn(socketManager, 'emit').mockImplementation(noop);
     render(<PartnershipPanel />);
     fireEvent.click(screen.getByRole('button', { name: /^accept$/i }));
     expect(emit).toHaveBeenCalledWith(EVENTS.PARTNERSHIP_ACCEPT_PROPOSAL, { proposalId: 'pr1' });
   });
 
   it('dissolves an active partnership I am in', () => {
-    base({ partnerships: [{ partnershipId: 'pt1', colorGroup: 'orange', status: 'active', partners: [{ playerId: 'p1', percentage: 60 }, { playerId: 'p2', percentage: 40 }] }] } as any);
+    base({ partnerships: [{ partnershipId: 'pt1', colorGroup: 'orange', status: 'active', partners: [{ playerId: 'p1', percentage: 60 }, { playerId: 'p2', percentage: 40 }] }] } as unknown as Partial<GameState>);
     useGameStore.getState().togglePartnershipPanel(true);
-    const emit = vi.spyOn(socketManager, 'emit').mockImplementation(() => {});
+    const emit = vi.spyOn(socketManager, 'emit').mockImplementation(noop);
     render(<PartnershipPanel />);
     fireEvent.click(screen.getByRole('button', { name: /dissolve/i }));
     expect(emit).toHaveBeenCalledWith(EVENTS.PARTNERSHIP_DISSOLVE_REQUEST, { partnershipId: 'pt1' });

@@ -26,7 +26,7 @@ describe('CameraDebugOverlay', () => {
 
     const el = screen.getByTestId('camera-debug-overlay');
     expect(el).toBeTruthy();
-    const text = el.textContent ?? '';
+    const text = el.textContent;
     // pos values rounded to 2 decimals
     expect(text).toContain('-8.12');
     expect(text).toContain('12.99');

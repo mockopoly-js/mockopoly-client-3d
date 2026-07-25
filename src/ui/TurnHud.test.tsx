@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { noop } from '../test-utils';
 import { render, screen, fireEvent } from '@testing-library/react';
 import { TurnHud } from './TurnHud';
 import { useGameStore } from '../state/gameStore';
@@ -32,7 +33,7 @@ describe('TurnHud', () => {
 
   it('enables Roll on my waiting turn and emits TURN_ROLL_DICE (not jailed)', () => {
     setState({ phase: 'waiting', hasRolled: false });
-    const emit = vi.spyOn(socketManager, 'emit').mockImplementation(() => {});
+    const emit = vi.spyOn(socketManager, 'emit').mockImplementation(noop);
     render(<TurnHud />);
     const roll = screen.getByRole('button', { name: /roll/i });
     expect((roll as HTMLButtonElement).disabled).toBe(false);
@@ -50,7 +51,7 @@ describe('TurnHud', () => {
 
   it('enables End Turn in action phase and emits TURN_END', () => {
     setState({ phase: 'action', hasRolled: true });
-    const emit = vi.spyOn(socketManager, 'emit').mockImplementation(() => {});
+    const emit = vi.spyOn(socketManager, 'emit').mockImplementation(noop);
     render(<TurnHud />);
     const endBtn = screen.getByRole('button', { name: /end turn/i });
     expect((endBtn as HTMLButtonElement).disabled).toBe(false);
@@ -62,7 +63,7 @@ describe('TurnHud', () => {
 
   it('emits TURN_ROLL_DICE (not JAIL_ROLL) when jailed player clicks Roll', () => {
     setState({ phase: 'waiting', hasRolled: false }, { isJailed: true, jailTurns: 1, jailCardCount: 0 });
-    const emit = vi.spyOn(socketManager, 'emit').mockImplementation(() => {});
+    const emit = vi.spyOn(socketManager, 'emit').mockImplementation(noop);
     render(<TurnHud />);
     const roll = screen.getByRole('button', { name: /roll/i });
     expect((roll as HTMLButtonElement).disabled).toBe(false);
@@ -89,7 +90,7 @@ describe('TurnHud', () => {
 
   it('Pay Fine button emits JAIL_PAY_FINE', () => {
     setState({ phase: 'waiting', hasRolled: false }, { isJailed: true, jailTurns: 0, jailCardCount: 0 });
-    const emit = vi.spyOn(socketManager, 'emit').mockImplementation(() => {});
+    const emit = vi.spyOn(socketManager, 'emit').mockImplementation(noop);
     render(<TurnHud />);
     fireEvent.click(screen.getByRole('button', { name: /pay fine/i }));
     expect(emit).toHaveBeenCalledWith(EVENTS.JAIL_PAY_FINE);
@@ -97,7 +98,7 @@ describe('TurnHud', () => {
 
   it('Use Card button emits JAIL_USE_CARD when player has cards', () => {
     setState({ phase: 'waiting', hasRolled: false }, { isJailed: true, jailTurns: 0, jailCardCount: 1 });
-    const emit = vi.spyOn(socketManager, 'emit').mockImplementation(() => {});
+    const emit = vi.spyOn(socketManager, 'emit').mockImplementation(noop);
     render(<TurnHud />);
     const useCard = screen.getByRole('button', { name: /use card/i });
     expect((useCard as HTMLButtonElement).disabled).toBe(false);

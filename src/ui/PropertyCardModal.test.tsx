@@ -4,11 +4,12 @@ import { PropertyCardModal } from './PropertyCardModal';
 import { useGameStore } from '../state/gameStore';
 import { BOARD_SPACES } from '../constants/board';
 import type { GameState } from '../types/GameState';
+import { requireDefined } from '../test-utils';
 
 // A regular property with a cardFrame (Old Kent Road, index 1)
-const prop = BOARD_SPACES.find((s) => s.type === 'property' && s.cardFrame != null)!;
+const prop = requireDefined(BOARD_SPACES.find((s) => s.type === 'property' && s.cardFrame != null));
 // A railroad (Kings Cross, index 5)
-const railroad = BOARD_SPACES.find((s) => s.type === 'railroad')!;
+const railroad = requireDefined(BOARD_SPACES.find((s) => s.type === 'railroad'));
 
 function setDeedCard(
   spaceIndex: number,

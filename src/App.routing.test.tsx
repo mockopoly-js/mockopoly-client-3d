@@ -7,6 +7,9 @@ import { SCREEN_TO_PATH } from './state/useScreenRouting';
 import { gameBus } from './state/gameBus';
 import { socketManager } from './network/SocketManager';
 import { EVENTS } from './types/SocketEvents';
+import type { GameState } from './types/GameState';
+import type { S_GameOver } from './types/SocketEvents';
+import { noop } from './test-utils';
 
 // Lazy-import of GameScene: mock at the module level so React.lazy resolves
 // synchronously in jsdom without spinning up a real WebGL canvas.
@@ -20,7 +23,7 @@ vi.mock('./screens/GameScene', () => ({
 // stub the R3F Canvas so jsdom doesn't try to init WebGL
 vi.mock('@react-three/fiber', () => ({
   Canvas: ({ children }: { children?: unknown }) => <div data-testid="canvas">{children as never}</div>,
-  useFrame: () => {},
+  useFrame: noop,
 }));
 vi.mock('./board/BoardTiles', () => ({ BoardTiles: () => null }));
 vi.mock('./board/PlayerTokens', () => ({ PlayerTokens: () => null }));
@@ -45,7 +48,7 @@ vi.mock('@react-three/drei', async (importOriginal) => {
 // so their glb fetches never run in jsdom.)
 vi.mock('./board/ModelMesh', () => {
   const ModelMesh = () => null;
-  ModelMesh.preload = () => {};
+  ModelMesh.preload = noop;
   return { ModelMesh };
 });
 vi.mock('@react-three/postprocessing', () => ({ EffectComposer: () => null, Bloom: () => null, ToneMapping: () => null }));
@@ -104,7 +107,7 @@ describe('App routing', () => {
 
   it('auto-opens the deal panel when I must pay rent', () => {
     useGameStore.getState().setMyPlayerId('p1');
-    useGameStore.getState().update({ roomCode: 'A', status: 'in-progress', players: [{ id: 'p1', name: 'M', token: 'red' }], turn: { currentPlayerId: 'p1', mustPayRent: true }, config: { maxPlayers: 4 }, properties: [] } as any);
+    useGameStore.getState().update({ roomCode: 'A', status: 'in-progress', players: [{ id: 'p1', name: 'M', token: 'red' }], turn: { currentPlayerId: 'p1', mustPayRent: true }, config: { maxPlayers: 4 }, properties: [] } as unknown as GameState);
     useGameStore.getState().setScreen('game');
     renderApp();
     expect(useGameStore.getState().showDealPanel).toBe(true);
@@ -112,7 +115,7 @@ describe('App routing', () => {
 
   it('renders GameOverScreen on the game-over screen', () => {
     seedRoomState(); // game-over is only reachable with live room state
-    useGameStore.getState().setGameOver({ winnerId: 'p1', finalStandings: [{ id: 'p1', name: 'Maya', token: 'red', money: 1, isBankrupt: false } as any] });
+    useGameStore.getState().setGameOver({ winnerId: 'p1', finalStandings: [{ id: 'p1', name: 'Maya', token: 'red', money: 1, isBankrupt: false }] } as unknown as S_GameOver);
     useGameStore.getState().setMyPlayerId('p1');
     useGameStore.getState().setScreen('game-over');
     renderApp();
@@ -121,7 +124,7 @@ describe('App routing', () => {
   });
 
   it('shows a big-moment banner on the game screen', () => {
-    useGameStore.getState().update({ roomCode: 'A', status: 'in-progress', players: [{ id: 'p1', name: 'Maya', token: 'red' }, { id: 'p2', name: 'Jonas', token: 'blue' }], turn: { currentPlayerId: 'p1' }, config: { maxPlayers: 4 }, properties: [] } as any);
+    useGameStore.getState().update({ roomCode: 'A', status: 'in-progress', players: [{ id: 'p1', name: 'Maya', token: 'red' }, { id: 'p2', name: 'Jonas', token: 'blue' }], turn: { currentPlayerId: 'p1' }, config: { maxPlayers: 4 }, properties: [] } as unknown as GameState);
     useGameStore.getState().setScreen('game');
     renderApp();
     act(() => { gameBus.emit('jail-sent', { playerId: 'p2' }); });
@@ -134,7 +137,7 @@ describe('App routing', () => {
 function seedRoomState() {
   const store = useGameStore.getState();
   store.setRoomCode('ABCD');
-  store.update({ roomCode: 'ABCD', status: 'lobby', players: [{ id: 'p1', name: 'M', token: 'red' }], turn: {}, config: { maxPlayers: 4 }, properties: [] } as any);
+  store.update({ roomCode: 'ABCD', status: 'lobby', players: [{ id: 'p1', name: 'M', token: 'red' }], turn: {}, config: { maxPlayers: 4 }, properties: [] } as unknown as GameState);
   store.setMyPlayerId('p1');
 }
 
@@ -144,7 +147,7 @@ function PathProbe() {
   currentPath = useLocation().pathname;
   return null;
 }
-let goBack: () => void = () => {};
+let goBack: () => void = noop;
 function BackProbe() {
   const nav = useNavigate();
   goBack = () => nav(-1);
@@ -156,7 +159,7 @@ describe('router ↔ screen sync', () => {
     useGameStore.getState().reset();
     vi.restoreAllMocks();
     currentPath = '';
-    goBack = () => {};
+    goBack = noop;
   });
 
   it('mirrors a screen change into the URL (setScreen("lobby") → /lobby)', async () => {
@@ -173,7 +176,7 @@ describe('router ↔ screen sync', () => {
   });
 
   it('leaves the room when browser Back goes from /lobby to / (popstate)', async () => {
-    const emitSpy = vi.spyOn(socketManager, 'emit').mockImplementation(() => {});
+    const emitSpy = vi.spyOn(socketManager, 'emit').mockImplementation(noop);
     seedRoomState();
     useGameStore.getState().setScreen('lobby');
     // History stack ['/', '/lobby'] at index 1 with the room live and screen
@@ -191,7 +194,7 @@ describe('router ↔ screen sync', () => {
       expect(useGameStore.getState().screen).toBe('menu');
       expect(useGameStore.getState().state).toBe(null);
     });
-    const leaveCalls = (emitSpy.mock.calls as any[]).filter((c: any[]) => c[0] === EVENTS.ROOM_LEAVE);
+    const leaveCalls = emitSpy.mock.calls.filter((c) => c[0] === EVENTS.ROOM_LEAVE);
     expect(leaveCalls.length).toBe(1);
   });
 

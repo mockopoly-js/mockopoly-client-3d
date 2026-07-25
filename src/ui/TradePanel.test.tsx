@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { noop, requireDefined } from '../test-utils';
 import { render, screen, fireEvent } from '@testing-library/react';
 import { TradePanel } from './TradePanel';
 import { useGameStore } from '../state/gameStore';
@@ -7,7 +8,7 @@ import { EVENTS } from '../types/SocketEvents';
 import { BOARD_SPACES } from '../constants/board';
 import type { GameState } from '../types/GameState';
 
-const mineProp = BOARD_SPACES.find((s) => s.type === 'property')!.index;
+const mineProp = requireDefined(BOARD_SPACES.find((s) => s.type === 'property')).index;
 const theirProp = BOARD_SPACES.filter((s) => s.type === 'property')[3].index;
 
 function base(activeTrade: unknown = null) {
@@ -37,7 +38,7 @@ describe('TradePanel', () => {
   it('proposal form emits TRADE_OFFER with selected items', () => {
     base();
     useGameStore.getState().toggleTradePanel(true);
-    const emit = vi.spyOn(socketManager, 'emit').mockImplementation(() => {});
+    const emit = vi.spyOn(socketManager, 'emit').mockImplementation(noop);
     render(<TradePanel />);
     // pick opponent Jonas
     fireEvent.click(screen.getByRole('button', { name: /jonas/i }));
@@ -53,7 +54,7 @@ describe('TradePanel', () => {
 
   it('incoming trade shows Accept and emits TRADE_ACCEPT', () => {
     base({ tradeId: 't1', fromPlayerId: 'p2', toPlayerId: 'p1', offeredProperties: [theirProp], requestedProperties: [], offeredMoney: 0, requestedMoney: 0, offeredJailCards: 0, requestedJailCards: 0, status: 'pending' });
-    const emit = vi.spyOn(socketManager, 'emit').mockImplementation(() => {});
+    const emit = vi.spyOn(socketManager, 'emit').mockImplementation(noop);
     render(<TradePanel />);
     fireEvent.click(screen.getByRole('button', { name: /^accept$/i }));
     expect(emit).toHaveBeenCalledWith(EVENTS.TRADE_ACCEPT, { tradeId: 't1' });
@@ -61,7 +62,7 @@ describe('TradePanel', () => {
 
   it('my outgoing trade shows Cancel and emits TRADE_CANCEL', () => {
     base({ tradeId: 't2', fromPlayerId: 'p1', toPlayerId: 'p2', offeredProperties: [], requestedProperties: [], offeredMoney: 0, requestedMoney: 0, offeredJailCards: 0, requestedJailCards: 0, status: 'pending' });
-    const emit = vi.spyOn(socketManager, 'emit').mockImplementation(() => {});
+    const emit = vi.spyOn(socketManager, 'emit').mockImplementation(noop);
     render(<TradePanel />);
     fireEvent.click(screen.getByRole('button', { name: /cancel/i }));
     expect(emit).toHaveBeenCalledWith(EVENTS.TRADE_CANCEL, { tradeId: 't2' });

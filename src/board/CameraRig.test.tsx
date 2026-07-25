@@ -35,24 +35,43 @@ interface FakeControls {
 let lastControls: FakeControls | null = null;
 let lastProps: Record<string, unknown> | null = null;
 
-vi.mock('@react-three/drei', () => ({
-  OrbitControls: forwardRef<FakeControls, Record<string, unknown>>((props, ref) => {
+// Assert-and-return accessors: they throw (failing the test loudly) if the
+// captured value was never populated, which is exactly what a bare `!` would do
+// at runtime — but without the forbidden non-null assertion and with a clearer
+// failure message.
+function props(): Record<string, unknown> {
+  if (!lastProps) throw new Error('OrbitControls props were never captured');
+  return lastProps;
+}
+function controls(): FakeControls {
+  if (!lastControls) throw new Error('OrbitControls instance was never captured');
+  return lastControls;
+}
+function frame(): (state?: unknown, delta?: number) => void {
+  if (!frameCallback) throw new Error('useFrame callback was never captured');
+  return frameCallback;
+}
+
+vi.mock('@react-three/drei', () => {
+  const FakeOrbitControls = forwardRef<FakeControls, Record<string, unknown>>((props, ref) => {
     lastProps = props;
     // Build the fake controls instance and expose it through the forwarded ref,
     // mirroring drei: the ref receives the controls object, not a DOM element.
     // Start mouseButtons at sentinel values to prove CameraRig sets them on mount.
     useImperativeHandle(ref, (): FakeControls => {
-      const controls: FakeControls = {
+      const c: FakeControls = {
         target: new THREE.Vector3(0, 0, 0),
         mouseButtons: { LEFT: -1, MIDDLE: -1, RIGHT: -1 },
         update: vi.fn(),
       };
-      lastControls = controls;
-      return controls;
+      lastControls = c;
+      return c;
     }, []);
     return null;
-  }),
-}));
+  });
+  FakeOrbitControls.displayName = 'FakeOrbitControls';
+  return { OrbitControls: FakeOrbitControls };
+});
 
 // Minimal store fixture: one player whose turn it is, sitting on a known tile.
 // Only the fields CameraRig reads (id, position, turn.currentPlayerId) matter;
@@ -81,41 +100,41 @@ describe('CameraRig', () => {
     render(<CameraRig />);
     expect(lastProps).toBeTruthy();
     // Pan enabled + screen-space panning (Blender shift-pan feel).
-    expect(lastProps!.enablePan).toBe(true);
-    expect(lastProps!.screenSpacePanning).toBe(true);
-    expect(lastProps!.enableDamping).toBe(true);
+    expect(props().enablePan).toBe(true);
+    expect(props().screenSpacePanning).toBe(true);
+    expect(props().enableDamping).toBe(true);
     // Relaxed zoom clamps — close to a token, far over the whole diorama.
-    expect(lastProps!.minDistance as number).toBeLessThanOrEqual(3);
-    expect(lastProps!.maxDistance as number).toBeGreaterThanOrEqual(60);
+    expect(props().minDistance as number).toBeLessThanOrEqual(3);
+    expect(props().maxDistance as number).toBeGreaterThanOrEqual(60);
     // Relaxed orbit clamps — near top-down to near-horizon, never under the floor.
-    expect(lastProps!.minPolarAngle as number).toBeLessThanOrEqual(0.1);
-    const maxPolar = lastProps!.maxPolarAngle as number;
+    expect(props().minPolarAngle as number).toBeLessThanOrEqual(0.1);
+    const maxPolar = props().maxPolarAngle as number;
     expect(maxPolar).toBeGreaterThan(1.4);
     expect(maxPolar).toBeLessThan(Math.PI / 2); // stays above the horizon
   });
 
   it('sets default mouse buttons: LEFT=ROTATE, RIGHT=disabled, MIDDLE=disabled', () => {
     render(<CameraRig />);
-    expect(lastControls!.mouseButtons.LEFT).toBe(THREE.MOUSE.ROTATE);
-    expect(lastControls!.mouseButtons.RIGHT).toBe(undefined);
-    expect(lastControls!.mouseButtons.MIDDLE).toBe(undefined);
+    expect(controls().mouseButtons.LEFT).toBe(THREE.MOUSE.ROTATE);
+    expect(controls().mouseButtons.RIGHT).toBe(undefined);
+    expect(controls().mouseButtons.MIDDLE).toBe(undefined);
   });
 
   it('swaps LEFT mouse button to PAN while Shift is held, back to ROTATE on release', () => {
     render(<CameraRig />);
-    expect(lastControls!.mouseButtons.LEFT).toBe(THREE.MOUSE.ROTATE);
+    expect(controls().mouseButtons.LEFT).toBe(THREE.MOUSE.ROTATE);
 
     act(() => { window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Shift' })); });
-    expect(lastControls!.mouseButtons.LEFT).toBe(THREE.MOUSE.PAN);
+    expect(controls().mouseButtons.LEFT).toBe(THREE.MOUSE.PAN);
 
     act(() => { window.dispatchEvent(new KeyboardEvent('keyup', { key: 'Shift' })); });
-    expect(lastControls!.mouseButtons.LEFT).toBe(THREE.MOUSE.ROTATE);
+    expect(controls().mouseButtons.LEFT).toBe(THREE.MOUSE.ROTATE);
   });
 
   it('ignores non-Shift keys for the LEFT button swap', () => {
     render(<CameraRig />);
     act(() => { window.dispatchEvent(new KeyboardEvent('keydown', { key: 'a' })); });
-    expect(lastControls!.mouseButtons.LEFT).toBe(THREE.MOUSE.ROTATE);
+    expect(controls().mouseButtons.LEFT).toBe(THREE.MOUSE.ROTATE);
   });
 
   it('removes the Shift key listeners on unmount', () => {
@@ -124,7 +143,7 @@ describe('CameraRig', () => {
     // With listeners gone, dispatching Shift must NOT mutate the (still-referenced)
     // controls instance.
     act(() => { window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Shift' })); });
-    expect(lastControls!.mouseButtons.LEFT).toBe(THREE.MOUSE.ROTATE);
+    expect(controls().mouseButtons.LEFT).toBe(THREE.MOUSE.ROTATE);
   });
 
   it('snaps the OrbitControls target to INITIAL_CAM_TARGET (fixed world point) on initial mount', () => {
@@ -133,9 +152,9 @@ describe('CameraRig', () => {
     render(<CameraRig />);
 
     // Target must equal INITIAL_CAM_TARGET exactly — NOT a player tile position.
-    expect(lastControls!.target.x).toBeCloseTo(INITIAL_CAM_TARGET[0], 4);
-    expect(lastControls!.target.y).toBeCloseTo(INITIAL_CAM_TARGET[1], 4);
-    expect(lastControls!.target.z).toBeCloseTo(INITIAL_CAM_TARGET[2], 4);
+    expect(controls().target.x).toBeCloseTo(INITIAL_CAM_TARGET[0], 4);
+    expect(controls().target.y).toBeCloseTo(INITIAL_CAM_TARGET[1], 4);
+    expect(controls().target.z).toBeCloseTo(INITIAL_CAM_TARGET[2], 4);
   });
 
   it('snaps the camera position to INITIAL_CAM_TARGET + INITIAL_CAM_OFFSET on initial mount', () => {
@@ -153,16 +172,16 @@ describe('CameraRig', () => {
     render(<CameraRig />);
     expect(frameCallback).toBeTruthy();
 
-    const targetBefore = lastControls!.target.clone();
-    lastControls!.update.mockClear();
+    const targetBefore = controls().target.clone();
+    controls().update.mockClear();
 
     // Change the active player's position — this must NOT move the camera target.
     act(() => { useGameStore.getState().update(fakeState(10)); });
-    act(() => { frameCallback!(); });
+    act(() => { frame()(); });
 
     // Target must remain exactly where it snapped — no drift allowed.
-    expect(lastControls!.target.distanceTo(targetBefore)).toBe(0);
+    expect(controls().target.distanceTo(targetBefore)).toBe(0);
     // update() must NOT have been called from auto-focus logic in useFrame.
-    expect(lastControls!.update).not.toHaveBeenCalled();
+    expect(controls().update).not.toHaveBeenCalled();
   });
 });

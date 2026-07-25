@@ -20,7 +20,7 @@ import type {
   S_PartnershipDissolved, S_PartnershipRentSplit, S_PartnershipBuildCostSplit,
   S_DealOffered, S_DealCountered, S_DealAccepted,
   S_DealRejected, S_DealCompleted, S_DealCancelled,
-  S_TradeOffered, S_TradeCountered, S_TradeResolved,
+  S_TradeOffered,
 } from '../types/SocketEvents';
 
 // ─── Game State Sync ─────────────────────────────────────────────────────────
@@ -249,19 +249,19 @@ class GameStateSync {
       const to = store().state?.players.find(p => p.id === data.offer.toPlayerId);
       store().addToast(`Trade offered${from ? ` by ${from.name}` : ''}${to ? ` to ${to.name}` : ''}`, 'info');
     });
-    socketManager.on(EVENTS.TRADE_COUNTERED, (_data: S_TradeCountered) => {
+    socketManager.on(EVENTS.TRADE_COUNTERED, () => {
       store().addToast('Trade countered', 'warning');
     });
-    socketManager.on(EVENTS.TRADE_ACCEPTED, (_data: S_TradeResolved) => {
+    socketManager.on(EVENTS.TRADE_ACCEPTED, () => {
       store().addToast('Trade accepted', 'success');
     });
-    socketManager.on(EVENTS.TRADE_REJECTED, (_data: S_TradeResolved) => {
+    socketManager.on(EVENTS.TRADE_REJECTED, () => {
       store().addToast('Trade rejected', 'warning');
     });
-    socketManager.on(EVENTS.TRADE_COMPLETED, (_data: S_TradeResolved) => {
+    socketManager.on(EVENTS.TRADE_COMPLETED, () => {
       store().addToast('Trade completed', 'success');
     });
-    socketManager.on(EVENTS.TRADE_CANCELLED, (_data: S_TradeResolved) => {
+    socketManager.on(EVENTS.TRADE_CANCELLED, () => {
       store().addToast('Trade cancelled', 'info');
     });
 
@@ -283,8 +283,11 @@ class GameStateSync {
     try {
       const saved = localStorage.getItem('mockopoly-dev-hacks');
       if (!saved) return;
-      const hacks: DevHacks = JSON.parse(saved);
-      for (const [key, enabled] of Object.entries(hacks)) {
+      // JSON.parse is `any`; treat the persisted blob as an untrusted record and
+      // narrow before iterating (guards against corrupt/legacy localStorage).
+      const hacks: unknown = JSON.parse(saved);
+      if (typeof hacks !== 'object' || hacks === null) return;
+      for (const [key, enabled] of Object.entries(hacks as Record<string, unknown>)) {
         if (enabled) {
           socketManager.emit(EVENTS.DEV_SET_HACK, { hack: key, enabled: true });
         }

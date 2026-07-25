@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { noop } from '../test-utils';
 import { render, screen, fireEvent } from '@testing-library/react';
 import { DevHacksPanel } from './DevHacksPanel';
 import { useGameStore } from '../state/gameStore';
@@ -26,7 +27,7 @@ describe('DevHacksPanel', () => {
   it('shows six toggles when open and emits DEV_SET_HACK on toggle', () => {
     setDevHacks({});
     useGameStore.getState().toggleDevHacks(true);
-    const emit = vi.spyOn(socketManager, 'emit').mockImplementation(() => {});
+    const emit = vi.spyOn(socketManager, 'emit').mockImplementation(noop);
     render(<DevHacksPanel />);
     expect(screen.getAllByRole('checkbox')).toHaveLength(6);
     fireEvent.click(screen.getByLabelText(/1-player game start/i)); // soloPlay

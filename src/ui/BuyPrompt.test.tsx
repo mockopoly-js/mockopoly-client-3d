@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { noop, requireDefined } from '../test-utils';
 import { render, screen, fireEvent } from '@testing-library/react';
 import { BuyPrompt } from './BuyPrompt';
 import { useGameStore } from '../state/gameStore';
@@ -8,7 +9,7 @@ import { BOARD_SPACES } from '../constants/board';
 import type { GameState } from '../types/GameState';
 
 // pick a real unowned buyable space (property with a price)
-const prop = BOARD_SPACES.find((s) => s.type === 'property' && (s.price ?? 0) > 0)!;
+const prop = requireDefined(BOARD_SPACES.find((s) => s.type === 'property' && (s.price ?? 0) > 0));
 
 function land(phase: string, money: number, ownerId: string | null = null) {
   useGameStore.getState().update({
@@ -32,7 +33,7 @@ describe('BuyPrompt', () => {
 
   it('shows the deed and emits TURN_BUY_PROPERTY when affordable', () => {
     land('action', 15_000_000);
-    const emit = vi.spyOn(socketManager, 'emit').mockImplementation(() => {});
+    const emit = vi.spyOn(socketManager, 'emit').mockImplementation(noop);
     render(<BuyPrompt />);
     expect(screen.getByText(prop.name)).toBeTruthy();
     // Deed sprite renders (front face) from the space's cardFrame.
@@ -45,7 +46,7 @@ describe('BuyPrompt', () => {
 
   it('emits TURN_END on decline', () => {
     land('action', 15_000_000);
-    const emit = vi.spyOn(socketManager, 'emit').mockImplementation(() => {});
+    const emit = vi.spyOn(socketManager, 'emit').mockImplementation(noop);
     render(<BuyPrompt />);
     fireEvent.click(screen.getByRole('button', { name: /decline/i }));
     expect(emit).toHaveBeenCalledWith(EVENTS.TURN_END);

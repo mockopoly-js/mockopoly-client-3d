@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { noop } from '../test-utils';
 import { render, screen, fireEvent, act } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { MainMenu } from './MainMenu';
@@ -43,7 +44,7 @@ describe('MainMenu', () => {
   });
 
   it('emits ROOM_CREATE with name + token + character on create', () => {
-    const emit = vi.spyOn(socketManager, 'emit').mockImplementation(() => {});
+    const emit = vi.spyOn(socketManager, 'emit').mockImplementation(noop);
     renderMenu();
     fireEvent.change(screen.getByPlaceholderText(/your name/i), { target: { value: 'Maya' } });
     fireEvent.click(screen.getByRole('button', { name: /create room/i }));
