@@ -51,12 +51,12 @@ import { BOARD_WORLD_SIZE } from './positions';
  * target by that ratio too. Result: groupScale (= SURROUND_SIZE / shorterAxis)
  * stays IDENTICAL, so the central clearing — and thus the board's relative size —
  * is preserved, and the newly-kept mountains simply ring the terrain edge.
- * 4.6× board = 46 world units at the base ±8000 crop; ×(14000/8000) → 80.5.
+ * 4.6× board = 46 world units at the base ±8000 crop; ×(16000/8000) → 92.
  */
-const FOREST_CROP_HALF = 14000;      // MUST match CROP_HALF in scripts/gen-forest.mjs
+const FOREST_CROP_HALF = 16000;      // MUST match CROP_HALF in scripts/gen-forest.mjs
 const FOREST_CROP_HALF_BASE = 8000;  // crop the 4.6× fit was originally tuned against
 const SURROUND_SIZE =
-  BOARD_WORLD_SIZE * 4.6 * (FOREST_CROP_HALF / FOREST_CROP_HALF_BASE); // 46 → 80.5 world units
+  BOARD_WORLD_SIZE * 4.6 * (FOREST_CROP_HALF / FOREST_CROP_HALF_BASE); // 46 → 92 world units
 
 const FOREST_SCALE = 1.0;   // multiplier on the auto-fit surround
 const FOREST_Y = -0.48;     // board bottom (TOP_Y − DEPTH); clearing surface meets it here
