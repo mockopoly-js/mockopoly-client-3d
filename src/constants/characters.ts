@@ -179,5 +179,8 @@ export const DEFAULT_CHARACTER = 'Suit_Male';
  * falling back to the default. Handy for CT3 token rendering.
  */
 export function resolveCharacter(id: string | null | undefined): CharacterDef {
-  return (id && CHARACTER_BY_ID[id]) || CHARACTER_BY_ID[DEFAULT_CHARACTER];
+  // CHARACTER_BY_ID is typed as a total Record, but an unknown id (the reason
+  // this resolver exists) yields undefined at runtime — hence the real fallback.
+  const found = id != null ? CHARACTER_BY_ID[id] : undefined;
+  return found ?? CHARACTER_BY_ID[DEFAULT_CHARACTER];
 }

@@ -23,12 +23,14 @@ export function BigMomentOverlay() {
   useGameBusEvent('free-parking-collected', (d: { playerId: string; amount: number }) =>
     show(`${name(d.playerId)} scooped ${formatMoney(d.amount)} from Free Parking!`, 'parking'));
 
-  // auto-dismiss whenever a new moment arrives
+  // auto-dismiss whenever a new moment arrives. `moment` is only ever replaced
+  // with a fresh object carrying an incremented id, so depending on the whole
+  // `moment` re-arms the timer exactly once per moment (same as keying on id).
   useEffect(() => {
     if (!moment) return;
     const t = setTimeout(() => setMoment(null), 2600);
     return () => clearTimeout(t);
-  }, [moment?.id]);
+  }, [moment]);
 
   if (!moment) return null;
   return (

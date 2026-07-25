@@ -38,7 +38,9 @@ export function MainMenu() {
       // (the creator when alone; the joiner is appended last) — mirrors the 2D client.
       // NOTE: does not self-identify on a reconnect that re-attaches an existing (non-last)
       // player slot; refine when reconnect UX lands.
-      const me = state.players[state.players.length - 1];
+      // .at(-1) is Player | undefined — an empty players array is a real runtime
+      // possibility, so the guard below is live.
+      const me = state.players.at(-1);
       if (me) {
         store.setMyPlayerId(me.id);
         store.setReconnectToken(me.reconnectToken);

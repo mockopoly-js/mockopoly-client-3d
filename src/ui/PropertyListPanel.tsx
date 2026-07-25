@@ -26,7 +26,9 @@ export function PropertyListPanel() {
   const rows = properties.filter((p) => {
     if (p.ownerId === myId) return true;
     if (p.ownerId == null) return false;
-    const space = BOARD_SPACES[p.spaceIndex];
+    // .at() is BoardSpace | undefined — an out-of-range server spaceIndex is a
+    // real (if invariant-protected) runtime possibility, so the guards are live.
+    const space = BOARD_SPACES.at(p.spaceIndex);
     return !!space?.colorGroup && myPartnerGroups.has(space.colorGroup);
   });
 
@@ -48,7 +50,7 @@ export function PropertyListPanel() {
               <button style={closeBtn} onClick={() => setOpen(false)} aria-label="Close properties"><X size={16} aria-hidden /></button>
             </div>
             {rows.map((p) => {
-              const space = BOARD_SPACES[p.spaceIndex];
+              const space = BOARD_SPACES.at(p.spaceIndex);
               const badges = [
                 p.hasHotel ? 'Hotel' : p.houses > 0 ? `${p.houses}h` : null,
                 p.isMortgaged ? '[M]' : null,
@@ -72,7 +74,7 @@ export function PropertyListPanel() {
     <div style={wrap}>
       <div style={hdr}>Your properties</div>
       {rows.map((p) => {
-        const space = BOARD_SPACES[p.spaceIndex];
+        const space = BOARD_SPACES.at(p.spaceIndex);
         const badges = [
           p.hasHotel ? 'Hotel' : p.houses > 0 ? `${p.houses}h` : null,
           p.isMortgaged ? '[M]' : null,

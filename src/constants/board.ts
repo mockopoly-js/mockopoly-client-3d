@@ -68,11 +68,10 @@ export const PURCHASABLE_SPACES = BOARD_SPACES
 
 // Space indices grouped by color
 export const COLOR_GROUPS: Record<string, number[]> = BOARD_SPACES
-  .filter(s => s.colorGroup)
   .reduce<Record<string, number[]>>((acc, s) => {
-    const g = s.colorGroup!;
-    if (!acc[g]) acc[g] = [];
-    acc[g].push(s.index);
+    const g = s.colorGroup;
+    if (!g) return acc; // narrows colorGroup and skips non-grouped spaces
+    (acc[g] ??= []).push(s.index);
     return acc;
   }, {});
 

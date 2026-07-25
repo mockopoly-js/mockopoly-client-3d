@@ -20,7 +20,9 @@ export function BuyPrompt() {
 
   if (!me || !isMyTurn || phase !== 'action') return null;
 
-  const space = BOARD_SPACES[me.position];
+  // .at() is BoardSpace | undefined — a position outside 0..39 is a real runtime
+  // possibility, so the guard below is live (and narrows space to non-null).
+  const space = BOARD_SPACES.at(me.position);
   if (!space || !BUYABLE.includes(space.type)) return null;
   const owned = properties?.find((p) => p.spaceIndex === space.index);
   if (owned?.ownerId != null) return null;   // show unless a real owner exists (dense array today; robust if ever sparse)

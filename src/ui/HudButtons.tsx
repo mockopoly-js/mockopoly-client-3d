@@ -13,7 +13,7 @@ export function HudButtons() {
   const activeTrade = useGameStore((s) => s.state?.activeTrade);
   const proposal = useGameStore((s) => s.state?.activePartnershipProposal);
   const activeRentDeal = useGameStore((s) => s.state?.activeRentDeal);
-  const mustPayRent = useGameStore((s) => s.state?.turn?.mustPayRent ?? false);
+  const mustPayRent = useGameStore((s) => s.state?.turn.mustPayRent ?? false);
   const isMobile = useIsMobile();
 
   // Badge derivations (all guarded — only show dot if data is present)

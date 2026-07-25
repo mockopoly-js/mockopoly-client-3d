@@ -29,7 +29,7 @@ export function TradePanel() {
   const [requestMoney, setRequestMoney] = useState(0);
   const [countering, setCountering] = useState(false);
 
-  const incoming = activeTrade && activeTrade.toPlayerId === myId;
+  const incoming = activeTrade?.toPlayerId === myId;
   // Only auto-open for the two involved parties, not spectators
   const isParty = activeTrade && (activeTrade.fromPlayerId === myId || activeTrade.toPlayerId === myId);
   const isOpen = open || !!isParty;
@@ -99,7 +99,11 @@ export function TradePanel() {
   }
 
   // ── proposal / counter form ──
-  const targetId = countering ? activeTrade!.fromPlayerId : opp;
+  // `countering` is only set true from startCounter (which requires a live
+  // activeTrade), but the trade can be cleared by the server between renders —
+  // optional-chain rather than assert, degrading to no target (empty list below)
+  // instead of throwing.
+  const targetId = countering ? activeTrade?.fromPlayerId : opp;
   const myProps = tradeable(properties, myId);
   const theirProps = targetId ? tradeable(properties, targetId) : [];
 

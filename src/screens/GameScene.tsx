@@ -62,12 +62,14 @@ function HdriSky() {
     tex.colorSpace = THREE.SRGBColorSpace;
     scene.environment = tex;
     scene.environmentIntensity = ENV_INTENSITY;
+    // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- SHOW_HDRI_BACKGROUND is a documented build-time toggle (see header); keep the branch so it can be flipped without edits
     if (SHOW_HDRI_BACKGROUND) {
       scene.background = tex;
       scene.backgroundIntensity = BG_INTENSITY;
     }
     return () => {
       scene.environment = null;
+      // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- SHOW_HDRI_BACKGROUND is a documented build-time toggle (see header)
       if (SHOW_HDRI_BACKGROUND) scene.background = null;
     };
   }, [tex, scene]);
@@ -92,6 +94,7 @@ export function GameScene() {
         background. When SHOW_HDRI_BACKGROUND is true the Environment paints the
         scene background with the equirect sky instead.
       */}
+      {/* eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- SHOW_HDRI_BACKGROUND is a documented build-time toggle (see header) */}
       {!SHOW_HDRI_BACKGROUND && <color attach="background" args={['#cbe8f5']} />}
       {/* Soft shadow injection (must be early in the scene, no assets). */}
       <SoftShadows size={12} samples={16} />

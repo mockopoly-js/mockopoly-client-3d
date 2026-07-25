@@ -33,7 +33,9 @@ export function PropertyCardModal() {
 
   if (deedCardIndex === null) return null;
 
-  const space = BOARD_SPACES[deedCardIndex];
+  // .at() is BoardSpace | undefined — an out-of-range index is a real runtime
+  // possibility, so the guard below is live (and narrows space to non-null).
+  const space = BOARD_SPACES.at(deedCardIndex);
   if (!space) return null;
 
   const propState = properties?.find((p) => p.spaceIndex === deedCardIndex);
@@ -92,6 +94,7 @@ export function PropertyCardModal() {
                 width: 12,
                 height: 12,
                 borderRadius: '50%',
+                // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- TOKEN_HEX is a total Record over TokenType, but an out-of-contract token yields undefined at runtime
                 background: TOKEN_HEX[owner.token] ?? '#888',
                 flexShrink: 0,
               }}

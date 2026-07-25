@@ -22,7 +22,9 @@ export function MortgagePanel() {
   const isMobile = useIsMobile();
 
   if (idx == null) return null;
-  const space = BOARD_SPACES[idx];
+  // .at() is BoardSpace | undefined — an out-of-range idx is a real runtime
+  // possibility, so the guard below is live (and narrows space to non-null).
+  const space = BOARD_SPACES.at(idx);
   const prop = properties?.find((p) => p.spaceIndex === idx);
   const me = players?.find((p) => p.id === myId);
   if (!space || !prop) return null;
@@ -62,7 +64,7 @@ export function MortgagePanel() {
     groupMemberIndices.length > 0 &&
     groupMemberIndices.every((gi) => {
       const gp = properties?.find((p) => p.spaceIndex === gi);
-      return gp != null && gp.ownerId === myId && !gp.isMortgaged;
+      return gp?.ownerId === myId && !gp.isMortgaged;
     })
   );
 

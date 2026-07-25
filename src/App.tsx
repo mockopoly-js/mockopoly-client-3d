@@ -63,7 +63,7 @@ export default function App() {
   useSfx();
   const mustPay = useGameStore(
     (s) =>
-      !!(s.state?.turn?.mustPayRent && s.state?.turn?.currentPlayerId === s.myPlayerId),
+      !!(s.state?.turn.mustPayRent && s.state.turn.currentPlayerId === s.myPlayerId),
   );
   const [connected, setConnected] = useState(false);
   const [playerId, setPlayerId] = useState<string | null>(null);
