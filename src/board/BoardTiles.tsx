@@ -81,7 +81,7 @@ const BOARD_SATURATION = 1.15;
  * relief ever looks too flat, nudging roughness DOWN slightly increases the
  * specular contrast that makes the normals visible.
  */
-const BOARD_NORMAL_STRENGTH = 0.6; // range ~0.2..1.5
+const BOARD_NORMAL_STRENGTH = 1.5; // range ~0.2..1.5
 const BOARD_NORMAL_Y_SIGN = 1; // set to -1 if relief looks inverted
 
 export function BoardTiles() {
