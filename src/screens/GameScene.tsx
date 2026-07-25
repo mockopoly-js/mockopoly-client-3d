@@ -164,6 +164,65 @@ function HdriSky() {
   return null;
 }
 
+/**
+ * DEV-only culling audit component.
+ * Press "c" in dev mode to log material side counts and expose scene/gl to window.
+ * Renders null; passive keydown listener only.
+ */
+function CullingAudit() {
+  const { scene, gl } = useThree();
+
+  useEffect(() => {
+    if (!import.meta.env.DEV) return;
+
+    const onKeyDown = (e: KeyboardEvent): void => {
+      if (e.key !== 'c' && e.key !== 'C') return;
+
+      const counts = { Front: 0, Double: 0, Back: 0 };
+      let meshes = 0;
+
+      scene.traverse((obj) => {
+        const mesh = obj as THREE.Mesh;
+        const mat = mesh.material;
+        // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- defensive check for malformed geometry
+        if (!mat) return;
+
+        meshes += 1;
+        (Array.isArray(mat) ? mat : [mat]).forEach((material) => {
+          const side = material.side;
+          if (side === THREE.FrontSide) {
+            counts.Front += 1;
+          } else if (side === THREE.BackSide) {
+            counts.Back += 1;
+          } else {
+            counts.Double += 1;
+          }
+        });
+      });
+
+      console.log(
+        '[culling audit] materials — FrontSide (backface culling ON):',
+        counts.Front,
+        '| DoubleSide (culling OFF):',
+        counts.Double,
+        '| BackSide:',
+        counts.Back,
+        '| meshes:',
+        meshes
+      );
+      console.log('[render info]', JSON.parse(JSON.stringify(gl.info.render)));
+      (window as unknown as { __scene?: unknown }).__scene = scene;
+      (window as unknown as { __gl?: unknown }).__gl = gl;
+      console.log('exposed window.__scene and window.__gl');
+    };
+
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [scene, gl]);
+
+  return null;
+}
+
 export function GameScene() {
   // Container for the drei Stats panel — positioned below CameraDebugOverlay
   // (which sits at top:56) so the two don't overlap.
@@ -204,6 +263,8 @@ export function GameScene() {
       {!SHOW_HDRI_BACKGROUND && <color attach="background" args={['#cbe8f5']} />}
       {/* Soft shadow injection (must be early in the scene, no assets). */}
       <SoftShadows size={12} samples={8} />
+      {/* DEV-only culling audit — press "c" to log material side counts. */}
+      <CullingAudit />
       {/* Sky/ground hemisphere fill — tints unlit sides; trimmed 0.35 → 0.25 so
           AO + the rig shape the scene instead of a flat wash. */}
       <hemisphereLight args={['#cbe8f5', '#8a9a5b', HEMI_INTENSITY]} />
