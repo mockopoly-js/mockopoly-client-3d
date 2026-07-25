@@ -58,8 +58,31 @@ const EDGE_COLOR = '#c9a06a';
  */
 const BOARD_SATURATION = 1.15;
 
+/**
+ * Fake-3D relief for the printed board via a NORMAL MAP (board-normal.webp,
+ * baked offline by scripts/gen-board-normal.mjs from the board art). No geometry
+ * change — the flat top face gets per-pixel surface normals so grid lines, tile
+ * text, icons, the GO arrow, and colour strips catch the scene's directional +
+ * point lighting as engraved grooves.
+ *
+ * TUNING KNOBS:
+ *   BOARD_NORMAL_STRENGTH – overall relief depth (normalScale). ~0.2 subtle,
+ *                           ~1.5 heavy. 0.6 = a tasteful embossed print.
+ *   BOARD_NORMAL_Y_SIGN   – flip if the relief looks INVERTED (grooves bulge
+ *                           OUT instead of sinking IN, or vice-versa). The baked
+ *                           map is OpenGL green-up; some lighting reads better
+ *                           with the green channel inverted. Flip 1 -> -1.
+ *
+ * The relief only shows under lighting + non-mirror roughness. The top material
+ * keeps roughness 0.7 (matte paper) which reveals the grooves well; if the
+ * relief ever looks too flat, nudging roughness DOWN slightly increases the
+ * specular contrast that makes the normals visible.
+ */
+const BOARD_NORMAL_STRENGTH = 0.6; // range ~0.2..1.5
+const BOARD_NORMAL_Y_SIGN = 1; // set to -1 if relief looks inverted
+
 export function BoardTiles() {
-  const texture = useTexture('/images/board.webp');
+  const [texture, normalTex] = useTexture(['/images/board.webp', '/images/board-normal.webp']);
   const maxAniso = useThree((s) => s.gl.capabilities.getMaxAnisotropy());
 
   useMemo(() => {
@@ -77,14 +100,42 @@ export function BoardTiles() {
     texture.wrapS = THREE.ClampToEdgeWrapping;
     texture.wrapT = THREE.ClampToEdgeWrapping;
     texture.needsUpdate = true;
+
+    // Normal map: LINEAR data (NOT colour) and MUST share the albedo's exact UV
+    // transform so the relief lands pixel-for-pixel on the print. Mirror every
+    // sampling parameter the albedo uses above.
+    normalTex.colorSpace = THREE.NoColorSpace;
+    normalTex.anisotropy = maxAniso;
+    normalTex.flipY = TEX_FLIP_Y;
+    normalTex.center.set(0.5, 0.5);
+    normalTex.rotation = TEX_ROTATION;
+    // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- mirrors the albedo's TEX_FLIP_X tuning branch so the normal map stays aligned when it is toggled
+    normalTex.repeat.set(TEX_FLIP_X ? -1 : 1, 1);
+    normalTex.wrapS = THREE.ClampToEdgeWrapping;
+    normalTex.wrapT = THREE.ClampToEdgeWrapping;
+    normalTex.generateMipmaps = true;
+    normalTex.minFilter = THREE.LinearMipmapLinearFilter;
+    normalTex.magFilter = THREE.LinearFilter;
+    normalTex.needsUpdate = true;
     return texture;
-  }, [texture, maxAniso]);
+  }, [texture, normalTex, maxAniso]);
 
   // 6-material array; BoxGeometry face order = [px, nx, py, ny, pz, nz].
   // Index 2 (py = top) gets the board artwork; the rest get the edge color.
   const materials = useMemo(() => {
     const edge = new THREE.MeshStandardMaterial({ color: EDGE_COLOR, roughness: 0.85 });
     const top = new THREE.MeshStandardMaterial({ map: texture, roughness: 0.7 });
+
+    // Fake-3D relief: engraved grooves along the print. normalScale.y carries
+    // BOARD_NORMAL_Y_SIGN so the OpenGL green-up map can be flipped in one place
+    // if the relief reads inverted. This is an independent standard-material
+    // feature and does NOT interfere with the onBeforeCompile saturation inject.
+    top.normalMap = normalTex;
+    top.normalScale = new THREE.Vector2(
+      BOARD_NORMAL_STRENGTH,
+      BOARD_NORMAL_STRENGTH * BOARD_NORMAL_Y_SIGN,
+    );
+    top.needsUpdate = true;
 
     // Inject a saturation boost into the TOP face shader only — applied AFTER
     // tonemapping_fragment, operating directly on gl_FragColor.rgb so that
@@ -112,7 +163,7 @@ export function BoardTiles() {
     };
 
     return [edge, edge, top, edge, edge, edge];
-  }, [texture]);
+  }, [texture, normalTex]);
 
   return (
     <group>

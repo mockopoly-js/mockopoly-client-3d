@@ -26,6 +26,7 @@
     "models:city": "node scripts/gen-city.mjs",
     "models:characters": "node scripts/gen-characters.mjs",
     "models:thumbnails": "node scripts/gen-character-thumbnails.mjs",
+    "models:board-normal": "node scripts/gen-board-normal.mjs",
     "models:build": "npm run models:tokens && npm run models:buildings && npm run models:city-props && npm run models:forest && npm run models:city"
   },
   "keywords": [],
