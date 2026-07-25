@@ -56,7 +56,7 @@ import { useGLTF } from '@react-three/drei';
 const CITY_FILL_HALF = 3.55;  // target half-extent on X and Z axes (safely inside ±3.66 tile edge)
 const CITY_PAN_X = 0;         // world-X fine-tune (post-scale); 0 = bbox-centered on origin
 const CITY_PAN_Z = 0;         // world-Z fine-tune (post-scale); 0 = bbox-centered on origin
-const CITY_Y = 0.12;          // must exceed TOP_Y + BOARD_DISPLACEMENT_SCALE (BoardTiles): 0.12 > 0.02 + 0.07 = 0.09, so the raised displaced board plane doesn't occlude the city base (less float step at the city perimeter than the old 0.20)
+const CITY_Y = 0.22;          // must exceed TOP_Y + BOARD_DISPLACEMENT_SCALE (BoardTiles): 0.22 > 0.02 + 0.15 = 0.17, so the raised displaced board plane doesn't occlude the city base
 const CITY_ROT = 0;           // radians; nudge to aim streets toward the camera
 
 const CITY_URL = '/models/city.glb';
