@@ -1,4 +1,4 @@
-import { Suspense, useEffect } from 'react';
+import { Suspense, useEffect, useRef } from 'react';
 import * as THREE from 'three';
 import { Canvas, useThree } from '@react-three/fiber';
 import {
@@ -8,7 +8,7 @@ import {
   HueSaturation,
   BrightnessContrast,
 } from '@react-three/postprocessing';
-import { SoftShadows, useTexture } from '@react-three/drei';
+import { SoftShadows, Stats, useTexture } from '@react-three/drei';
 import { BoardTiles } from '../board/BoardTiles';
 import { PlayerTokens } from '../board/PlayerTokens';
 import { Buildings } from '../board/Buildings';
@@ -110,7 +110,25 @@ function HdriSky() {
 }
 
 export function GameScene() {
+  // Container for the drei Stats panel — positioned below CameraDebugOverlay
+  // (which sits at top:56) so the two don't overlap.
+  const statsParentRef = useRef<HTMLDivElement>(null);
+
   return (
+    <>
+    {/* Fixed container that hosts the stats.js DOM panel. Must be a sibling of
+        Canvas (not a child) so it sits in normal DOM flow outside the WebGL layer.
+        top:104px places it below the CameraDebugOverlay (top:56 + ~4 lines ≈ 96px). */}
+    <div
+      ref={statsParentRef}
+      style={{
+        position: 'fixed',
+        top: 104,
+        left: 8,
+        zIndex: 60,
+        pointerEvents: 'none',
+      }}
+    />
     <Canvas
       style={{ position: 'fixed', inset: 0 }}
       // Reverted to original nice framing. Board content is rotated via BOARD_ROTATION
@@ -197,6 +215,11 @@ export function GameScene() {
         {/* Brightness/contrast trim (both 0 = unchanged); slight contrast punch. */}
         <BrightnessContrast brightness={BRIGHTNESS} contrast={CONTRAST} />
       </EffectComposer>
+      {/* FPS counter — always-on dev/perf readout. Mounted into statsParentRef
+          (the fixed div sibling above) so it appears below the CameraDebugOverlay
+          at top:104px left:8px rather than defaulting to the top-left origin. */}
+      <Stats parent={statsParentRef} />
     </Canvas>
+    </>
   );
 }
