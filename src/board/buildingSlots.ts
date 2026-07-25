@@ -11,6 +11,15 @@ import { tileToWorld, BOARD_WORLD_SIZE } from './positions';
 /** Buildings rest on the board surface (matches the tile top in the 3D scene). */
 const TILE_SURFACE_Y = 0.02;
 
+/** Inward unit vector (tile → board centre) and its rotation angle for a tile. */
+function tileInward(tileIndex: number): { inwardX: number; inwardZ: number; rotationY: number } {
+  const [cx, , cz] = tileToWorld(tileIndex);
+  const len = Math.sqrt(cx * cx + cz * cz);
+  const inwardX = len > 1e-9 ? -cx / len : 0;
+  const inwardZ = len > 1e-9 ? -cz / len : 1;
+  return { inwardX, inwardZ, rotationY: Math.atan2(inwardX, inwardZ) };
+}
+
 /**
  * Actual regular-tile width in world units.
  * Derived from positions.ts: CORNER=0.134, SW = (1 - 2*CORNER) / 9,
@@ -37,13 +46,9 @@ export interface BuildingSlot {
  */
 export function houseSlots(tileIndex: number, count: number): BuildingSlot[] {
   const [cx, , cz] = tileToWorld(tileIndex);
-
-  // Inward direction: from tile toward board center (origin).
-  const len = Math.sqrt(cx * cx + cz * cz);
   // Corner tiles like GO (index 0) sit at (CE-0.5)*10, (CE-0.5)*10 — they are
   // never purchasable properties, but guard against zero-length just in case.
-  const inwardX = len > 1e-9 ? -cx / len : 0;
-  const inwardZ = len > 1e-9 ? -cz / len : 1;
+  const { inwardX, inwardZ, rotationY } = tileInward(tileIndex);
 
   // Perpendicular to inward (90-degree CCW rotation in xz-plane):  (-inwardZ, inwardX)
   const perpX = -inwardZ;
@@ -52,9 +57,6 @@ export function houseSlots(tileIndex: number, count: number): BuildingSlot[] {
   // Base position: tile center shifted inward by INWARD_OFFSET.
   const baseX = cx + inwardX * INWARD_OFFSET;
   const baseZ = cz + inwardZ * INWARD_OFFSET;
-
-  // Rotation so model's +Z front faces the inward direction (board center).
-  const rotationY = Math.atan2(inwardX, inwardZ);
 
   const slots: BuildingSlot[] = [];
 
@@ -84,10 +86,7 @@ export function houseSlots(tileIndex: number, count: number): BuildingSlot[] {
  */
 export function hotelSlot(tileIndex: number): BuildingSlot {
   const [cx, , cz] = tileToWorld(tileIndex);
-  const len = Math.sqrt(cx * cx + cz * cz);
-  const inwardX = len > 1e-9 ? -cx / len : 0;
-  const inwardZ = len > 1e-9 ? -cz / len : 1;
-  const rotationY = Math.atan2(inwardX, inwardZ);
+  const { inwardX, inwardZ, rotationY } = tileInward(tileIndex);
   return {
     x: cx + inwardX * INWARD_OFFSET,
     y: TILE_SURFACE_Y,

@@ -89,6 +89,15 @@ function getMaster(): GainNode {
   return g;
 }
 
+/** Create a GainNode connected to master, starting silent and ramping to peakGain by attack. */
+function makeAttackGain(startTime: number, peakGain: number, attack: number): GainNode {
+  const g = audioCtx().createGain();
+  g.connect(getMaster());
+  g.gain.setValueAtTime(0, startTime);
+  g.gain.linearRampToValueAtTime(peakGain, startTime + attack);
+  return g;
+}
+
 /**
  * Single oscillator note with ADSR-style envelope routed through master gain.
  * All nodes are scheduled to stop at a finite time — no leaks.
@@ -110,10 +119,7 @@ function osc(
   const sustainEnd = startTime + duration - rel;
   const end = startTime + duration + 0.02;
 
-  const g = audioCtx().createGain();
-  g.connect(getMaster());
-  g.gain.setValueAtTime(0, startTime);
-  g.gain.linearRampToValueAtTime(peakGain, startTime + attack);
+  const g = makeAttackGain(startTime, peakGain, attack);
   g.gain.linearRampToValueAtTime(sustainLevel, decayEnd);
   // Only schedule sustain/release if there's room
   if (sustainEnd > decayEnd) {
@@ -143,10 +149,7 @@ function freqRamp(
 ): void {
   const end = startTime + duration + 0.02;
 
-  const g = audioCtx().createGain();
-  g.connect(getMaster());
-  g.gain.setValueAtTime(0, startTime);
-  g.gain.linearRampToValueAtTime(peakGain, startTime + attack);
+  const g = makeAttackGain(startTime, peakGain, attack);
   g.gain.exponentialRampToValueAtTime(0.0001, startTime + duration);
 
   const o = audioCtx().createOscillator();
