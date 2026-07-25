@@ -15,7 +15,7 @@ export function ModelMesh({
   url,
   tint = '#ffffff',
   position = [0, 0, 0] as [number, number, number],
-  scale = 1 as number | [number, number, number],
+  scale = 1,
   rotation = [0, 0, 0] as [number, number, number],
 }: {
   url: string;

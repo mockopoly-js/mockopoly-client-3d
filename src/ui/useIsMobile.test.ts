@@ -49,14 +49,14 @@ describe('useIsMobile', () => {
 
   it('returns the initial match state from matchMedia', () => {
     mockMql = makeMockMql(true);
-    matchMediaSpy?.mockReturnValue(mockMql as unknown as MediaQueryList);
+    matchMediaSpy?.mockReturnValue(mockMql);
     const { result } = renderHook(() => useIsMobile());
     expect(result.current).toBe(true);
   });
 
   it('returns false when matchMedia says not-mobile', () => {
     mockMql = makeMockMql(false);
-    matchMediaSpy?.mockReturnValue(mockMql as unknown as MediaQueryList);
+    matchMediaSpy?.mockReturnValue(mockMql);
     const { result } = renderHook(() => useIsMobile());
     expect(result.current).toBe(false);
   });

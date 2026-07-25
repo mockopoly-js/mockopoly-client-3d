@@ -22,7 +22,7 @@ body { background: #cbe8f5; font-family: 'Baloo 2', ui-rounded, system-ui, sans-
    overscroll-behavior:none stops pull-to-refresh and edge-swipe navigation.
    -webkit-text-size-adjust stops iOS from inflating font sizes.
 */
-html, body { overscroll-behavior: none; -webkit-text-size-adjust: 100%; }
+html, body { overscroll-behavior: none; text-size-adjust: 100%; }
 canvas { touch-action: none; }
 
 /* --- Touch feel ---
@@ -47,10 +47,12 @@ button:active:not(:disabled) {
    The transition timing matches the inline transition on GameButton.
 */
 .game-btn:not(:disabled):hover { filter: brightness(1.05); }
+
 .game-btn:not(:disabled):active {
   transform: translateY(3px);
-  box-shadow: 0 1px 0 rgba(0,0,0,0.3);
+  box-shadow: 0 1px 0 rgb(0 0 0 / 30%);
 }
+
 @media (prefers-reduced-motion: reduce) {
   .game-btn { transition: none !important; }
   .game-btn:not(:disabled):active { transform: none; }
@@ -60,4 +62,4 @@ button:active:not(:disabled) {
 .mm-swatch:hover { transform: scale(1.12); }
 .mm-swatch:active { transform: scale(1.05); }
 .mm-input::placeholder { color: #a89a72; }
-.mm-input:focus { border-color: #d4af37; box-shadow: 0 0 0 3px rgba(212,175,55,0.28); }
+.mm-input:focus { border-color: #d4af37; box-shadow: 0 0 0 3px rgb(212 175 55 / 28%); }

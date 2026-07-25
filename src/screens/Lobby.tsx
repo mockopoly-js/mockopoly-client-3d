@@ -50,7 +50,7 @@ export function Lobby() {
     const tags = [p.isHost ? 'HOST' : null, p.id === myId ? 'YOU' : null].filter(Boolean).join(' • ');
     return (
       <div key={i} style={{ ...(isMobile ? slotMobile : slot), opacity: p.isConnected ? 1 : 0.5 }}>
-        <span style={{ ...(isMobile ? dotMobile : dot), background: TOKEN_HEX[p.token as TokenType] }} />
+        <span style={{ ...(isMobile ? dotMobile : dot), background: TOKEN_HEX[p.token] }} />
         <span style={{ fontWeight: 800, flex: 1, fontSize: isMobile ? 15 : undefined }}>
           {p.name}{tags && <small style={{ color: '#6d6151', fontWeight: 700 }}> {tags}</small>}
         </span>

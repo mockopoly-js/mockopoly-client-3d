@@ -28,7 +28,7 @@ export function CardDrawnOverlay() {
   const [draw, setDraw] = useState<Draw | null>(null);
 
   useGameBusEvent('card-drawn', (d: S_CardDrawn) => {
-    if (!d || !d.deck) return;
+    if (!d?.deck) return;
     const isChance = d.deck === 'chance';
     setDraw((prev) => ({
       deck: d.deck,

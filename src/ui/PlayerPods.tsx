@@ -19,7 +19,7 @@ export function PlayerPods() {
       <div style={wrapMobile}>
         {players.map((p) => (
           <div key={p.id} style={{ ...podMobile, outline: p.id === currentId ? '2px solid #d4af37' : 'none', opacity: p.isBankrupt ? 0.5 : 1 }}>
-            <span style={{ ...dotMobile, background: TOKEN_HEX[p.token as TokenType] }} />
+            <span style={{ ...dotMobile, background: TOKEN_HEX[p.token] }} />
             <div style={{ minWidth: 0, flex: 1 }}>
               <div style={{ fontWeight: 800, fontSize: 11, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
                 {p.name}{p.id === myId && <span style={{ color: '#8888a0' }}> (you)</span>}
@@ -45,7 +45,7 @@ export function PlayerPods() {
         ].filter(Boolean).join(' · ');
         return (
           <div key={p.id} style={{ ...pod, outline: p.id === currentId ? '2px solid #d4af37' : 'none', opacity: p.isBankrupt ? 0.5 : 1 }}>
-            <span style={{ ...dot, background: TOKEN_HEX[p.token as TokenType] }} />
+            <span style={{ ...dot, background: TOKEN_HEX[p.token] }} />
             <div style={{ flex: 1, minWidth: 0 }}>
               <div style={{ fontWeight: 800, fontSize: 13 }}>
                 {p.name}{p.id === myId && <span style={{ color: '#8888a0' }}> (you)</span>}

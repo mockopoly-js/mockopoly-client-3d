@@ -269,7 +269,7 @@ export function PlayerTokens() {
     });
 
     return unsub;
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+   
   }, []);
 
   // Server says a token moved → build the walk polyline + flag it moving.
@@ -520,7 +520,7 @@ export function PlayerTokens() {
         // Initial placement only (before the first useFrame tick paints it).
         const [x, , z] = tileToWorld(p.position);
         const [ox, oz] = restOffset(p, players);
-        const hex = TOKEN_HEX[p.token as TokenType];
+        const hex = TOKEN_HEX[p.token];
         const char = resolveCharacter(p.character ?? DEFAULT_CHARACTER);
         const clip = moving[p.id] ? 'Run' : 'Idle';
         return (

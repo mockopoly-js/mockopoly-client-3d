@@ -27,11 +27,11 @@ vi.mock('@react-three/fiber', () => ({
 }));
 
 // The fake OrbitControls instance. Fresh per render via beforeEach reset.
-type FakeControls = {
+interface FakeControls {
   target: THREE.Vector3;
   mouseButtons: { LEFT: number; MIDDLE: number; RIGHT: number };
   update: ReturnType<typeof vi.fn>;
-};
+}
 let lastControls: FakeControls | null = null;
 let lastProps: Record<string, unknown> | null = null;
 

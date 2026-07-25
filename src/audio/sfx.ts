@@ -8,7 +8,7 @@ const MUTE_KEY = 'mockopoly_muted';
 
 // ─── Singleton state ──────────────────────────────────────────────────────────
 let ctx: AudioContext | null = null;
-let _muted: boolean = false;
+let _muted = false;
 let _master: GainNode | null = null;
 
 // Read persisted mute on module load (safe — localStorage is always available or shimmed).

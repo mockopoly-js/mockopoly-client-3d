@@ -236,7 +236,7 @@ function throwDie(body: RapierRigidBody, startX: number) {
  */
 export function Dice3D() {
   const rootRef = useRef<THREE.Group | null>(null);
-  const bodies = useRef<Array<RapierRigidBody | null>>([null, null]);
+  const bodies = useRef<(RapierRigidBody | null)[]>([null, null]);
   const states = useRef<[DieState, DieState]>([makeDieState(), makeDieState()]);
   const active = useRef(false);
   // `running` mirrors `active` for the <Physics paused> prop: the world only

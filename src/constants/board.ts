@@ -69,12 +69,12 @@ export const PURCHASABLE_SPACES = BOARD_SPACES
 // Space indices grouped by color
 export const COLOR_GROUPS: Record<string, number[]> = BOARD_SPACES
   .filter(s => s.colorGroup)
-  .reduce((acc, s) => {
+  .reduce<Record<string, number[]>>((acc, s) => {
     const g = s.colorGroup!;
     if (!acc[g]) acc[g] = [];
     acc[g].push(s.index);
     return acc;
-  }, {} as Record<string, number[]>);
+  }, {});
 
 // ─── Community Chest Cards (16) ───────────────────────────────────────────────
 

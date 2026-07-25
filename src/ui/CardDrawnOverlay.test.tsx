@@ -33,7 +33,7 @@ describe('CardDrawnOverlay', () => {
     const body = screen.getByText('Advance to GO');
     expect(body).toBeTruthy();
     // Header carries the Chance (orange) accent.
-    const header = screen.getByText('CHANCE') as HTMLElement;
+    const header = screen.getByText('CHANCE');
     expect(header.style.background).toContain('243'); // rgb form of #f39c12 → 243,156,18
     // Auto-dismiss after ANIMATION_CARD_REVEAL_MS (2500ms).
     act(() => { vi.advanceTimersByTime(2600); });
@@ -45,7 +45,7 @@ describe('CardDrawnOverlay', () => {
     act(() => { gameBus.emit('card-drawn', community('Bank error in your favour')); });
     expect(screen.getByText('COMMUNITY CHEST')).toBeTruthy();
     expect(screen.getByText('Bank error in your favour')).toBeTruthy();
-    const header = screen.getByText('COMMUNITY CHEST') as HTMLElement;
+    const header = screen.getByText('COMMUNITY CHEST');
     expect(header.style.background).toContain('52'); // rgb form of #3498db → 52,152,219
   });
 

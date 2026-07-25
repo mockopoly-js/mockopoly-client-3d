@@ -278,7 +278,7 @@ export const CharacterToken = forwardRef<CharacterTokenHandle, CharacterTokenPro
         applyBaseColor(cloned, baseColor);
       }
       return cloned;
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+     
     }, [gltf.scene, baseColor]);
 
     // Dispose the per-instance cloned materials on unmount / re-clone. Geometry

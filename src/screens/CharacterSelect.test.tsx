@@ -40,7 +40,7 @@ describe('CharacterSelect (locker)', () => {
     expect(cards.length).toBe(52);
     // Every card carries a thumbnail <img> pointing at /images/characters/<id>.png.
     for (const c of CHARACTERS.slice(0, 5)) {
-      const img = screen.getByAltText(c.name) as HTMLImageElement;
+      const img = screen.getByAltText(c.name);
       expect(img.tagName).toBe('IMG');
       expect(img.getAttribute('src')).toBe(`/images/characters/${c.id}.png`);
     }

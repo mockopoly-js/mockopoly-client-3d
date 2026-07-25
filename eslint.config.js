@@ -50,7 +50,19 @@ export default tseslint.config(
       ...react.configs.flat.recommended.rules,
       ...react.configs.flat['jsx-runtime'].rules,
       ...reactHooks.configs.recommended.rules,
+      // eslint-plugin-react-hooks v5: the classic hooks rules only (no v7
+      // React-Compiler experiments — this app does not use React Compiler).
+      // Keep exhaustive-deps strict (error, not the default warn).
+      'react-hooks/rules-of-hooks': 'error',
+      'react-hooks/exhaustive-deps': 'error',
       'react-refresh/only-export-components': ['warn', { allowConstantExport: true }],
+      // react-three-fiber intrinsic elements (mesh, group, ambientLight, etc.)
+      // legitimately use non-DOM JSX props (position, args, intensity, rotation,
+      // castShadow, …). The DOM-oriented rule is wrong for R3F, so disable it.
+      'react/no-unknown-property': 'off',
+      // Keep the rule on for genuinely confusing cases, but allow the idiomatic
+      // arrow shorthand `onClick={() => setX()}` (void-returning setters).
+      '@typescript-eslint/no-confusing-void-expression': ['error', { ignoreArrowShorthand: true }],
     },
   },
   // Tests run under jsdom/vitest with Node + browser globals.

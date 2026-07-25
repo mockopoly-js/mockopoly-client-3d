@@ -47,14 +47,14 @@ describe('useOrientation', () => {
 
   it('returns landscape when matchMedia(portrait) does not match', () => {
     mockMql = makeMockMql(false);
-    matchMediaSpy.mockReturnValue(mockMql as unknown as MediaQueryList);
+    matchMediaSpy.mockReturnValue(mockMql);
     const { result } = renderHook(() => useOrientation());
     expect(result.current).toBe('landscape');
   });
 
   it('returns portrait when matchMedia(portrait) matches', () => {
     mockMql = makeMockMql(true);
-    matchMediaSpy.mockReturnValue(mockMql as unknown as MediaQueryList);
+    matchMediaSpy.mockReturnValue(mockMql);
     const { result } = renderHook(() => useOrientation());
     expect(result.current).toBe('portrait');
   });
@@ -70,7 +70,7 @@ describe('useOrientation', () => {
 
   it('updates from portrait back to landscape when media query fires', () => {
     mockMql = makeMockMql(true);
-    matchMediaSpy.mockReturnValue(mockMql as unknown as MediaQueryList);
+    matchMediaSpy.mockReturnValue(mockMql);
     const { result } = renderHook(() => useOrientation());
     expect(result.current).toBe('portrait');
     act(() => {
