@@ -21,6 +21,23 @@ function getCtx(): AudioContext | null {
   return ctx;
 }
 
+// Non-null accessor for the synth helpers. They only ever run inside playSfx,
+// which guards `if (!ac) return` before invoking a synth — so ctx is always set
+// here. Throwing (vs a bare `ctx!`) keeps behaviour identical: playSfx wraps
+// every synth in try/catch, so a would-be null deref is swallowed either way.
+function audioCtx(): AudioContext {
+  if (!ctx) throw new Error('AudioContext accessed before initialisation');
+  return ctx;
+}
+
+// Vendor-prefixed AudioContext ctor for older WebKit. Kept off lib.dom's
+// Window type (which only knows the standard one), so we narrow a typed view of
+// the two possible globals rather than reaching through `any`.
+interface AudioContextGlobals {
+  AudioContext?: typeof AudioContext;
+  webkitAudioContext?: typeof AudioContext;
+}
+
 /**
  * Call once from a user gesture (click / keydown).  Creates the AudioContext
  * (or resumes it if suspended by the browser's autoplay policy).
@@ -28,13 +45,12 @@ function getCtx(): AudioContext | null {
  */
 export function initAudioOnGesture(): void {
   try {
-    const Ctor =
-      (typeof window !== 'undefined' &&
-        ((window as any).AudioContext ?? (window as any).webkitAudioContext)) ||
-      null;
-    if (!Ctor) return; // jsdom / SSR — no-op
+    if (typeof window === 'undefined') return; // SSR — no-op
+    const g = window as unknown as AudioContextGlobals;
+    const Ctor = g.AudioContext ?? g.webkitAudioContext;
+    if (!Ctor) return; // jsdom — no-op
     if (!ctx) {
-      ctx = new Ctor() as AudioContext;
+      ctx = new Ctor();
       // Master gain at 0.7 — comfortable level, headroom for overlapping SFX
       _master = ctx.createGain();
       _master.gain.value = 0.7;
@@ -60,16 +76,16 @@ export function isMuted(): boolean {
 
 // ─── Synth helpers ────────────────────────────────────────────────────────────
 function now(): number {
-  return ctx!.currentTime;
+  return audioCtx().currentTime;
 }
 
 /** Returns master gain node (always routes through it for level safety). */
 function getMaster(): GainNode {
   // Fallback: if somehow _master is null, wire directly to destination at unity
   if (_master) return _master;
-  const g = ctx!.createGain();
+  const g = audioCtx().createGain();
   g.gain.value = 1;
-  g.connect(ctx!.destination);
+  g.connect(audioCtx().destination);
   return g;
 }
 
@@ -94,7 +110,7 @@ function osc(
   const sustainEnd = startTime + duration - rel;
   const end = startTime + duration + 0.02;
 
-  const g = ctx!.createGain();
+  const g = audioCtx().createGain();
   g.connect(getMaster());
   g.gain.setValueAtTime(0, startTime);
   g.gain.linearRampToValueAtTime(peakGain, startTime + attack);
@@ -105,7 +121,7 @@ function osc(
   }
   g.gain.exponentialRampToValueAtTime(0.0001, startTime + duration);
 
-  const o = ctx!.createOscillator();
+  const o = audioCtx().createOscillator();
   o.type = type;
   o.frequency.setValueAtTime(freq, startTime);
   o.connect(g);
@@ -127,13 +143,13 @@ function freqRamp(
 ): void {
   const end = startTime + duration + 0.02;
 
-  const g = ctx!.createGain();
+  const g = audioCtx().createGain();
   g.connect(getMaster());
   g.gain.setValueAtTime(0, startTime);
   g.gain.linearRampToValueAtTime(peakGain, startTime + attack);
   g.gain.exponentialRampToValueAtTime(0.0001, startTime + duration);
 
-  const o = ctx!.createOscillator();
+  const o = audioCtx().createOscillator();
   o.type = type;
   o.frequency.setValueAtTime(freqStart, startTime);
   o.frequency.exponentialRampToValueAtTime(freqEnd, startTime + duration);
@@ -154,23 +170,23 @@ function noiseBurst(
   filterQ = 1.5,
   filterType: BiquadFilterType = 'bandpass',
 ): void {
-  const sampleRate = ctx!.sampleRate;
+  const sampleRate = audioCtx().sampleRate;
   const bufLen = Math.ceil(sampleRate * duration);
-  const buffer = ctx!.createBuffer(1, bufLen, sampleRate);
+  const buffer = audioCtx().createBuffer(1, bufLen, sampleRate);
   const data = buffer.getChannelData(0);
   for (let i = 0; i < bufLen; i++) {
     data[i] = Math.random() * 2 - 1;
   }
 
-  const source = ctx!.createBufferSource();
+  const source = audioCtx().createBufferSource();
   source.buffer = buffer;
 
-  const bpf = ctx!.createBiquadFilter();
+  const bpf = audioCtx().createBiquadFilter();
   bpf.type = filterType;
   bpf.frequency.value = filterFreq;
   bpf.Q.value = filterQ;
 
-  const g = ctx!.createGain();
+  const g = audioCtx().createGain();
   g.gain.setValueAtTime(gain, startTime);
   g.gain.exponentialRampToValueAtTime(0.0001, startTime + duration);
   g.connect(getMaster());
@@ -188,12 +204,12 @@ function noiseBurst(
  */
 function knock(freq: number, startTime: number, gain: number): void {
   const duration = 0.05;
-  const g = ctx!.createGain();
+  const g = audioCtx().createGain();
   g.connect(getMaster());
   g.gain.setValueAtTime(gain, startTime);
   g.gain.exponentialRampToValueAtTime(0.0001, startTime + duration);
 
-  const o = ctx!.createOscillator();
+  const o = audioCtx().createOscillator();
   o.type = 'sine';
   // Quick pitch drop: sounds like a hard surface impact
   o.frequency.setValueAtTime(freq * 1.8, startTime);
@@ -352,7 +368,11 @@ export function playSfx(name: SfxName): void {
     if (!ac) return;
     if (ac.state === 'suspended') return; // not yet unlocked
     const synth = SYNTHS[name];
-    if (!synth) return; // unknown name — safe no-op
+    // `name` is typed SfxName, but this is a public API and a caller could pass
+    // an out-of-contract value via a cast; keep the guard so it stays a no-op
+    // rather than throwing (matches the documented "unknown name" behaviour).
+    // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- defensive guard for out-of-contract (as-casted) names on this public API
+    if (!synth) return;
     synth();
   } catch { /* never throw in call sites */ }
 }

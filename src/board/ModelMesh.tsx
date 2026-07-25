@@ -27,15 +27,24 @@ export function ModelMesh({
   const gltf = useGLTF(url);
 
   const mesh = useMemo(() => {
-    let src: THREE.Mesh | null = null;
+    // Collect every mesh in the loaded scene, then take the first. Using an
+    // array (instead of a closure-mutated `let`) keeps TS's types honest: the
+    // emptiness check below is a real guard, not a control-flow artefact.
+    const meshes: THREE.Mesh[] = [];
     gltf.scene.traverse((o) => {
-      if (!src && (o as THREE.Mesh).isMesh) src = o as THREE.Mesh;
+      const asMesh = o as THREE.Mesh;
+      // `.isMesh` is three's cross-realm-safe duck-type. The cast asserts Mesh,
+      // so TS sees isMesh as always true — but at runtime `o` is a generic
+      // Object3D and only real meshes carry it.
+      // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- runtime narrowing: o is Object3D; only actual meshes have isMesh===true
+      if (asMesh.isMesh) meshes.push(asMesh);
     });
+    const src = meshes.at(0);
     if (!src) return null;
     // CLONE the cached source geometry so this instance owns its own buffers —
     // NEVER mutate/dispose the shared useGLTF source geometry (other instances
     // of the same url reuse it via drei's per-url cache).
-    const geometry = (src as THREE.Mesh).geometry.clone();
+    const geometry = src.geometry.clone();
     const material = new THREE.MeshStandardMaterial({
       vertexColors: true,
       color: new THREE.Color(tint),
@@ -60,8 +69,9 @@ export function ModelMesh({
     if (!mesh) return;
     return () => {
       mesh.geometry.dispose();
-      const mat = mesh.material;
-      (Array.isArray(mat) ? mat : [mat]).forEach((m) => m.dispose());
+      const mat: THREE.Material | THREE.Material[] = mesh.material;
+      const mats: THREE.Material[] = Array.isArray(mat) ? mat : [mat];
+      for (const m of mats) m.dispose();
     };
   }, [mesh]);
 
@@ -74,4 +84,6 @@ export function ModelMesh({
  * callers can warm any url ahead of first render (used by Buildings for the
  * house/hotel models).
  */
-ModelMesh.preload = useGLTF.preload;
+// Forward through an arrow (rather than aliasing the bare method) so `this`
+// stays bound to `useGLTF` — avoids the unbound-method footgun.
+ModelMesh.preload = (url: string): void => { useGLTF.preload(url); };
