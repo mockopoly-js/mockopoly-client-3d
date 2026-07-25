@@ -74,7 +74,9 @@ export function CityDressing(): React.JSX.Element {
       // at runtime `o` is a generic Object3D and only real meshes carry it.
       // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- runtime narrowing: `o` is Object3D; only actual meshes have isMesh===true
       if (m.isMesh) {
-        m.castShadow = true;
+        // City meshes don't cast shadows (removes ~103 shadow-pass draw calls);
+        // receiveShadow stays on so the board/token shadows still fall on the city.
+        m.castShadow = false;
         m.receiveShadow = true;
         m.frustumCulled = false;
 

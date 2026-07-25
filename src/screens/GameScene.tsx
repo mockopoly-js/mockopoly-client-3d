@@ -136,9 +136,9 @@ export function GameScene() {
       // are HMR-inert; rotating the board content is reliable and frame-accurate.
       camera={{ position: [0, 8.5, 12], fov: 50 }}
       shadows
-      dpr={[1, 2]}
+      dpr={[1, 1.5]}
       performance={{ min: 0.5 }}
-      gl={{ powerPreference: 'high-performance' }}
+      gl={{ powerPreference: 'high-performance', antialias: false }}
     >
       {/*
         Flat sky fallback — only used when the HDRI sky is NOT shown as the
@@ -148,7 +148,7 @@ export function GameScene() {
       {/* eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- SHOW_HDRI_BACKGROUND is a documented build-time toggle (see header) */}
       {!SHOW_HDRI_BACKGROUND && <color attach="background" args={['#cbe8f5']} />}
       {/* Soft shadow injection (must be early in the scene, no assets). */}
-      <SoftShadows size={12} samples={16} />
+      <SoftShadows size={12} samples={8} />
       {/* Sky/ground hemisphere fill — warms the scene and lifts shadow darkness. */}
       <hemisphereLight args={['#cbe8f5', '#8a9a5b', 0.35]} />
       {/* Ambient trimmed (0.5 → 0.4) now that the HDRI Environment adds IBL fill. */}
@@ -202,7 +202,7 @@ export function GameScene() {
             stays fixed as the board turns within its clearing. */}
         <ForestEnvironment />
       </Suspense>
-      <EffectComposer>
+      <EffectComposer multisampling={2}>
         {/*
           Order matters: Bloom -> ToneMapping -> global color grade. Grading runs
           on the tone-mapped LDR image so saturation/contrast make colors POP
