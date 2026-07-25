@@ -28,8 +28,12 @@
  *   2. CROP to a square window around the world origin (CROP_HALF). Around the
  *      origin the raw scene has a natural CLEARING (only ~2 trees within 3,000
  *      units of center) ringed by trees/rocks/flowers at r≈3,000–6,000 — exactly
- *      the "board in a forest clearing" look. The crop ALSO drops every moss
- *      mountain (they all live beyond r≈10,000), so no mountain can reappear.
+ *      the "board in a forest clearing" look. At ±14,000 the crop now KEEPS the
+ *      tall moss-mountain props (r≈10,000–14,000) so they ring the terrain like
+ *      the Sketchfab demo; only the vast far landscape (r>14,000) is dropped.
+ *      (The old "one giant mountain" bug was from join() fusing props into blobs,
+ *      not from the mountains themselves — we still never join(), so they render
+ *      as distinct low-poly ridges, not a solid blob the camera sits inside.)
  *   3. DO NOT `join()` (it fuses distinct props into blobs) and DO NOT simplify
  *      (the low-poly trees are already tiny; decimation just melts their shape).
  *      dedup + instance + weld + prune alone shrink it far below target because
@@ -64,12 +68,16 @@ const OUT = resolve(PROJECT_ROOT, 'public/models/forest.glb');
 
 /**
  * Half-size (in RAW source units) of the square kept around the world origin.
- * The raw scene is ~47k×28k units, flat. ±8000 keeps the natural clearing at
- * center + a full ring of trees/rocks/meadow/flowers and drops all the distant
- * moss-mountain props (they sit beyond r≈10,000). Tune if you want a denser or
- * wider treeline; keep it small enough to exclude the mountains (< ~9000).
+ * The raw scene is ~47k×28k units, flat. ±14000 keeps the natural clearing at
+ * center, a full ring of trees/rocks/meadow/flowers, AND the tall moss-mountain
+ * props that ring the terrain at r≈10,000–14,000 (with ±8000 these were cropped
+ * off, leaving a flat treeline island). It still excludes the vast far landscape
+ * beyond r≈14,000. NOTE: the client's auto-fit target (SURROUND_SIZE in
+ * src/board/ForestEnvironment.tsx) is COUPLED to this value by ratio, so the
+ * board's central clearing stays the same size as the crop widens — change this
+ * without updating the client and the board will look mis-scaled in the clearing.
  */
-const CROP_HALF = Number(process.env.FOREST_CROP_HALF || 8000);
+const CROP_HALF = Number(process.env.FOREST_CROP_HALF || 14000);
 
 const MB = (n) => (n / 1024 / 1024).toFixed(2) + ' MB';
 

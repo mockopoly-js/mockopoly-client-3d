@@ -42,8 +42,21 @@ import { BOARD_WORLD_SIZE } from './positions';
  *                    under the board if the auto-centered spot is bumpy.
  */
 
-/** World size of the forest's shorter horizontal axis (board is 10 units). */
-const SURROUND_SIZE = BOARD_WORLD_SIZE * 4.6; // 46 world units → treeline just off the board edge
+/**
+ * World size of the forest's shorter horizontal axis (board is 10 units).
+ *
+ * COUPLED TO THE CROP: forest.glb is cropped to ±FOREST_CROP_HALF raw units in
+ * scripts/gen-forest.mjs. Widening the crop to include the mountain ring makes
+ * the cropped terrain's shorter axis grow by the same ratio, so we scale the fit
+ * target by that ratio too. Result: groupScale (= SURROUND_SIZE / shorterAxis)
+ * stays IDENTICAL, so the central clearing — and thus the board's relative size —
+ * is preserved, and the newly-kept mountains simply ring the terrain edge.
+ * 4.6× board = 46 world units at the base ±8000 crop; ×(14000/8000) → 80.5.
+ */
+const FOREST_CROP_HALF = 14000;      // MUST match CROP_HALF in scripts/gen-forest.mjs
+const FOREST_CROP_HALF_BASE = 8000;  // crop the 4.6× fit was originally tuned against
+const SURROUND_SIZE =
+  BOARD_WORLD_SIZE * 4.6 * (FOREST_CROP_HALF / FOREST_CROP_HALF_BASE); // 46 → 80.5 world units
 
 const FOREST_SCALE = 1.0;   // multiplier on the auto-fit surround
 const FOREST_Y = -0.48;     // board bottom (TOP_Y − DEPTH); clearing surface meets it here
