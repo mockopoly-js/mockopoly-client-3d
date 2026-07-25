@@ -76,6 +76,7 @@ function stepYaw(cur: number, target: number, frac: number): number {
  */
 function restOffset(player: Player, players: Player[]): [number, number] {
   const coLocated = players.filter((p) => p.position === player.position && !p.isBankrupt);
+  if (coLocated.length <= 1) return [0, 0];
   const idx = coLocated.findIndex((p) => p.id === player.id);
   return stackOffset(idx < 0 ? 0 : idx);
 }
@@ -92,6 +93,7 @@ function destOffset(playerId: string, to: number, players: Player[]): [number, n
   const coLocated = players.filter(
     (p) => !p.isBankrupt && (p.id === playerId || p.position === to),
   );
+  if (coLocated.length <= 1) return [0, 0];
   const idx = coLocated.findIndex((p) => p.id === playerId);
   return stackOffset(idx < 0 ? 0 : idx);
 }
