@@ -46,6 +46,9 @@ const TOP_Y = 0.02;
 /** Edge/side + bottom color — reads as a warm toy-board rim. */
 const EDGE_COLOR = '#c9a06a';
 
+/** Cache-busting version for board normal and height maps. Bump when re-baking. */
+const MAP_VER = 2;
+
 /**
  * Saturation multiplier for the printed board artwork ONLY (top face, index 2).
  * 1.0 = unchanged; >1 = more saturated. Applied AFTER tonemapping_fragment on
@@ -132,8 +135,8 @@ const SLAB_TOP_DROP = 0.01;
 export function BoardTiles() {
   const [texture, normalTex, heightTex] = useTexture([
     '/images/board.webp',
-    '/images/board-normal.webp',
-    '/images/board-height.webp',
+    `/images/board-normal.webp?v=${MAP_VER}`,
+    `/images/board-height.webp?v=${MAP_VER}`,
   ]);
   const maxAniso = useThree((s) => s.gl.capabilities.getMaxAnisotropy());
   // 2048² ≈ 8.4M tris (~1px/vertex → crisp thin-stroke ridges) is heavy but
