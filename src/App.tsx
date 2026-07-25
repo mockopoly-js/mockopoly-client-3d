@@ -26,7 +26,10 @@ import { HudButtons } from './ui/HudButtons';
 import { BigMomentOverlay } from './ui/BigMomentOverlay';
 import { CardDrawnOverlay } from './ui/CardDrawnOverlay';
 import { MuteButton } from './ui/MuteButton';
+import { CameraViewButton } from './ui/CameraViewButton';
 import { RotateHint } from './ui/RotateHint';
+import { PropertyCardModal } from './ui/PropertyCardModal';
+import { CameraDebugOverlay } from './ui/CameraDebugOverlay';
 import { useSfx } from './audio/useSfx';
 import { initAudioOnGesture } from './audio/sfx';
 import type { S_GameOver } from './types/SocketEvents';
@@ -155,6 +158,9 @@ export default function App() {
           <DealPanel />
           <BigMomentOverlay />
           <CardDrawnOverlay />
+          <PropertyCardModal />
+          <CameraDebugOverlay />
+          <CameraViewButton />
         </>
       )}
       {screen === 'game-over' && <GameOverScreen />}

@@ -45,6 +45,14 @@ const TOP_Y = 0.02;
 /** Edge/side + bottom color — reads as a warm toy-board rim. */
 const EDGE_COLOR = '#c9a06a';
 
+/**
+ * Saturation multiplier for the printed board artwork ONLY (top face, index 2).
+ * 1.0 = unchanged; >1 = more saturated. Applied AFTER tonemapping_fragment on
+ * gl_FragColor.rgb (post-lighting, post-tonemap) so lighting/IBL cannot wash
+ * it back out. Board-only — edge, city, forest, tokens are unaffected.
+ */
+const BOARD_SATURATION = 1.6;
+
 export function BoardTiles() {
   const texture = useTexture('/images/board.webp');
   const maxAniso = useThree((s) => s.gl.capabilities.getMaxAnisotropy());
@@ -69,6 +77,32 @@ export function BoardTiles() {
   const materials = useMemo(() => {
     const edge = new THREE.MeshStandardMaterial({ color: EDGE_COLOR, roughness: 0.85 });
     const top = new THREE.MeshStandardMaterial({ map: texture, roughness: 0.7 });
+
+    // Inject a saturation boost into the TOP face shader only — applied AFTER
+    // tonemapping_fragment, operating directly on gl_FragColor.rgb so that
+    // lighting, IBL, and ACES tone-mapping are already baked in and cannot wash
+    // the boost back out.  Guard with userData so the patch runs at most once.
+    top.onBeforeCompile = (shader) => {
+      if (top.userData._satPatchApplied) return;
+      top.userData._satPatchApplied = true;
+
+      // Inject the tunable constant just after #include <common>.
+      shader.fragmentShader = shader.fragmentShader.replace(
+        '#include <common>',
+        `#include <common>\nconst float BOARD_SATURATION = ${BOARD_SATURATION.toFixed(4)};`,
+      );
+
+      // Replace the tonemapping chunk with itself + a luminance-mix saturation
+      // applied to gl_FragColor.rgb (ITU-R BT.709 luma weights). colorspace_fragment
+      // runs after this, so sRGB gamma encode still happens normally.
+      shader.fragmentShader = shader.fragmentShader.replace(
+        '#include <tonemapping_fragment>',
+        `#include <tonemapping_fragment>
+{ float _l = dot(gl_FragColor.rgb, vec3(0.2126, 0.7152, 0.0722));
+  gl_FragColor.rgb = clamp(mix(vec3(_l), gl_FragColor.rgb, BOARD_SATURATION), 0.0, 1.0); }`,
+      );
+    };
+
     return [edge, edge, top, edge, edge, edge];
   }, [texture]);
 

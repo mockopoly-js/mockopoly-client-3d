@@ -2,6 +2,7 @@ import type React from 'react';
 import { useGameStore, selectIsMyTurn } from '../state/gameStore';
 import { useIsMobile } from './useIsMobile';
 import { FONT_FAMILY } from '../constants/fonts';
+import { GameButton } from './GameButton';
 
 export function HudButtons() {
   const trade = useGameStore((s) => s.toggleTradePanel);
@@ -38,15 +39,15 @@ export function HudButtons() {
     return (
       <div style={wrapMobile}>
         <div style={btnWrap}>
-          <button style={btnMobile} onClick={() => trade(true)}>Trade</button>
+          <GameButton variant="dark" onClick={() => trade(true)} style={btnMobileOverride}>Trade</GameButton>
           {tradeBadge && <span style={dot} aria-hidden="true" />}
         </div>
         <div style={btnWrap}>
-          <button style={btnMobile} onClick={() => partnership(true)}>Partnership</button>
+          <GameButton variant="dark" onClick={() => partnership(true)} style={btnMobileOverride}>Partnership</GameButton>
           {partnershipBadge && <span style={dot} aria-hidden="true" />}
         </div>
         <div style={btnWrap}>
-          <button style={btnMobile} onClick={() => deal(true)}>Deal</button>
+          <GameButton variant="dark" onClick={() => deal(true)} style={btnMobileOverride}>Deal</GameButton>
           {dealBadge && <span style={dot} aria-hidden="true" />}
         </div>
       </div>
@@ -56,15 +57,15 @@ export function HudButtons() {
   return (
     <div style={wrap}>
       <div style={btnWrap}>
-        <button style={btn} onClick={() => trade(true)}>Trade</button>
+        <GameButton variant="dark" onClick={() => trade(true)} style={btnDesktopOverride}>Trade</GameButton>
         {tradeBadge && <span style={dot} aria-hidden="true" />}
       </div>
       <div style={btnWrap}>
-        <button style={btn} onClick={() => partnership(true)}>Partnership</button>
+        <GameButton variant="dark" onClick={() => partnership(true)} style={btnDesktopOverride}>Partnership</GameButton>
         {partnershipBadge && <span style={dot} aria-hidden="true" />}
       </div>
       <div style={btnWrap}>
-        <button style={btn} onClick={() => deal(true)}>Deal</button>
+        <GameButton variant="dark" onClick={() => deal(true)} style={btnDesktopOverride}>Deal</GameButton>
         {dealBadge && <span style={dot} aria-hidden="true" />}
       </div>
     </div>
@@ -81,7 +82,7 @@ const dot: React.CSSProperties = {
   background: '#e5533d', pointerEvents: 'none',
 };
 
-// ── Desktop styles (unchanged) ──
+// ── Desktop styles (unchanged layout) ──
 const wrap: React.CSSProperties = {
   position: 'fixed',
   bottom: 14,
@@ -92,17 +93,12 @@ const wrap: React.CSSProperties = {
   zIndex: 30,
   fontFamily: F,
 };
-const btn: React.CSSProperties = {
-  fontFamily: F,
-  fontWeight: 800,
+
+// Desktop GameButton size override — keep the compact sidebar feel
+const btnDesktopOverride: React.CSSProperties = {
   fontSize: 13,
-  border: 'none',
-  borderRadius: 12,
   padding: '9px 14px',
-  cursor: 'pointer',
-  background: '#12121e',
-  color: '#e8e8f0',
-  boxShadow: '0 8px 22px -12px rgba(0,0,0,.6)',
+  borderRadius: 12,
 };
 
 // ── Mobile styles ──
@@ -119,17 +115,11 @@ const wrapMobile: React.CSSProperties = {
   fontFamily: F,
   padding: '0 12px',
 };
-const btnMobile: React.CSSProperties = {
-  fontFamily: F,
-  fontWeight: 800,
-  fontSize: 13,
-  border: 'none',
-  borderRadius: 12,
-  padding: '10px 0',
-  cursor: 'pointer',
-  background: '#12121e',
-  color: '#e8e8f0',
-  boxShadow: '0 8px 22px -12px rgba(0,0,0,.6)',
+
+const btnMobileOverride: React.CSSProperties = {
   flex: 1,
   minHeight: 44,
+  fontSize: 13,
+  padding: '10px 0',
+  borderRadius: 12,
 };

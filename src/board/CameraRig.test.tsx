@@ -2,21 +2,28 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, act } from '@testing-library/react';
 import { forwardRef, useImperativeHandle } from 'react';
 import * as THREE from 'three';
-import { CameraRig } from './CameraRig';
+import { CameraRig, INITIAL_CAM_OFFSET, INITIAL_CAM_TARGET } from './CameraRig';
 import { useGameStore } from '../state/gameStore';
 import type { GameState } from '../types/GameState';
 
 // ── R3F / drei stubs ─────────────────────────────────────────────────────────
 // We render CameraRig outside a real <Canvas>, so useFrame must be captured (we
-// drive it manually to exercise the auto-focus loop) and OrbitControls must be a
-// forwardRef fake that (a) records the props CameraRig passes and (b) exposes a
+// drive it manually to exercise the debug readout loop) and OrbitControls must be
+// a forwardRef fake that (a) records the props CameraRig passes and (b) exposes a
 // controllable fake controls instance through the forwarded ref — exactly how the
 // real drei <OrbitControls> hands back its imperative controls object (NOT a DOM
 // node). CameraRig passes a callback ref, so useImperativeHandle drives it.
 
-let frameCallback: (() => void) | null = null;
+// useFrame receives (state, delta). Our tests drive it manually.
+let frameCallback: ((state?: unknown, delta?: number) => void) | null = null;
+
+// Fake camera for the useThree(s => s.camera) call in the initial-snap effect.
+const fakeCamera = { position: new THREE.Vector3(0, 0, 0) };
+
 vi.mock('@react-three/fiber', () => ({
-  useFrame: (cb: () => void) => { frameCallback = cb; },
+  useFrame: (cb: (state?: unknown, delta?: number) => void) => { frameCallback = cb; },
+  useThree: (selector: (state: { camera: typeof fakeCamera }) => unknown) =>
+    selector({ camera: fakeCamera }),
 }));
 
 // The fake OrbitControls instance. Fresh per render via beforeEach reset.
@@ -50,10 +57,13 @@ vi.mock('@react-three/drei', () => ({
 // Minimal store fixture: one player whose turn it is, sitting on a known tile.
 // Only the fields CameraRig reads (id, position, turn.currentPlayerId) matter;
 // the cast covers the rest (mirrors gameStore.test.ts's fakeState helper).
-function fakeState(position = 0): GameState {
+function fakeState(position = 0, currentPlayerId = 'p1'): GameState {
   return {
-    players: [{ id: 'p1', name: 'Alice', position }],
-    turn: { currentPlayerId: 'p1' },
+    players: [
+      { id: 'p1', name: 'Alice', position },
+      { id: 'p2', name: 'Bob', position },
+    ],
+    turn: { currentPlayerId },
   } as unknown as GameState;
 }
 
@@ -62,6 +72,7 @@ describe('CameraRig', () => {
     frameCallback = null;
     lastControls = null;
     lastProps = null;
+    fakeCamera.position.set(0, 0, 0);
     useGameStore.getState().reset();
     useGameStore.getState().update(fakeState(0));
   });
@@ -116,31 +127,42 @@ describe('CameraRig', () => {
     expect(lastControls!.mouseButtons.LEFT).toBe(THREE.MOUSE.ROTATE);
   });
 
-  it('auto-focuses the target toward the active player before manual control', () => {
-    // Player on a non-origin tile so the target should move away from (0,0,0).
-    useGameStore.getState().update(fakeState(5));
+  it('snaps the OrbitControls target to INITIAL_CAM_TARGET (fixed world point) on initial mount', () => {
+    // Player on GO (tile 0) — the initial game state. Store hydration is the guard.
+    useGameStore.getState().update(fakeState(0));
     render(<CameraRig />);
-    expect(frameCallback).toBeTruthy();
-    const before = lastControls!.target.clone();
-    act(() => { frameCallback!(); });
-    // Target eased toward the tile → moved from origin, and update() was called.
-    expect(lastControls!.target.distanceTo(before)).toBeGreaterThan(0);
-    expect(lastControls!.update).toHaveBeenCalled();
+
+    // Target must equal INITIAL_CAM_TARGET exactly — NOT a player tile position.
+    expect(lastControls!.target.x).toBeCloseTo(INITIAL_CAM_TARGET[0], 4);
+    expect(lastControls!.target.y).toBeCloseTo(INITIAL_CAM_TARGET[1], 4);
+    expect(lastControls!.target.z).toBeCloseTo(INITIAL_CAM_TARGET[2], 4);
   });
 
-  it('disables auto-focus permanently after the first manual interaction (onStart)', () => {
-    useGameStore.getState().update(fakeState(5));
+  it('snaps the camera position to INITIAL_CAM_TARGET + INITIAL_CAM_OFFSET on initial mount', () => {
+    useGameStore.getState().update(fakeState(0));
     render(<CameraRig />);
-    // Simulate the user grabbing the camera: OrbitControls fires onStart.
-    act(() => { (lastProps!.onStart as () => void)(); });
-    // Even after onEnd, auto-focus must stay off for the session.
-    act(() => { (lastProps!.onEnd as () => void)(); });
 
+    // camera.position = [-3.77 + -7.27, 0.61 + 7.04, 0.67 + 0.24] = [-11.04, 7.64, 0.91]
+    expect(fakeCamera.position.x).toBeCloseTo(INITIAL_CAM_TARGET[0] + INITIAL_CAM_OFFSET[0], 4);
+    expect(fakeCamera.position.y).toBeCloseTo(INITIAL_CAM_TARGET[1] + INITIAL_CAM_OFFSET[1], 4);
+    expect(fakeCamera.position.z).toBeCloseTo(INITIAL_CAM_TARGET[2] + INITIAL_CAM_OFFSET[2], 4);
+  });
+
+  it('does NOT drift the camera target after load — no auto-focus lerp runs', () => {
+    useGameStore.getState().update(fakeState(0));
+    render(<CameraRig />);
+    expect(frameCallback).toBeTruthy();
+
+    const targetBefore = lastControls!.target.clone();
     lastControls!.update.mockClear();
-    const before = lastControls!.target.clone();
+
+    // Change the active player's position — this must NOT move the camera target.
+    act(() => { useGameStore.getState().update(fakeState(10)); });
     act(() => { frameCallback!(); });
-    // Target unchanged and update() not called — the free camera is not yanked back.
-    expect(lastControls!.target.distanceTo(before)).toBe(0);
+
+    // Target must remain exactly where it snapped — no drift allowed.
+    expect(lastControls!.target.distanceTo(targetBefore)).toBe(0);
+    // update() must NOT have been called from auto-focus logic in useFrame.
     expect(lastControls!.update).not.toHaveBeenCalled();
   });
 });

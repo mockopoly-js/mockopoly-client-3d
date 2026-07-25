@@ -1,13 +1,32 @@
 import { useCallback, useEffect, useRef } from 'react';
-import { useFrame } from '@react-three/fiber';
+import { useFrame, useThree } from '@react-three/fiber';
 import { OrbitControls } from '@react-three/drei';
 import * as THREE from 'three';
 import type { OrbitControls as OrbitControlsImpl } from 'three-stdlib';
-import { useGameStore, selectCurrentPlayer } from '../state/gameStore';
-import { tileToWorld } from './positions';
+import { useGameStore, selectCurrentPlayer, selectMyPlayer } from '../state/gameStore';
+import type { CameraReadout } from '../state/gameStore';
+import { thirdPersonPose } from './positions';
+
+// Re-export so callers can assert the shared constant is wired in.
+export { BOARD_ROTATION } from './positions';
+
+// Frame-rate-aware smoothing rate for the follow lerp. Higher = snappier.
+// alpha = 1 - exp(-RATE * delta) → ease-out, no snapping, stable at any FPS.
+const FOLLOW_LERP_RATE = 6;
+
+// ── Tunable initial-framing constants ─────────────────────────────────────────
+// These values were dialed in live via the debug overlay.
+//
+// INITIAL_CAM_TARGET — fixed orbit target. The camera always loads aimed here
+// and stays here unless the user manually pans. NOT tied to any player tile.
+//
+// INITIAL_CAM_OFFSET — world-space offset from the target. Camera position =
+// INITIAL_CAM_TARGET + INITIAL_CAM_OFFSET → [-11.04, 7.64, 0.91]; distance ~10.12.
+export const INITIAL_CAM_TARGET: [number, number, number] = [-3.77, 0.61, 0.67];
+export const INITIAL_CAM_OFFSET: [number, number, number] = [-7.27, 7.04, 0.24];
 
 /**
- * CameraRig: free Blender-style viewport navigation + gentle first-turn auto-focus.
+ * CameraRig: free Blender-style viewport navigation with a fixed initial framing.
  *
  * Navigation model (like Blender's viewport):
  * - LEFT-drag ORBITS the camera around the OrbitControls target ("rotate around
@@ -24,44 +43,106 @@ import { tileToWorld } from './positions';
  * THREE.MOUSE.ROTATE (default) and THREE.MOUSE.PAN (while Shift held). Listeners
  * are torn down on unmount.
  *
- * Auto-focus: before the user takes manual control, the current player's tile is
- * gently eased into the OrbitControls target (~0.05/frame), so the camera follows
- * the active player at turn start. As soon as the user manually interacts with the
- * camera (OrbitControls 'start' — any orbit/pan/zoom), auto-focus is disabled for
- * the rest of the session so the free camera is never yanked back.
+ * Initial snap: on first mount (when both OrbitControls and game state are ready),
+ * controls.target is set to INITIAL_CAM_TARGET (a fixed world point, NOT the
+ * active player's tile) and the camera is placed at INITIAL_CAM_TARGET +
+ * INITIAL_CAM_OFFSET. After that the camera stays exactly where it is — there is
+ * NO per-turn auto-focus drift. Only the user's manual orbit/pan/zoom moves it.
+ *
+ * The live camera debug overlay (throttled ~8x/sec) stays active so the user can
+ * continue tuning the constants via the overlay readout.
  */
 export function CameraRig() {
   // Mutable ref (not passed directly as JSX `ref=`) so `handleMount` can assign
   // `.current`. The `| null` initializer widens this to a MutableRefObject.
   const controlsRef = useRef<OrbitControlsImpl | null>(null);
 
-  // Lerp goal for the auto-focus (updated via useEffect when id or position changes).
-  const focusGoal = useRef<THREE.Vector3>(new THREE.Vector3(0, 0, 0));
-  const interacting = useRef(false);
-  // Once the user manually moves the camera, auto-focus is permanently off.
-  const userTookControl = useRef(false);
+  // Track whether we've snapped to the fixed initial view on first mount.
+  const initialSnapDone = useRef(false);
 
-  // Read active player from the store (selector keeps re-renders minimal).
+  // Tracks physical Shift key state so the cameraMode restore can set LEFT correctly
+  // even when Shift is held across a thirdPerson→free toggle.
+  const shiftHeldRef = useRef(false);
+
+  // Original orbit clamp values captured once on first cameraMode effect run.
+  // Stored so thirdPerson can relax them and free-mode restores exactly the originals.
+  const origClampsRef = useRef<{
+    minDistance: number;
+    maxDistance: number;
+    maxPolarAngle: number;
+  } | null>(null);
+
+  const setCameraReadout = useGameStore((s) => s.setCameraReadout);
+  // Throttle accumulator: only push readout ~every 0.12s (~8x/sec, not every frame).
+  const readoutAccum = useRef(0);
+
+  // Access the R3F camera for the initial snap (sets camera position too).
+  const camera = useThree((s) => s.camera);
+
+  // Active player = whose turn it is (NOT socket.id). Doubles as the store-hydration
+  // guard for the initial snap below.
   const activePlayer = useGameStore(selectCurrentPlayer);
+  // Fall back to MY player token when there is no active/current player.
+  const myPlayer = useGameStore(selectMyPlayer);
 
-  // Update the focus goal whenever the active player's id or position changes.
-  // useEffect avoids mutating refs during render (safe under StrictMode).
+  // ── Follow-mode state ────────────────────────────────────────────────────
+  // cameraMode drives whether the useFrame loop follows a token or stays hands-off.
+  const cameraMode = useGameStore((s) => s.cameraMode);
+
+  // Refs mirror the reactive values so the single useFrame closure never goes stale.
+  const cameraModeRef = useRef(cameraMode);
+  cameraModeRef.current = cameraMode;
+  const followTileRef = useRef<number | null>(null);
+  followTileRef.current =
+    activePlayer?.position ?? myPlayer?.position ?? null;
+
+  // Reusable scratch vectors so the follow lerp allocates nothing per frame.
+  const scratchCamPos = useRef(new THREE.Vector3());
+  const scratchTarget = useRef(new THREE.Vector3());
+
+  // Initial snap: on first mount, snap the OrbitControls target to the fixed
+  // INITIAL_CAM_TARGET and place the camera at target + INITIAL_CAM_OFFSET.
+  // This fires each render until both controls and state are ready, then locks.
+  // No dependency array — intentional: re-checks cheaply until the snap fires.
   useEffect(() => {
-    if (!activePlayer) return;
-    const [wx, , wz] = tileToWorld(activePlayer.position);
-    focusGoal.current.set(wx, 0, wz);
-  }, [activePlayer?.id, activePlayer?.position]); // eslint-disable-line react-hooks/exhaustive-deps
+    if (initialSnapDone.current) return;
+    if (!activePlayer) return;          // wait for store hydration
+    const controls = controlsRef.current;
+    if (!controls) return;             // wait for OrbitControls mount
+
+    const target = new THREE.Vector3(...INITIAL_CAM_TARGET);
+    controls.target.copy(target);
+
+    camera.position.set(
+      target.x + INITIAL_CAM_OFFSET[0],
+      target.y + INITIAL_CAM_OFFSET[1],
+      target.z + INITIAL_CAM_OFFSET[2],
+    );
+    controls.update();
+
+    initialSnapDone.current = true;
+  });
+  // Intentionally no dependency array: re-checks each render until both controls
+  // and activePlayer are ready (may arrive after first render due to Suspense /
+  // store hydration). Once initialSnapDone is set it exits immediately.
 
   // SHIFT → pan: swap the LEFT mouse button action while Shift is held. Right
   // stays PAN and middle stays DOLLY (set once when the controls mount below).
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
       if (e.key !== 'Shift') return;
+      // Always keep shiftHeldRef accurate so the cameraMode restore reads correct state.
+      shiftHeldRef.current = true;
+      // While the camera is locked in third-person follow, Shift-pan is inert on controls.
+      if (cameraModeRef.current === 'thirdPerson') return;
       const controls = controlsRef.current;
       if (controls) controls.mouseButtons.LEFT = THREE.MOUSE.PAN;
     };
     const onKeyUp = (e: KeyboardEvent) => {
       if (e.key !== 'Shift') return;
+      // Always keep shiftHeldRef accurate so the cameraMode restore reads correct state.
+      shiftHeldRef.current = false;
+      if (cameraModeRef.current === 'thirdPerson') return;
       const controls = controlsRef.current;
       if (controls) controls.mouseButtons.LEFT = THREE.MOUSE.ROTATE;
     };
@@ -73,24 +154,87 @@ export function CameraRig() {
     };
   }, []);
 
-  useFrame(() => {
+  // Orbit-lock toggle: when third-person follow is ON, disable the LEFT mouse
+  // rotate/pan so manual orbit cannot fight the follow; when returning to free,
+  // restore LEFT to PAN or ROTATE based on current Shift state (Fix 1). Also
+  // relaxes orbit clamps while following so pose tuning never hits a silent
+  // clamp; restores exact originals on return to free (Fix 2).
+  useEffect(() => {
     const controls = controlsRef.current;
     if (!controls) return;
-    // Stop fighting the user once they've taken manual control.
-    if (userTookControl.current) return;
-    if (interacting.current) return;
 
-    // Gently ease the orbit target toward the active player's tile.
-    controls.target.lerp(focusGoal.current, 0.05);
-    controls.update();
+    // Capture originals once on first run (controls is mounted by this point).
+    if (!origClampsRef.current) {
+      origClampsRef.current = {
+        minDistance: controls.minDistance,
+        maxDistance: controls.maxDistance,
+        maxPolarAngle: controls.maxPolarAngle,
+      };
+    }
+
+    if (cameraMode === 'thirdPerson') {
+      // Lock LEFT so orbit cannot fight the follow lerp.
+      controls.mouseButtons.LEFT = undefined;
+      // Relax clamps so the follow pose lands cleanly across any tuning range.
+      controls.minDistance = 0.5;
+      controls.maxPolarAngle = Math.PI / 2 - 0.01;
+      // maxDistance left unchanged — no need to constrain far bound while following.
+    } else {
+      // Restore LEFT respecting current physical Shift state (Fix 1).
+      controls.mouseButtons.LEFT = shiftHeldRef.current
+        ? THREE.MOUSE.PAN
+        : THREE.MOUSE.ROTATE;
+      // Restore exact original clamps so free scroll-zoom + orbit are unchanged.
+      const orig = origClampsRef.current;
+      controls.minDistance = orig.minDistance;
+      controls.maxDistance = orig.maxDistance;
+      controls.maxPolarAngle = orig.maxPolarAngle;
+    }
+  }, [cameraMode]);
+
+  useFrame((_state, delta) => {
+    const controls = controlsRef.current;
+    if (!controls) return;
+
+    // ── Third-person follow (only when the mode is on) ───────────────────────
+    // When 'free' we do NO work here and never touch the camera/target, so the
+    // user's manual orbit/pan/zoom is never overridden. When 'thirdPerson' we
+    // ease the camera + target toward the over-the-shoulder pose behind the
+    // active player's token every frame. The pose is world-space (already
+    // BOARD_ROTATION-applied via tileToWorldRotated), matching the camera space.
+    if (cameraModeRef.current === 'thirdPerson') {
+      const tile = followTileRef.current;
+      if (tile != null) {
+        const pose = thirdPersonPose(tile);
+        // Frame-rate-aware ease-out: alpha grows with delta, capped at 1.
+        const alpha = 1 - Math.exp(-FOLLOW_LERP_RATE * delta);
+        const cam = controls.object;
+        scratchCamPos.current.copy(pose.cameraPos);
+        scratchTarget.current.copy(pose.target);
+        cam.position.lerp(scratchCamPos.current, alpha);
+        controls.target.lerp(scratchTarget.current, alpha);
+        controls.update();
+      }
+      // If tile is null (no active/my player), no-op: stay put (effectively free).
+    }
+
+    // ── Throttled camera debug readout (~8x/sec, not every frame) ────────────
+    readoutAccum.current += delta;
+    if (readoutAccum.current >= 0.12) {
+      readoutAccum.current = 0;
+      const cam = controls.object;
+      const tgt = controls.target;
+      const readout: CameraReadout = {
+        pos: [cam.position.x, cam.position.y, cam.position.z],
+        target: [tgt.x, tgt.y, tgt.z],
+        offset: [cam.position.x - tgt.x, cam.position.y - tgt.y, cam.position.z - tgt.z],
+        dist: cam.position.distanceTo(tgt),
+      };
+      setCameraReadout(readout);
+    }
+    // Auto-focus drift is intentionally removed. The camera loads at the fixed
+    // initial framing and stays there — only the user's orbit/pan/zoom moves it.
   });
-
-  // Any manual interaction (orbit / pan / zoom) permanently disables auto-focus.
-  const handleStart = useCallback(() => {
-    interacting.current = true;
-    userTookControl.current = true;
-  }, []);
-  const handleEnd = useCallback(() => { interacting.current = false; }, []);
 
   // Set the mouse button roles once the controls instance is available.
   // LEFT = ROTATE by default, toggled to PAN by Shift (see listeners above).
@@ -114,8 +258,6 @@ export function CameraRig() {
       maxPolarAngle={1.55}
       minDistance={2.5}
       maxDistance={70}
-      onStart={handleStart}
-      onEnd={handleEnd}
     />
   );
 }

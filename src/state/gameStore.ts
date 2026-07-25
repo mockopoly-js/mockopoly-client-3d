@@ -23,6 +23,20 @@ const VALID_TOKENS: readonly TokenType[] = [
 
 export type Screen = 'menu' | 'lobby' | 'game' | 'game-over';
 
+export interface CameraReadout {
+  pos: [number, number, number];
+  target: [number, number, number];
+  offset: [number, number, number];
+  dist: number;
+}
+
+/**
+ * Camera view mode:
+ * - 'free'        — default free-orbit navigation (Blender-style), unchanged.
+ * - 'thirdPerson' — over-the-shoulder view locked behind the active player token.
+ */
+export type CameraMode = 'free' | 'thirdPerson';
+
 interface GameStore {
   // ── durable mirror of server state (was LocalGameState) ──
   state: GameState | null;
@@ -40,6 +54,19 @@ interface GameStore {
   showDevHacks: boolean;
   screen: Screen;
   gameOver: S_GameOver | null;
+
+  // ── camera debug readout (written throttled from CameraRig.useFrame) ──
+  cameraReadout: CameraReadout | null;
+  setCameraReadout: (v: CameraReadout) => void;
+
+  // ── camera view mode (free-orbit vs over-the-shoulder follow) ──
+  cameraMode: CameraMode;
+  setCameraMode: (m: CameraMode) => void;
+  toggleCameraMode: () => void;
+
+  // ── read-only deed-card inspect (board tile click) ──
+  // Separate from selectedPropertyIndex/showPropertyCard which drive MortgagePanel.
+  deedCardIndex: number | null;
 
   // ── character + token color selection (persisted) ──
   selectedCharacter: string;
@@ -60,6 +87,8 @@ interface GameStore {
   addToast: (message: string, type?: ToastType) => void;
   removeToast: (timestamp: number) => void;
   selectProperty: (index: number | null) => void;
+  openDeedCard: (index: number) => void;
+  closeDeedCard: () => void;
   toggleTradePanel: (show?: boolean) => void;
   togglePartnershipPanel: (show?: boolean) => void;
   toggleDealPanel: (show?: boolean) => void;
@@ -100,6 +129,10 @@ export const useGameStore = create<GameStore>((set, get) => ({
   showDevHacks: false,
   screen: 'menu',
   gameOver: null,
+  deedCardIndex: null,
+  cameraReadout: null,
+  cameraMode: 'free',
+
   selectedCharacter: getStoredCharacter(),
   selectedCharacterColor: getStoredCharacterColor(),
   selectedToken: getStoredToken(),
@@ -144,6 +177,12 @@ export const useGameStore = create<GameStore>((set, get) => ({
 
   selectProperty: (index) =>
     set({ selectedPropertyIndex: index, showPropertyCard: index !== null }),
+  setCameraReadout: (v) => set({ cameraReadout: v }),
+  setCameraMode: (m) => set({ cameraMode: m }),
+  toggleCameraMode: () =>
+    set((s) => ({ cameraMode: s.cameraMode === 'free' ? 'thirdPerson' : 'free' })),
+  openDeedCard: (index) => set({ deedCardIndex: index }),
+  closeDeedCard: () => set({ deedCardIndex: null }),
   toggleTradePanel: (show) =>
     set((s) => ({ showTradePanel: show ?? !s.showTradePanel })),
   togglePartnershipPanel: (show) =>
@@ -170,6 +209,9 @@ export const useGameStore = create<GameStore>((set, get) => ({
       showDevHacks: false,
       screen: 'menu',
       gameOver: null,
+      deedCardIndex: null,
+      cameraReadout: null,
+      cameraMode: 'free',
     });
   },
 }));

@@ -57,7 +57,7 @@ export type CharacterClip =
   | 'RecieveHit';
 
 export interface CharacterTokenHandle {
-  play: (clip: CharacterClip, opts?: { loop?: boolean; fade?: number }) => void;
+  play: (clip: CharacterClip, opts?: { loop?: boolean; fade?: number; onFinished?: () => void }) => void;
 }
 
 /**
@@ -231,6 +231,15 @@ interface CharacterTokenProps {
    * position lockstep.
    */
   clip?: CharacterClip;
+  /**
+   * When true, suppresses the reactive `clip` effect so an in-flight one-shot
+   * celebration (Victory) is not stomped by a concurrent clip-prop change (e.g.
+   * the Run→Idle flip that fires when the walk completes on the same render that
+   * started the Victory). The `onFinished` callback on the one-shot is
+   * responsible for returning to the correct looping clip imperatively once the
+   * celebration ends. Default false.
+   */
+  isCelebrating?: boolean;
   /** Local vertical offset for the whole rig, e.g. to seat feet on the tile. */
   y?: number;
 }
@@ -242,7 +251,7 @@ interface CharacterTokenProps {
  * `play('Walk')` / `play('Idle')` to switch.
  */
 export const CharacterToken = forwardRef<CharacterTokenHandle, CharacterTokenProps>(
-  function CharacterToken({ url, scale = 0.2, initialClip = 'Idle', clip, y = 0, baseColor }, apiRef) {
+  function CharacterToken({ url, scale = 0.2, initialClip = 'Idle', clip, isCelebrating = false, y = 0, baseColor }, apiRef) {
     const gltf = useGLTF(url);
 
     // Per-instance clone (independent skeleton). Materials are cloned so each
@@ -294,7 +303,7 @@ export const CharacterToken = forwardRef<CharacterTokenHandle, CharacterTokenPro
 
     const play = useMemo(
       () =>
-        (clip: CharacterClip, opts?: { loop?: boolean; fade?: number }) => {
+        (clip: CharacterClip, opts?: { loop?: boolean; fade?: number; onFinished?: () => void }) => {
           const next = actions[clip];
           if (!next) return;
           if (current.current === clip) return;
@@ -311,8 +320,23 @@ export const CharacterToken = forwardRef<CharacterTokenHandle, CharacterTokenPro
             next.fadeIn(fade).play();
           }
           current.current = clip;
+
+          // Wire up the onFinished callback for LoopOnce clips only. Subscribe to
+          // the mixer's 'finished' event, verify this is the right action (guards
+          // against stale callbacks from a rapid sequence of one-shots), then
+          // remove the listener so it fires exactly once and never leaks.
+          if (opts?.loop === false && opts.onFinished) {
+            const cb = opts.onFinished;
+            const onMixerFinished = (e: THREE.Event) => {
+              const ev = e as THREE.Event & { action: THREE.AnimationAction };
+              if (ev.action !== next) return; // not our action — ignore
+              mixer.removeEventListener('finished', onMixerFinished);
+              cb();
+            };
+            mixer.addEventListener('finished', onMixerFinished);
+          }
         },
-      [actions],
+      [actions, mixer],
     );
 
     // Start on the initial clip once actions are ready.
@@ -323,14 +347,28 @@ export const CharacterToken = forwardRef<CharacterTokenHandle, CharacterTokenPro
     // Reactive clip prop: crossfade whenever it changes (Idle↔Walk driving).
     // `play` early-returns if the clip is already current, so redundant renders
     // are cheap and never re-trigger the animation.
+    //
+    // CELEBRATION GUARD: if a one-shot Victory (or similar) is currently in
+    // flight (`isCelebrating` prop is true), do NOT re-issue the clip — the
+    // prop change (e.g. Run→Idle on walk completion) would stomp the just-
+    // started imperative one-shot and crossfade it to weight 0.  The
+    // `onFinished` callback on the one-shot imperatively restores the correct
+    // looping clip once the celebration ends. isCelebrating is intentionally
+    // NOT in the dependency array — adding it would cause the effect to re-run
+    // when the flag clears (after Victory), which could play the stale clip
+    // value at the wrong time. We only care about the clip change; at that
+    // moment we check the latest isCelebrating value via closure capture.
     useEffect(() => {
+      if (isCelebrating) return;
       if (clip && actions[clip]) play(clip);
-    }, [clip, actions, play]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [clip]);
 
     useImperativeHandle(apiRef, () => ({ play }), [play]);
 
-    // Keep the mixer reference from being GC-surprised (drei ticks it in useFrame).
-    void mixer;
+    // mixer is used in the play closure above (addEventListener/removeEventListener)
+    // and also ticked by drei's useFrame internally. Referencing it here ensures
+    // the linter does not flag it as unused when the play memo is the sole consumer.
 
     return (
       <group ref={rootRef} scale={scale} position-y={y}>
