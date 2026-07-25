@@ -48,9 +48,11 @@ const ALBEDO = resolve(ROOT, 'public', 'images', 'board.webp');
 const OUT = resolve(ROOT, 'public', 'images', 'board-normal.webp');
 // Grayscale HEIGHT MAP written alongside the normal map — a BINARY-MORPHOLOGY
 // ink mask over the (1 - luminance) field (DARK INK = HIGH): hard threshold →
-// dilate → light bevel (see §1b). Faces + colour strips are gated flat; thin
-// text is dilated thick enough to survive the coarse vertex grid; ridge sides
-// are beveled smooth. Consumed by BoardTiles.tsx as mat.displacementMap on the
+// MINIMAL dilate → tight bevel (see §1b). Faces + colour strips are gated flat;
+// thin text is only barely dilated (1px) so ONLY real ink grows (coverage stays
+// near ink level, ~8–12%, not flooded), and the high (2048²) tessellation in
+// BoardTiles resolves the strokes as CRISP ridges; ridge sides are beveled
+// smooth. Consumed by BoardTiles.tsx as mat.displacementMap on the
 // subdivided top plane so the print physically RAISES as geometry (real
 // silhouette relief), while the normal map keeps supplying fine per-pixel
 // detail. Same dims/basis as the albedo (2048×2048), LINEAR (displacement is NOT
@@ -69,38 +71,43 @@ const HEIGHT_BLUR_SIGMA = 1.0;
 
 // ── DISPLACEMENT (height map) MORPHOLOGY: THRESHOLD → DILATE → BEVEL ──────────
 // These affect ONLY the displacementMap output (board-height.webp), NOT the
-// normal-map bake. The earlier smoothstep(0.55,0.85) + 2.5px blur raised the BIG
-// solid ink (icons, borders) fine, but THIN strokes (property names, prices) got
-// blurred below the height threshold and vanished — and the ridge sides looked
-// spiky from the side. Fix with a classic BINARY MORPHOLOGY pipeline on the
-// inverted height h = 1 - luminance (DARK INK = HIGH):
+// normal-map bake. A previous bake OVER-DILATED (2px @ 0.2 cut): it grew the
+// real ~7% ink mask to ~41% board coverage, so large areas rose as broad soft
+// mounds → WOBBLY relief. The fix is SURGICAL — a classic BINARY MORPHOLOGY
+// pipeline on the inverted height h = 1 - luminance (DARK INK = HIGH) that grows
+// ONLY real ink, then lets the high tessellation (2048² verts in BoardTiles)
+// resolve thin strokes as crisp ridges instead of relying on fat dilation:
 //
 //   1. HARD THRESHOLD → clean binary ink mask
-//        binary = (h > INK_CUT) ? 1 : 0                      (INK_CUT = 0.6)
+//        binary = (h > INK_CUT) ? 1 : 0                      (INK_CUT = 0.55)
 //      Zeroes near-white tile FACES (h≈0.05–0.30) AND mid-tone COLOUR STRIPS
 //      (h≈0.3–0.5) outright — NO face/strip noise can ever displace. Only
-//      near-black ink (text, lines, borders, icons, GO arrow, h≳0.6) → 1.
+//      near-black ink (text, lines, borders, icons, GO arrow, h≳0.55) → 1.
+//      Raw-binary coverage should be SMALL (~6–8%); it is logged at bake time.
 //
-//   2. DILATE (grow) the binary ink so THIN strokes fatten enough to survive the
-//      coarse 1024²-vertex grid:
+//   2. MINIMAL DILATE (barely grow) the binary ink so 1px gaps in thin strokes
+//      close into solid ridges — NOT a flood:
 //        dilated = (blur(binary, DILATE_PX) > DILATE_CUT) ? 1 : 0
-//      Blur+low-threshold = morphological dilation. LOW cut (0.2) grows the mask
-//      outward by ~DILATE_PX. Because faces are ALREADY 0 (step 1), the blur has
-//      nothing to smear up from them — it only thickens REAL ink. This is what
-//      lets 1px text strokes become raiseable ridges.
+//      Blur+threshold = morphological dilation. DILATE_PX = 1 with a HIGH cut
+//      (0.4) grows the mask by only ~1px — just enough to make thin strokes solid
+//      without smearing them into blobs. Because faces are ALREADY 0 (step 1),
+//      the blur has nothing to smear up from them. Post-dilate coverage should
+//      land ~8–12% board-wide (NOT ~41%); it is logged at bake time. Keeping
+//      coverage near real-ink level is what KILLS the wobble — crispness then
+//      comes from tessellation, not from dilation.
 //
-//   3. LIGHT BEVEL BLUR → smooth ridge sides (kill the spiky stair-steps):
-//        height = blur(dilated, BEVEL_PX)                    (~1–1.5px, small)
-//      Softens the binary walls into clean beveled ramps so the sides read smooth
-//      from a grazing angle, without eroding the (now-fattened) ridge tops.
+//   3. TIGHT BEVEL BLUR → smooth ridge sides just enough (kill stair-steps):
+//        height = blur(dilated, BEVEL_PX)                    (~0.6px, small)
+//      A small blur softens the binary walls into crisp beveled ramps so the ridge
+//      sides read clean from a grazing angle, WITHOUT mushing the thin ridge tops.
 //
 // Tune: INK_CUT UP if faces still lift / DOWN if faint ink vanishes; DILATE_PX up
-// to fatten thin text more (at the cost of blob merging); BEVEL_PX up for softer
-// sides. Because step 1 is a HARD binary, faces + strips are guaranteed flat.
-const INK_CUT = 0.6;
-const DILATE_PX = 2;
-const DILATE_CUT = 0.2;
-const BEVEL_PX = 1;
+// only if 1px strokes still break up (at the cost of coverage/wobble); BEVEL_PX up
+// for softer sides. Because step 1 is a HARD binary, faces + strips are flat.
+const INK_CUT = 0.55;
+const DILATE_PX = 1;
+const DILATE_CUT = 0.4;
+const BEVEL_PX = 0.6;
 // OpenGL (green = +Y up). Set false for a DirectX-style (green = -Y) map.
 const OPENGL_Y = true;
 
@@ -136,33 +143,44 @@ async function main() {
     .toBuffer(); // 1 channel, W*H bytes
 
   // ── 1b. HEIGHT MAP OUTPUT (displacementMap) — MORPHOLOGY, LINEAR ───────────
-  // Displacement is sampled in the VERTEX shader over a 1024²-vertex grid. The
-  // OLD smoothstep(0.55,0.85) + 2.5px blur raised BIG solid ink fine, but THIN
-  // strokes (property names, prices) got blurred below threshold and vanished,
-  // and ridge sides looked spiky. Replace with binary MORPHOLOGY on the inverted
-  // height h = 1 - luminance (DARK INK = HIGH): THRESHOLD → DILATE → BEVEL.
+  // Displacement is sampled in the VERTEX shader over a 2048²-vertex grid (~1px
+  // per vertex — thin strokes now span enough verts to form defined ridges). A
+  // previous bake OVER-DILATED (2px @ 0.2) to ~41% coverage → broad soft mounds
+  // = WOBBLY. Replace with a SURGICAL binary MORPHOLOGY on the inverted height
+  // h = 1 - luminance (DARK INK = HIGH): THRESHOLD → MINIMAL DILATE → TIGHT BEVEL.
   //
   //   1. binary  = (h > INK_CUT) ? 1 : 0     hard gate — faces + colour strips
   //                                          go to a FLAT 0 (no face noise), only
-  //                                          near-black ink stays 1.
+  //                                          near-black ink stays 1. (~6–8% cov.)
   //   2. dilated = (blur(binary, DILATE_PX) > DILATE_CUT) ? 1 : 0
-  //                                          grow ink outward so THIN text/prices
-  //                                          fatten enough to survive the coarse
-  //                                          vertex grid. Faces are already 0 so
-  //                                          the blur only thickens real ink.
-  //   3. height  = blur(dilated, BEVEL_PX)   small blur → smooth beveled ridge
-  //                                          sides (kills spiky stair-steps).
+  //                                          BARELY grow ink (1px @ 0.4) — just
+  //                                          close 1px gaps so thin strokes are
+  //                                          solid, NOT flood the faces. Faces are
+  //                                          already 0 so the blur only touches
+  //                                          real ink. (~8–12% cov, NOT 41%.)
+  //   3. height  = blur(dilated, BEVEL_PX)   tight blur (0.6px) → crisp beveled
+  //                                          ridge sides (kills stair-steps, keeps
+  //                                          thin ridge tops sharp).
   //
+  // Coverage of the raw binary and of the dilated mask are logged so the bake can
+  // be verified to stay near ink level (crispness comes from tessellation).
   // Written at the albedo's native size, single grayscale channel, LINEAR (raw
   // ->webp keeps values as authored — displacement, like normals, is not colour).
 
   // Step 1 — HARD THRESHOLD to a clean binary ink mask.
   const binary = Buffer.alloc(W * H);
   const inkCut255 = INK_CUT * 255; // compare on the inverted height h = 1 - luma
+  let rawInkPx = 0;
   for (let p = 0; p < binary.length; p++) {
     const hgt = 255 - heightRaw[p]; // DARK INK = HIGH, 0..255
-    binary[p] = hgt > inkCut255 ? 255 : 0;
+    if (hgt > inkCut255) {
+      binary[p] = 255;
+      rawInkPx++;
+    } else {
+      binary[p] = 0;
+    }
   }
+  const rawCoveragePct = (rawInkPx / binary.length) * 100;
 
   // Step 2 — DILATE: blur the binary then re-threshold LOW (classic dilation).
   const binaryBlurred = await sharp(binary, { raw: { width: W, height: H, channels: 1 } })
@@ -171,21 +189,35 @@ async function main() {
     .toBuffer();
   const dilated = Buffer.alloc(W * H);
   const dilateCut255 = DILATE_CUT * 255;
+  let dilatedInkPx = 0;
   for (let p = 0; p < dilated.length; p++) {
-    dilated[p] = binaryBlurred[p] > dilateCut255 ? 255 : 0;
+    if (binaryBlurred[p] > dilateCut255) {
+      dilated[p] = 255;
+      dilatedInkPx++;
+    } else {
+      dilated[p] = 0;
+    }
   }
+  const dilatedCoveragePct = (dilatedInkPx / dilated.length) * 100;
 
   // Step 3 — LIGHT BEVEL BLUR: smooth ridge sides without eroding the ridge tops.
   const heightField = await sharp(dilated, { raw: { width: W, height: H, channels: 1 } })
     .blur(BEVEL_PX)
     .raw()
     .toBuffer();
+  // Mean height (0..1) after the bevel — a proxy for overall raised area/height.
+  let heightSum = 0;
+  for (let p = 0; p < heightField.length; p++) heightSum += heightField[p];
+  const meanPct = (heightSum / heightField.length / 255) * 100;
   await sharp(heightField, { raw: { width: W, height: H, channels: 1 } })
     .webp({ quality: 90 })
     .toFile(OUT_HEIGHT);
   const heightStat = await stat(OUT_HEIGHT);
   console.log(
     `Wrote height  : ${OUT_HEIGHT.replace(ROOT + '/', '')} (${heightStat.size} bytes) [morphology: threshold(>${INK_CUT}) → dilate(${DILATE_PX}px@${DILATE_CUT}) → bevel(${BEVEL_PX}px)]`,
+  );
+  console.log(
+    `  coverage    : raw-binary=${rawCoveragePct.toFixed(1)}% (target ~6–8%)  post-dilate=${dilatedCoveragePct.toFixed(1)}% (target ~8–12%, NOT 41%)  mean=${meanPct.toFixed(1)}%`,
   );
 
   // ── 2. SOBEL GRADIENT -> TANGENT-SPACE NORMAL ──────────────────────────────

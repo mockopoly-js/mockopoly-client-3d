@@ -103,10 +103,14 @@ const BOARD_NORMAL_Y_SIGN = 1; // set to -1 if relief looks inverted
  * top, while the slab keeps providing thickness + the four edge/bottom faces.
  *
  * TUNING KNOBS:
- *   BOARD_SEGMENTS          – tessellation per axis. 1024 → ~2M tris (desktop).
- *                             DO NOT push beyond 1024 (fine text stays the normal
- *                             map's job; displacement is for borders/big features
- *                             + overall relief + silhouette). Mobile forces 0.
+ *   BOARD_SEGMENTS          – tessellation per axis. 2048 → ~8.4M tris (desktop).
+ *                             The board albedo is 2048px, so 2048 segments ≈ 1px
+ *                             per vertex: thin text strokes (~4–6px) now span
+ *                             enough vertices to form CRISP defined ridges instead
+ *                             of soft blobs. This high tessellation (not fat
+ *                             dilation) is what makes the ink read sharp. Costs
+ *                             desktop FPS — accepted. Mobile forces 0 (a single
+ *                             flat quad; 2048² would kill mobile GPUs).
  *   BOARD_DISPLACEMENT_SCALE – world-unit height of the raised ink. Board is ~10
  *                             wide, tiles ~0.9; 0.07 reads as a firm embossed
  *                             print with the ink-only smooth height bake. Raise
@@ -116,7 +120,7 @@ const BOARD_NORMAL_Y_SIGN = 1; // set to -1 if relief looks inverted
  *                             0.07 + the ink-only smoothstep bake reads as clean
  *                             raised lines/letters, not spikes.)
  */
-const BOARD_SEGMENTS = 1024;
+const BOARD_SEGMENTS = 2048;
 const BOARD_DISPLACEMENT_SCALE = 0.07;
 /**
  * Nudge the slab's flat top face just below the displaced plane so the original
@@ -132,9 +136,10 @@ export function BoardTiles() {
     '/images/board-height.webp',
   ]);
   const maxAniso = useThree((s) => s.gl.capabilities.getMaxAnisotropy());
-  // 1024² ≈ 2M tris is fine on desktop but too heavy for mobile GPUs. 0 segments
-  // → a single flat quad → displacement is a no-op (normal map still works),
-  // while desktop gets the full displaced silhouette.
+  // 2048² ≈ 8.4M tris (~1px/vertex → crisp thin-stroke ridges) is heavy but
+  // accepted on desktop; far too much for mobile GPUs. 0 segments → a single flat
+  // quad → displacement is a no-op (normal map still works), while desktop gets
+  // the full high-resolution displaced silhouette.
   const isMobile = useIsMobile();
   const segments = isMobile ? 0 : BOARD_SEGMENTS;
 
