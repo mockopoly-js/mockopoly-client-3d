@@ -2,7 +2,7 @@ import { useMemo } from 'react';
 import * as THREE from 'three';
 import { useTexture } from '@react-three/drei';
 import { useThree } from '@react-three/fiber';
-import { SPACE_POSITIONS, BOARD_WORLD_SIZE } from './positions';
+import { BOARD_WORLD_SIZE } from './positions';
 
 /**
  * The real 2D Monopoly board (board.webp, the printed square that fills the
@@ -119,5 +119,3 @@ export function BoardTiles() {
   );
 }
 
-// re-export so consumers importing positions via BoardTiles keep working
-export { SPACE_POSITIONS };

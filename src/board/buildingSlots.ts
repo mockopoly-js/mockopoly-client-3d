@@ -9,7 +9,7 @@
 import { tileToWorld, BOARD_WORLD_SIZE } from './positions';
 
 /** Buildings rest on the board surface (matches the tile top in the 3D scene). */
-export const TILE_SURFACE_Y = 0.02;
+const TILE_SURFACE_Y = 0.02;
 
 /**
  * Actual regular-tile width in world units.

@@ -35,7 +35,7 @@ export interface CameraReadout {
  * - 'free'        — default free-orbit navigation (Blender-style), unchanged.
  * - 'thirdPerson' — over-the-shoulder view locked behind the active player token.
  */
-export type CameraMode = 'free' | 'thirdPerson';
+type CameraMode = 'free' | 'thirdPerson';
 
 interface GameStore {
   // ── durable mirror of server state (was LocalGameState) ──

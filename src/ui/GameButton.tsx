@@ -2,7 +2,7 @@ import type { CSSProperties, ReactNode } from 'react';
 import { FONT_FAMILY } from '../constants/fonts';
 import { useIsMobile } from './useIsMobile';
 
-export type GameButtonVariant = 'primary' | 'secondary' | 'success' | 'tertiary' | 'dark';
+type GameButtonVariant = 'primary' | 'secondary' | 'success' | 'tertiary' | 'dark';
 
 interface GameButtonProps {
   variant?: GameButtonVariant;

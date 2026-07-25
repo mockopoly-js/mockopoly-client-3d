@@ -1,4 +1,4 @@
-import type { BoardSpace, GameCard } from '../types/GameState';
+import type { BoardSpace } from '../types/GameState';
 
 // ─── Board Spaces (0–39) ──────────────────────────────────────────────────────
 // Standard UK Monopoly layout starting from GO (index 0), moving clockwise.
@@ -56,11 +56,6 @@ export const BOARD_SPACES: BoardSpace[] = [
   { index: 39, type: 'property',      name: 'Mayfair',              price: 4000000, colorGroup: 'dark-blue', cardFrame: 27, rents: [5000000,20000000,60000000,140000000,170000000,200000000],houseCost: 20000000, mortgageValue: 2000000 },
 ];
 
-// Quick lookup map by space index
-export const SPACE_MAP = new Map<number, BoardSpace>(
-  BOARD_SPACES.map(s => [s.index, s])
-);
-
 // All purchasable space indices
 export const PURCHASABLE_SPACES = BOARD_SPACES
   .filter(s => s.type === 'property' || s.type === 'railroad' || s.type === 'utility')
@@ -75,52 +70,3 @@ export const COLOR_GROUPS: Record<string, number[]> = BOARD_SPACES
     return acc;
   }, {});
 
-// ─── Community Chest Cards (16) ───────────────────────────────────────────────
-
-export const COMMUNITY_CHEST_CARDS: GameCard[] = [
-  { id: 0,  deck: 'community-chest', description: 'Advance to Go — collect £2M.',                                             effect: { type: 'advance-to', value: 0 } },
-  { id: 1,  deck: 'community-chest', description: 'Bank error in your favour — collect £2M.',                                 effect: { type: 'money', value: 2000000 } },
-  { id: 2,  deck: 'community-chest', description: "Doctor's fee — pay £500K.",                                                effect: { type: 'money', value: -500000 } },
-  { id: 3,  deck: 'community-chest', description: 'From sale of stock — collect £500K.',                                      effect: { type: 'money', value: 500000 } },
-  { id: 4,  deck: 'community-chest', description: 'Get Out of Jail Free.',                                                   effect: { type: 'jail-free' } },
-  { id: 5,  deck: 'community-chest', description: 'Go to Jail — go directly to jail.',                                       effect: { type: 'jail' } },
-  { id: 6,  deck: 'community-chest', description: 'Holiday fund matures — collect £1M.',                                      effect: { type: 'money', value: 1000000 } },
-  { id: 7,  deck: 'community-chest', description: 'Income tax refund — collect £200K.',                                       effect: { type: 'money', value: 200000 } },
-  { id: 8,  deck: 'community-chest', description: 'It is your birthday — collect £100K from every player.',                   effect: { type: 'money-from-players', value: 100000 } },
-  { id: 9,  deck: 'community-chest', description: 'Life insurance matures — collect £1M.',                                    effect: { type: 'money', value: 1000000 } },
-  { id: 10, deck: 'community-chest', description: 'Pay hospital fees — pay £1M.',                                             effect: { type: 'money', value: -1000000 } },
-  { id: 11, deck: 'community-chest', description: 'Pay school fees — pay £1.5M.',                                             effect: { type: 'money', value: -1500000 } },
-  { id: 12, deck: 'community-chest', description: 'Receive £250K consultancy fee.',                                           effect: { type: 'money', value: 250000 } },
-  { id: 13, deck: 'community-chest', description: 'You are assessed for street repairs — pay £400K per house, £1.15M per hotel.',effect: { type: 'money-per-building', perHouse: 400000, perHotel: 1150000 } },
-  { id: 14, deck: 'community-chest', description: 'You have won second prize in a beauty contest — collect £100K.',           effect: { type: 'money', value: 100000 } },
-  { id: 15, deck: 'community-chest', description: 'You inherit £1M.',                                                         effect: { type: 'money', value: 1000000 } },
-];
-
-// ─── Chance Cards (16) ────────────────────────────────────────────────────────
-
-export const CHANCE_CARDS: GameCard[] = [
-  { id: 0,  deck: 'chance', description: 'Advance to Go — collect £2M.',                                                        effect: { type: 'advance-to', value: 0 } },
-  { id: 1,  deck: 'chance', description: 'Advance to Trafalgar Square — if you pass Go collect £2M.',                           effect: { type: 'advance-to', value: 24 } },
-  { id: 2,  deck: 'chance', description: 'Advance to Mayfair.',                                                                effect: { type: 'advance-to', value: 39 } },
-  { id: 3,  deck: 'chance', description: 'Advance to Pall Mall — if you pass Go collect £2M.',                                  effect: { type: 'advance-to', value: 11 } },
-  { id: 4,  deck: 'chance', description: 'Advance to nearest utility. If unowned you may buy. If owned pay 10× dice roll.',    effect: { type: 'advance-nearest', targetType: 'utility' } },
-  { id: 5,  deck: 'chance', description: 'Advance to nearest railway. If unowned you may buy. If owned pay 2× normal rent.',   effect: { type: 'advance-nearest', targetType: 'railroad' } },
-  { id: 6,  deck: 'chance', description: 'Bank pays you a dividend of £500K.',                                                  effect: { type: 'money', value: 500000 } },
-  { id: 7,  deck: 'chance', description: 'Get Out of Jail Free.',                                                              effect: { type: 'jail-free' } },
-  { id: 8,  deck: 'chance', description: 'Go back 3 spaces.',                                                                  effect: { type: 'move-back', value: 3 } },
-  { id: 9,  deck: 'chance', description: 'Go to Jail — go directly to jail.',                                                  effect: { type: 'jail' } },
-  { id: 10, deck: 'chance', description: 'Make general repairs on all your properties — pay £250K per house, £1M per hotel.',    effect: { type: 'money-per-building', perHouse: 250000, perHotel: 1000000 } },
-  { id: 11, deck: 'chance', description: 'Speeding fine — pay £150K.',                                                          effect: { type: 'money', value: -150000 } },
-  { id: 12, deck: 'chance', description: 'Take a trip to Kings Cross Station — if you pass Go collect £2M.',                    effect: { type: 'advance-to', value: 5 } },
-  { id: 13, deck: 'chance', description: 'You have been elected Chairman of the Board — pay each player £500K.',                effect: { type: 'money-from-players', value: -500000 } },
-  { id: 14, deck: 'chance', description: 'Your building loan matures — collect £1.5M.',                                         effect: { type: 'money', value: 1500000 } },
-  { id: 15, deck: 'chance', description: 'You are assessed for street repairs — pay £40K per house, £115K per hotel.',           effect: { type: 'money-per-building', perHouse: 40000, perHotel: 115000 } },
-];
-
-// Card lookup maps
-export const COMMUNITY_CHEST_MAP = new Map<number, GameCard>(
-  COMMUNITY_CHEST_CARDS.map(c => [c.id, c])
-);
-export const CHANCE_MAP = new Map<number, GameCard>(
-  CHANCE_CARDS.map(c => [c.id, c])
-);
