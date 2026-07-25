@@ -64,19 +64,26 @@ const STRENGTH = 2.0;
 // to the height field to suppress single-pixel aliasing on the print edges.
 const HEIGHT_BLUR_SIGMA = 1.0;
 
-// ── DISPLACEMENT (height map) DILATE + CONTRAST ──────────────────────────────
+// ── DISPLACEMENT (height map) INK-ONLY THRESHOLD + SMOOTH ────────────────────
 // These affect ONLY the displacementMap output (board-height.webp), NOT the
-// normal-map bake. The vertex-shader displacement grid (1024²) is far coarser
-// than the 2048² texture, so thin ink must be fattened + solidified to survive.
-//   DILATE_BLUR_SIGMA — px blur to GROW the raised ink into a fatter halo before
-//                       the remap (approximates a ~2–3 px morphological dilate).
-//   REMAP_LO/REMAP_HI — normalized [0..1] contrast window applied AFTER the blur:
-//                       everything ≥ HI (ink + its halo) → full height 1, every-
-//                       thing ≤ LO (paper) → 0. Window [0.12..0.55] lifts the
-//                       blurred halo to solid and crushes paper flat.
-const DILATE_BLUR_SIGMA = 2.0;
-const REMAP_LO = 0.12;
-const REMAP_HI = 0.55;
+// normal-map bake. The earlier low-threshold dilate/remap ([0.12..0.55]) lifted
+// the near-white TILE FACES' own texture noise into spiky canyons once scaled;
+// this replaces it with a HIGH-gated smoothstep so ONLY true black ink raises
+// and everything else (paper, near-white faces, mid-tone colour strips) is flat.
+//
+//   INK_LO / INK_HI — smoothstep gate on the inverted height h = 1 - luminance
+//                     (DARK INK = HIGH). h' = smoothstep(INK_LO, INK_HI, h):
+//                       • white / near-white faces (h≈0.05–0.30) → 0 (flat)
+//                       • mid-tone COLOUR PROPERTY STRIPS (h≈0.3–0.5) → ~0 (flat)
+//                       • near-black grid lines / text / icons / borders / GO
+//                         arrow (h≈0.85–1.0) → 1 (raised)
+//                     Tune INK_LO UP if faces still lift, DOWN if lines vanish.
+//   SMOOTH_BLUR_SIGMA — px blur applied AFTER the threshold so the raised ridges
+//                     get clean beveled sides (no spiky stair-step aliasing on the
+//                     coarse 1024² vertex grid) instead of hard binary edges.
+const INK_LO = 0.55;
+const INK_HI = 0.85;
+const SMOOTH_BLUR_SIGMA = 2.5;
 // OpenGL (green = +Y up). Set false for a DirectX-style (green = -Y) map.
 const OPENGL_Y = true;
 
@@ -111,52 +118,47 @@ async function main() {
     .raw()
     .toBuffer(); // 1 channel, W*H bytes
 
-  // ── 1b. HEIGHT MAP OUTPUT (displacementMap) — LINEAR grayscale ─────────────
-  // Displacement is sampled in the VERTEX shader over a 1024²-vertex grid, so a
-  // thin single-pixel ink stroke on a 2048² map almost never lands on a vertex —
-  // and even when it does, bilinear averaging with the surrounding paper crushes
-  // it toward zero. To make letters/lines/borders survive as REAL raised
-  // geometry we must (a) start from the DARK-INK=HIGH field, (b) DILATE the ink
-  // so thin strokes fatten into ridges that MULTIPLE vertices sample, and (c)
-  // make the ink SOLID (full height) with paper crushed flat to 0.
+  // ── 1b. HEIGHT MAP OUTPUT (displacementMap) — INK-ONLY, SMOOTH, LINEAR ─────
+  // Displacement is sampled in the VERTEX shader over a 1024²-vertex grid. The
+  // OLD low-threshold dilate/remap lifted the near-white TILE FACES' texture
+  // noise (h≈0.05–0.30) into a floor that, once displaced at scale, aliased into
+  // spiky canyons. Fix: gate the inverted height h = 1 - luminance with a HIGH
+  // smoothstep so ONLY true black ink raises and every face / colour strip
+  // thresholds to a FLAT 0 — so their texture noise no longer displaces at all.
   //
-  // sharp has no morphological dilate, so we approximate it: BLUR the inverted
-  // height (~DILATE_BLUR_SIGMA px) to spread each ink stroke into a soft halo,
-  // THEN apply a hard contrast/remap curve [REMAP_LO..REMAP_HI] -> [0..1] with
-  // clamp. The blur's halo now sits inside the remap window, so ink + its
-  // neighbourhood lift to FULL height (a fattened solid ridge) while the paper
-  // floor (below REMAP_LO) is crushed to 0. Net = solid, slightly-thickened
-  // raised letters/lines/borders with a flat paper base.
+  //   h  = (255 - luma)/255              DARK INK = HIGH
+  //   h' = smoothstep(INK_LO, INK_HI, h) high gate:
+  //          h ≤ INK_LO (paper, faces, mid-tone colour strips) → 0 (flat)
+  //          h ≥ INK_HI (near-black lines / text / icons / border / GO arrow) → 1
+  //          in between → smooth Hermite ramp (no hard binary edge)
+  //
+  // AFTER the threshold we BLUR h' (~SMOOTH_BLUR_SIGMA px) so the raised ridges
+  // get clean BEVELED sides instead of hard stair-steps on the coarse vertex
+  // grid — the ridge tops stay ~1, only the walls soften into smooth ramps.
   //
   // Written at the albedo's native size, single grayscale channel, LINEAR (raw
   // ->webp keeps values as authored — displacement, like normals, is not colour).
-  const invRaw = Buffer.alloc(W * H);
-  for (let p = 0; p < invRaw.length; p++) {
-    invRaw[p] = 255 - heightRaw[p]; // DARK INK = HIGH
+  const smoothstep = (lo, hi, x) => {
+    const t = Math.min(1, Math.max(0, (x - lo) / (hi - lo)));
+    return t * t * (3 - 2 * t);
+  };
+  const inked = Buffer.alloc(W * H);
+  for (let p = 0; p < inked.length; p++) {
+    const hgt = (255 - heightRaw[p]) / 255; // DARK INK = HIGH
+    inked[p] = Math.round(smoothstep(INK_LO, INK_HI, hgt) * 255);
   }
-  // Blur to grow (dilate-approx) the raised ink into a fatter halo.
-  const dilated = await sharp(invRaw, { raw: { width: W, height: H, channels: 1 } })
-    .blur(DILATE_BLUR_SIGMA)
+  // Blur AFTER the threshold → clean beveled ridge sides (denoised: flat faces
+  // stay flat because they already thresholded to 0, so nothing to smear up).
+  const heightField = await sharp(inked, { raw: { width: W, height: H, channels: 1 } })
+    .blur(SMOOTH_BLUR_SIGMA)
     .raw()
     .toBuffer();
-  // Hard contrast/remap: [REMAP_LO..REMAP_HI] normalized -> [0..1], clamped.
-  // Anything at/above REMAP_HI (ink + its blurred halo) → 255 (full raise);
-  // anything at/below REMAP_LO (paper) → 0 (flat). This both SOLIDIFIES and
-  // slightly FATTENS the ink so the coarse vertex grid resolves it as ridges.
-  const lo = Math.round(REMAP_LO * 255);
-  const hi = Math.round(REMAP_HI * 255);
-  const span = Math.max(1, hi - lo);
-  const heightField = Buffer.alloc(W * H);
-  for (let p = 0; p < heightField.length; p++) {
-    const v = ((dilated[p] - lo) / span) * 255;
-    heightField[p] = v < 0 ? 0 : v > 255 ? 255 : Math.round(v);
-  }
   await sharp(heightField, { raw: { width: W, height: H, channels: 1 } })
     .webp({ quality: 90 })
     .toFile(OUT_HEIGHT);
   const heightStat = await stat(OUT_HEIGHT);
   console.log(
-    `Wrote height  : ${OUT_HEIGHT.replace(ROOT + '/', '')} (${heightStat.size} bytes) [dark ink = high]`,
+    `Wrote height  : ${OUT_HEIGHT.replace(ROOT + '/', '')} (${heightStat.size} bytes) [ink-only: smoothstep(${INK_LO},${INK_HI}) + ${SMOOTH_BLUR_SIGMA}px smooth]`,
   );
 
   // ── 2. SOBEL GRADIENT -> TANGENT-SPACE NORMAL ──────────────────────────────

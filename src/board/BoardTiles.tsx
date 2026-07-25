@@ -108,12 +108,16 @@ const BOARD_NORMAL_Y_SIGN = 1; // set to -1 if relief looks inverted
  *                             map's job; displacement is for borders/big features
  *                             + overall relief + silhouette). Mobile forces 0.
  *   BOARD_DISPLACEMENT_SCALE – world-unit height of the raised ink. Board is ~10
- *                             wide, tiles ~0.9; 0.04 reads as a firm embossed
- *                             print. Raise for more pop, lower if silhouette
- *                             looks lumpy or clips tokens/buildings.
+ *                             wide, tiles ~0.9; 0.07 reads as a firm embossed
+ *                             print with the ink-only smooth height bake. Raise
+ *                             for more pop, lower if silhouette looks lumpy or
+ *                             clips tokens/buildings. (Was 0.15 — that amplified
+ *                             the old noisy low-threshold bake into spiky canyons;
+ *                             0.07 + the ink-only smoothstep bake reads as clean
+ *                             raised lines/letters, not spikes.)
  */
 const BOARD_SEGMENTS = 1024;
-const BOARD_DISPLACEMENT_SCALE = 0.15;
+const BOARD_DISPLACEMENT_SCALE = 0.07;
 /**
  * Nudge the slab's flat top face just below the displaced plane so the original
  * flat top never coincides with (z-fights) the subdivided displaced surface.
@@ -230,9 +234,14 @@ export function BoardTiles() {
       BOARD_NORMAL_STRENGTH * BOARD_NORMAL_Y_SIGN,
     );
 
-    // REAL DISPLACEMENT: push the subdivided top plane's vertices +Y by
-    // height * scale. Height ≈ 0 (light paper) stays at the surface; height ≈ 1
-    // (dark ink) raises. Bias 0 so flat tile faces sit exactly at TOP_Y. This
+    // REAL DISPLACEMENT: push the subdivided top plane's vertices UP (+Y) by
+    // height * scale. Direction confirmed +Y: PlaneGeometry vertex normals are
+    // +Z; the plane mesh is rotated -π/2 about X, which maps +Z → +Y, so three's
+    // displacement (vertex += normal * displacementScale*height) pushes ink
+    // UPWARD above the flat faces (no normal flip needed). Height ≈ 0 (paper +
+    // near-white faces + colour strips, thresholded flat by the ink-only bake)
+    // stays exactly at the surface; height ≈ 1 (dark ink) raises. Bias 0 so flat
+    // tile faces sit exactly at TOP_Y (coplanar). This
     // only visibly deforms the dense plane below; the slab's coarse top face has
     // no interior verts to move and is dropped out of view anyway (SLAB_TOP_DROP).
     top.displacementMap = heightTex;
