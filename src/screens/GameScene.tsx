@@ -1,4 +1,4 @@
-import { Suspense, useEffect, useRef } from 'react';
+import { Suspense, useEffect, useRef, useState } from 'react';
 import * as THREE from 'three';
 import { Canvas, useThree } from '@react-three/fiber';
 import {
@@ -165,6 +165,47 @@ function HdriSky() {
 }
 
 /**
+ * DEV-only culling badge — displays ON/OFF state of backface culling toggle.
+ * Listens for 'mockopoly:culling' custom events and renders a fixed badge.
+ */
+function CullingBadge() {
+  const [off, setOff] = useState(false);
+
+  useEffect(() => {
+    const handler = (e: unknown) => {
+      const evt = e as CustomEvent<{ off: boolean }>;
+      setOff(evt.detail.off);
+    };
+    window.addEventListener('mockopoly:culling', handler);
+    return () => window.removeEventListener('mockopoly:culling', handler);
+  }, []);
+
+  if (!import.meta.env.DEV) return null;
+
+  return (
+    <div
+      style={{
+        position: 'fixed',
+        top: 150,
+        left: 8,
+        zIndex: 60,
+        pointerEvents: 'none',
+        padding: '6px 12px',
+        borderRadius: '4px',
+        backgroundColor: off ? '#a12a2a' : '#1f7a3f',
+        color: '#ffffff',
+        fontFamily: 'monospace',
+        fontSize: '12px',
+        fontWeight: 'bold',
+        whiteSpace: 'nowrap',
+      }}
+    >
+      {off ? 'CULLING: OFF' : 'CULLING: ON'}
+    </div>
+  );
+}
+
+/**
  * DEV-only culling audit component.
  * Press "c" in dev mode to log material side counts and expose scene/gl to window.
  * Press "v" in dev mode to toggle backface culling on/off (DoubleSide ↔ original).
@@ -255,6 +296,8 @@ function CullingAudit() {
           console.log('[culling] ON — restored original sides');
         }
         console.log('[render info]', JSON.parse(JSON.stringify(gl.info.render)));
+        // Emit culling state change to DOM for the badge overlay.
+        window.dispatchEvent(new CustomEvent<{ off: boolean }>('mockopoly:culling', { detail: { off: cullingOff } }));
       }
     };
 
@@ -285,6 +328,8 @@ export function GameScene() {
         pointerEvents: 'none',
       }}
     />
+    {/* DEV-only culling state badge — placed below FPS stats panel. */}
+    <CullingBadge />
     <Canvas
       style={{ position: 'fixed', inset: 0 }}
       // Reverted to original nice framing. Board content is rotated via BOARD_ROTATION
