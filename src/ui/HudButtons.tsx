@@ -114,6 +114,8 @@ const wrapMobile: React.CSSProperties = {
   zIndex: 30,
   fontFamily: F,
   padding: '0 12px',
+  paddingLeft: 'calc(12px + env(safe-area-inset-left))',
+  paddingRight: 'calc(12px + env(safe-area-inset-right))',
 };
 
 const btnMobileOverride: React.CSSProperties = {

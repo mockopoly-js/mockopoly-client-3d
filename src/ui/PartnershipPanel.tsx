@@ -207,12 +207,12 @@ const wrap: React.CSSProperties = {
 };
 const card: React.CSSProperties = {
   background: '#12121e', color: '#e8e8f0', borderRadius: 16, padding: 20,
-  width: 420, maxWidth: '92vw', maxHeight: '86vh', overflowY: 'auto',
+  width: 420, maxWidth: '92vw', maxHeight: '90dvh', overflowY: 'auto',
   boxShadow: '0 24px 60px -20px rgba(0,0,0,.7)',
 };
 // ── Mobile bottom-sheet styles ──
 const wrapMobile: React.CSSProperties = { position: 'fixed', inset: 0, background: 'rgba(0,0,0,.5)', zIndex: 40, fontFamily: F, display: 'flex', alignItems: 'flex-end' };
-const sheetMobile: React.CSSProperties = { background: '#12121e', color: '#e8e8f0', borderRadius: '20px 20px 0 0', padding: 20, width: '100vw', maxHeight: '85vh', overflowY: 'auto', boxShadow: '0 -8px 40px -8px rgba(0,0,0,.7)', paddingBottom: 'calc(20px + env(safe-area-inset-bottom))' };
+const sheetMobile: React.CSSProperties = { background: '#12121e', color: '#e8e8f0', borderRadius: '20px 20px 0 0', padding: 20, width: '100vw', maxHeight: '85dvh', overflowY: 'auto', boxShadow: '0 -8px 40px -8px rgba(0,0,0,.7)', paddingBottom: 'calc(20px + env(safe-area-inset-bottom))', paddingLeft: 'calc(20px + env(safe-area-inset-left))', paddingRight: 'calc(20px + env(safe-area-inset-right))', boxSizing: 'border-box' };
 const hdr: React.CSSProperties = { display: 'flex', alignItems: 'center', marginBottom: 12 };
 const x: React.CSSProperties = { background: 'none', border: 'none', color: '#8888a0', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', padding: 0 };
 const sect: React.CSSProperties = { border: '1px solid #2a2a40', borderRadius: 12, padding: 12, marginBottom: 10 };
@@ -221,11 +221,12 @@ const item: React.CSSProperties = { display: 'flex', gap: 8, alignItems: 'center
 const eqInput: React.CSSProperties = {
   width: 60, background: '#08080f', color: '#e8e8f0',
   border: '1px solid #2a2a40', borderRadius: 8, padding: '4px 6px', fontFamily: F,
+  minHeight: 44, boxSizing: 'border-box',
 };
-const row: React.CSSProperties = { display: 'flex', gap: 10 };
+const row: React.CSSProperties = { display: 'flex', gap: 10, flexWrap: 'wrap' };
 const btn: React.CSSProperties = {
   fontFamily: F, fontWeight: 800, fontSize: 13, border: 'none',
   borderRadius: 12, padding: '9px 14px', cursor: 'pointer',
-  background: '#2a2a40', color: '#e8e8f0',
+  background: '#2a2a40', color: '#e8e8f0', minHeight: 44,
 };
 const btnP: React.CSSProperties = { ...btn, background: '#d4af37', color: '#08080f' };

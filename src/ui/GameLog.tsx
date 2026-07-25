@@ -45,9 +45,12 @@ const entry: React.CSSProperties = { fontSize: 12, fontWeight: 500, padding: '3p
 // ── Mobile styles: slim strip, top-right, 2 entries max ──
 const wrapMobile: React.CSSProperties = {
   position: 'fixed',
-  top: 90, // below topBarMobile (~36px) + PlayerPods strip (~54px)
-  right: 6,
+  // below topBarMobile (~36px) + PlayerPods strip (~54px); add notch inset so it
+  // clears the safe area on notched phones (top) and landscape side-notch (right).
+  top: 'calc(90px + env(safe-area-inset-top))',
+  right: 'calc(6px + env(safe-area-inset-right))',
   width: 170,
+  maxWidth: '55vw',
   background: 'rgba(18,18,30,0.82)',
   color: '#8888a0',
   borderRadius: 8,

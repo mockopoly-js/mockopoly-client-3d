@@ -80,9 +80,10 @@ const wrap: React.CSSProperties = {
 };
 const card: React.CSSProperties = {
   pointerEvents: 'auto', background: '#fbf6ec', color: '#3b3224', borderRadius: 18,
-  padding: 22, minWidth: 260, boxShadow: '0 24px 60px -20px rgba(0,0,0,.6)',
+  padding: 22, minWidth: 260, maxWidth: '92vw', maxHeight: '90dvh', overflowY: 'auto',
+  boxShadow: '0 24px 60px -20px rgba(0,0,0,.6)',
 };
-const btn: React.CSSProperties = { fontFamily: FONT, fontWeight: 800, border: 'none', borderRadius: 14, padding: '12px 20px', cursor: 'pointer', flex: 1 };
+const btn: React.CSSProperties = { fontFamily: FONT, fontWeight: 800, border: 'none', borderRadius: 14, padding: '12px 20px', cursor: 'pointer', flex: 1, minHeight: 44 };
 const buyBtn: React.CSSProperties = { background: '#46b16a', color: '#fff' };
 const declineBtn: React.CSSProperties = { background: '#e7dcbf', color: '#3b3224' };
 const disabledBtn: React.CSSProperties = { background: '#d8ccae', color: '#9a8f7c', cursor: 'default' };
@@ -93,7 +94,10 @@ const wrapMobile: React.CSSProperties = {
 const sheetMobile: React.CSSProperties = {
   background: '#fbf6ec', color: '#3b3224',
   borderRadius: '20px 20px 0 0', padding: 22,
-  width: '100vw', maxHeight: '85vh', overflowY: 'auto',
+  width: '100vw', maxHeight: '85dvh', overflowY: 'auto',
   boxShadow: '0 -8px 40px -8px rgba(0,0,0,.6)',
   paddingBottom: 'calc(22px + env(safe-area-inset-bottom))',
+  paddingLeft: 'calc(22px + env(safe-area-inset-left))',
+  paddingRight: 'calc(22px + env(safe-area-inset-right))',
+  boxSizing: 'border-box',
 };

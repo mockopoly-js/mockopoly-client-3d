@@ -1,6 +1,7 @@
 import React from 'react';
 import { Camera, User } from 'lucide-react';
 import { useGameStore } from '../state/gameStore';
+import { useIsMobile } from './useIsMobile';
 import { FONT_FAMILY } from '../constants/fonts';
 
 const FONT = FONT_FAMILY;
@@ -21,14 +22,18 @@ const FONT = FONT_FAMILY;
 export function CameraViewButton() {
   const cameraMode = useGameStore((s) => s.cameraMode);
   const toggleCameraMode = useGameStore((s) => s.toggleCameraMode);
+  const isMobile = useIsMobile();
 
   const active = cameraMode === 'thirdPerson';
 
   const style: React.CSSProperties = {
     position: 'fixed',
-    bottom: 72,
-    right: 16,
-    zIndex: 49,
+    // Desktop: stacked above MuteButton on the right edge. Mobile in-game: middle
+    // chip of the horizontal corner cluster that clears the bottom action bars and
+    // sits below modals (z:35 < modal z:40).
+    bottom: isMobile ? 'calc(116px + env(safe-area-inset-bottom))' : 72,
+    right: isMobile ? 'calc(64px + env(safe-area-inset-right))' : 16,
+    zIndex: isMobile ? 35 : 49,
     pointerEvents: 'auto',
     fontFamily: FONT,
     fontWeight: 800,
@@ -36,6 +41,8 @@ export function CameraViewButton() {
     lineHeight: 1,
     borderRadius: 12,
     padding: '10px 14px',
+    minWidth: isMobile ? 44 : undefined,
+    minHeight: isMobile ? 44 : undefined,
     background: active ? '#1c1a12' : '#12121e',
     color: active ? '#f0d060' : '#e8e8f0',
     border: active ? '1px solid #d4af37' : '1px solid transparent',

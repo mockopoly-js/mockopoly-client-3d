@@ -105,7 +105,7 @@ const row: React.CSSProperties = { display: 'flex', alignItems: 'center', gap: 8
 const F = FONT_FAMILY;
 const toggleBtn: React.CSSProperties = {
   position: 'fixed',
-  left: 8,
+  left: 'calc(8px + env(safe-area-inset-left))',
   // sit between the player pods strip and the HudButtons row
   bottom: 'calc(120px + env(safe-area-inset-bottom))',
   fontFamily: F, fontWeight: 800, fontSize: 12,
@@ -121,8 +121,10 @@ const drawerWrap: React.CSSProperties = {
   background: '#12121e', color: '#e8e8f0',
   borderRadius: '12px 12px 0 0',
   padding: 12,
+  paddingLeft: 'calc(12px + env(safe-area-inset-left))',
+  paddingRight: 'calc(12px + env(safe-area-inset-right))',
   fontFamily: F, zIndex: 35,
-  maxHeight: '40vh', overflowY: 'auto',
+  maxHeight: '40dvh', overflowY: 'auto',
   boxShadow: '0 -8px 24px -8px rgba(0,0,0,.5)',
 };
 const drawerHdr: React.CSSProperties = {

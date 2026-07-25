@@ -126,6 +126,8 @@ const topBarMobile: React.CSSProperties = {
   fontFamily: FONT, background: '#12121e', color: '#e8e8f0',
   padding: '8px 16px',
   paddingTop: 'calc(8px + env(safe-area-inset-top))',
+  paddingLeft: 'calc(16px + env(safe-area-inset-left))',
+  paddingRight: 'calc(16px + env(safe-area-inset-right))',
   zIndex: 30,
 };
 const hotbarMobile: React.CSSProperties = {
@@ -134,6 +136,8 @@ const hotbarMobile: React.CSSProperties = {
   background: '#12121e',
   padding: '10px 16px',
   paddingBottom: 'calc(10px + env(safe-area-inset-bottom))',
+  paddingLeft: 'calc(16px + env(safe-area-inset-left))',
+  paddingRight: 'calc(16px + env(safe-area-inset-right))',
 };
 
 // On mobile, override GameButton sizing to fill flex slots (flex:1, full height)

@@ -79,7 +79,8 @@ const backdrop: React.CSSProperties = {
 };
 
 const card: React.CSSProperties = {
-  width: 300, minHeight: 200, background: '#f5f0e1', color: '#1a1a2e',
+  width: 'min(300px, 88vw)', minHeight: 200, maxHeight: '80dvh',
+  background: '#f5f0e1', color: '#1a1a2e',
   borderRadius: 14, overflow: 'hidden', boxShadow: '0 28px 70px -20px rgba(0,0,0,.75)',
   animation: 'cardDrawnPop 380ms cubic-bezier(.2,.9,.3,1.2) both',
   transformOrigin: 'center', display: 'flex', flexDirection: 'column',

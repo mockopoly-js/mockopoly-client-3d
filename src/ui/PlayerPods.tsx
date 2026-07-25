@@ -84,6 +84,8 @@ const wrapMobile: React.CSSProperties = {
   flexDirection: 'row',
   gap: 6,
   padding: '4px 8px',
+  paddingLeft: 'calc(8px + env(safe-area-inset-left))',
+  paddingRight: 'calc(8px + env(safe-area-inset-right))',
   fontFamily: FONT_FAMILY,
   zIndex: 29,
   overflowX: 'auto',

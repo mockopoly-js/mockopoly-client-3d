@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { Maximize, Minimize } from 'lucide-react';
+import { useIsMobile } from './useIsMobile';
 import { FONT_FAMILY } from '../constants/fonts';
 
 const FONT = FONT_FAMILY;
@@ -18,6 +19,7 @@ const FONT = FONT_FAMILY;
  * Android Chrome do support it and get the button.
  */
 export function FullscreenButton() {
+  const isMobile = useIsMobile();
   const [isFullscreen, setIsFullscreen] = useState<boolean>(
     typeof document !== 'undefined' && !!document.fullscreenElement,
   );
@@ -44,9 +46,12 @@ export function FullscreenButton() {
 
   const style: React.CSSProperties = {
     position: 'fixed',
-    bottom: 128,
-    right: 16,
-    zIndex: 48,
+    // Desktop: top of the right-edge chip stack. Mobile in-game: leftmost chip of
+    // the horizontal corner cluster that clears the bottom action bars and sits
+    // below modals (z:35 < modal z:40).
+    bottom: isMobile ? 'calc(116px + env(safe-area-inset-bottom))' : 128,
+    right: isMobile ? 'calc(120px + env(safe-area-inset-right))' : 16,
+    zIndex: isMobile ? 35 : 48,
     pointerEvents: 'auto',
     fontFamily: FONT,
     fontWeight: 800,
@@ -55,6 +60,8 @@ export function FullscreenButton() {
     border: 'none',
     borderRadius: 12,
     padding: '10px 14px',
+    minWidth: isMobile ? 44 : undefined,
+    minHeight: isMobile ? 44 : undefined,
     background: '#12121e',
     color: '#e8e8f0',
     cursor: 'pointer',

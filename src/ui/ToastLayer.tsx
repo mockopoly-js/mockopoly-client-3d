@@ -1,5 +1,6 @@
 import { useEffect, useRef } from 'react';
 import { useGameStore } from '../state/gameStore';
+import { useIsMobile } from './useIsMobile';
 import type { ToastType } from '../types/ui';
 import { FONT_FAMILY } from '../constants/fonts';
 
@@ -10,6 +11,7 @@ const COLOR: Record<ToastType, string> = {
 export function ToastLayer() {
   const toasts = useGameStore((s) => s.toasts);
   const removeToast = useGameStore((s) => s.removeToast);
+  const isMobile = useIsMobile();
   const scheduled = useRef<Set<number>>(new Set());
 
   useEffect(() => {
@@ -25,7 +27,7 @@ export function ToastLayer() {
 
   if (!toasts.length) return null;
   return (
-    <div style={wrap}>
+    <div style={isMobile ? wrapMobile : wrap}>
       {toasts.map((t, i) => (
         <div key={`${t.timestamp}-${i}`} style={{ ...toast, borderLeft: `4px solid ${COLOR[t.type]}` }}>
           {t.message}
@@ -40,7 +42,13 @@ const wrap: React.CSSProperties = {
   display: 'flex', flexDirection: 'column', gap: 8, zIndex: 45, pointerEvents: 'none',
   fontFamily: FONT_FAMILY, alignItems: 'center',
 };
+// On mobile, drop below the top status bar + PlayerPods strip so toasts don't
+// cover the pods; also honour the top safe-area (notch).
+const wrapMobile: React.CSSProperties = {
+  ...wrap,
+  top: 'calc(96px + env(safe-area-inset-top))',
+};
 const toast: React.CSSProperties = {
   background: '#12121e', color: '#e8e8f0', padding: '8px 16px', borderRadius: 10,
-  fontWeight: 700, fontSize: 13, boxShadow: '0 8px 22px -10px rgba(0,0,0,.6)', maxWidth: 360,
+  fontWeight: 700, fontSize: 13, boxShadow: '0 8px 22px -10px rgba(0,0,0,.6)', maxWidth: 'min(360px, 88vw)',
 };

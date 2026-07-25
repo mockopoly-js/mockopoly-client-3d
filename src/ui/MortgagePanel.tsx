@@ -127,20 +127,23 @@ export function MortgagePanel() {
 
 // ── Desktop styles (unchanged) ──
 const wrap: React.CSSProperties = { position: 'fixed', inset: 0, display: 'grid', placeItems: 'center', background: 'rgba(0,0,0,.5)', zIndex: 40, fontFamily: FONT_FAMILY };
-const card: React.CSSProperties = { background: '#12121e', color: '#e8e8f0', borderRadius: 16, padding: 20, width: 340, boxShadow: '0 24px 60px -20px rgba(0,0,0,.7)' };
+const card: React.CSSProperties = { background: '#12121e', color: '#e8e8f0', borderRadius: 16, padding: 20, width: 340, maxWidth: '92vw', maxHeight: '90dvh', overflowY: 'auto', boxShadow: '0 24px 60px -20px rgba(0,0,0,.7)' };
 const hdr: React.CSSProperties = { display: 'flex', alignItems: 'center', gap: 10, marginBottom: 8 };
 const strip: React.CSSProperties = { width: 14, height: 14, borderRadius: 4 };
 const x: React.CSSProperties = { background: 'none', border: 'none', color: '#8888a0', cursor: 'pointer', lineHeight: 1, display: 'inline-flex', alignItems: 'center', padding: 0 };
 const meta: React.CSSProperties = { color: '#8888a0', fontSize: 13, marginBottom: 16 };
 const grid: React.CSSProperties = { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 };
-const btn: React.CSSProperties = { fontFamily: 'inherit', fontWeight: 800, fontSize: 13, border: 'none', borderRadius: 12, padding: '11px 12px', cursor: 'pointer', background: '#2a2a40', color: '#e8e8f0' };
+const btn: React.CSSProperties = { fontFamily: 'inherit', fontWeight: 800, fontSize: 13, border: 'none', borderRadius: 12, padding: '11px 12px', cursor: 'pointer', background: '#2a2a40', color: '#e8e8f0', minHeight: 44 };
 
 // ── Mobile bottom-sheet styles ──
 const wrapMobile: React.CSSProperties = { position: 'fixed', inset: 0, background: 'rgba(0,0,0,.5)', zIndex: 40, fontFamily: FONT_FAMILY, display: 'flex', alignItems: 'flex-end' };
 const sheetMobile: React.CSSProperties = {
   background: '#12121e', color: '#e8e8f0',
   borderRadius: '20px 20px 0 0', padding: 20,
-  width: '100vw', maxHeight: '85vh', overflowY: 'auto',
+  width: '100vw', maxHeight: '85dvh', overflowY: 'auto',
   boxShadow: '0 -8px 40px -8px rgba(0,0,0,.7)',
   paddingBottom: 'calc(20px + env(safe-area-inset-bottom))',
+  paddingLeft: 'calc(20px + env(safe-area-inset-left))',
+  paddingRight: 'calc(20px + env(safe-area-inset-right))',
+  boxSizing: 'border-box',
 };

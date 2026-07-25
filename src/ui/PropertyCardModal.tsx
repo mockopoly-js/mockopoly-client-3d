@@ -173,8 +173,9 @@ const card: React.CSSProperties = {
   borderRadius: 18,
   padding: 22,
   minWidth: 260,
+  maxWidth: '92vw',
   boxShadow: '0 24px 60px -20px rgba(0,0,0,.6)',
-  maxHeight: '90vh',
+  maxHeight: '90dvh',
   overflowY: 'auto',
 };
 const btn: React.CSSProperties = {
@@ -185,6 +186,7 @@ const btn: React.CSSProperties = {
   padding: '12px 20px',
   cursor: 'pointer',
   width: '100%',
+  minHeight: 44,
 };
 const closeBtn: React.CSSProperties = {
   background: '#e7dcbf',
@@ -207,8 +209,11 @@ const sheetMobile: React.CSSProperties = {
   borderRadius: '20px 20px 0 0',
   padding: 22,
   width: '100vw',
-  maxHeight: '85vh',
+  maxHeight: '85dvh',
   overflowY: 'auto',
   boxShadow: '0 -8px 40px -8px rgba(0,0,0,.6)',
   paddingBottom: 'calc(22px + env(safe-area-inset-bottom))',
+  paddingLeft: 'calc(22px + env(safe-area-inset-left))',
+  paddingRight: 'calc(22px + env(safe-area-inset-right))',
+  boxSizing: 'border-box',
 };
