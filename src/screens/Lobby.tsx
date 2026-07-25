@@ -174,23 +174,28 @@ const backdropBase: React.CSSProperties = {
   boxSizing: 'border-box',
 };
 
-// ── Desktop: cover + centered so the panel lands in the mid-frame plaza ──
+// ── Desktop: center-or-scroll wrapper. `overflowY:auto` + the panel's
+// `margin:auto` center the card when it fits and scroll it (top reachable)
+// when a short/landscape/tablet viewport can't fit it. ──
 const wrap: React.CSSProperties = {
   ...backdropBase,
   backgroundPosition: 'center center',
-  alignItems: 'center',
-  justifyContent: 'center',
+  overflowY: 'auto',
+  WebkitOverflowScrolling: 'touch',
+  padding:
+    'max(12px, env(safe-area-inset-top)) max(12px, env(safe-area-inset-right)) max(12px, env(safe-area-inset-bottom)) max(12px, env(safe-area-inset-left))',
 };
 
 // ── Desktop control panel — floats in the sandy plaza (centered both axes) ──
 const panel: React.CSSProperties = {
   display: 'flex',
   flexDirection: 'column',
-  gap: 14,
+  gap: 'clamp(10px, 2vw, 14px)',
   alignItems: 'center',
   width: 'min(420px, 90vw)',
   boxSizing: 'border-box',
-  padding: '24px 26px',
+  margin: 'auto',
+  padding: 'clamp(16px, 3vw, 26px)',
   borderRadius: 24,
   background: 'rgba(255, 251, 240, 0.9)',
   border: `3px solid ${GOLD}`,
@@ -204,28 +209,29 @@ const slot: React.CSSProperties = { display: 'flex', alignItems: 'center', gap: 
 const emptySlot: React.CSSProperties = { ...slot, justifyContent: 'center', color: '#9a8f7c', fontWeight: 700 };
 const dot: React.CSSProperties = { width: 22, height: 22, borderRadius: '50%' };
 
-// ── Mobile: same fixed bg (top center) with a centered scrim panel ──
+// ── Mobile: same fixed bg (top center), center-or-scroll (panel margin:auto).
+// No `justify/align center` — those top-clip a scroll container when the panel
+// is taller than the viewport; `margin:auto` centers yet keeps the top reachable. ──
 const wrapMobile: React.CSSProperties = {
   ...backdropBase,
   backgroundPosition: 'top center',
-  alignItems: 'center',
-  justifyContent: 'center',
-  padding: '20px 12px',
-  paddingTop: 'calc(20px + env(safe-area-inset-top))',
-  paddingBottom: 'calc(20px + env(safe-area-inset-bottom))',
   overflowY: 'auto',
+  WebkitOverflowScrolling: 'touch',
+  padding:
+    'max(16px, env(safe-area-inset-top)) max(12px, env(safe-area-inset-right)) max(16px, env(safe-area-inset-bottom)) max(12px, env(safe-area-inset-left))',
 };
 
 // ── Mobile control panel — near-full-width scrim card, centered ──
 const panelMobile: React.CSSProperties = {
   display: 'flex',
   flexDirection: 'column',
-  gap: 14,
+  gap: 'clamp(10px, 2.5vw, 14px)',
   alignItems: 'center',
   width: '100%',
   maxWidth: 440,
   boxSizing: 'border-box',
-  padding: '20px 16px',
+  margin: 'auto',
+  padding: 'clamp(14px, 3.5vw, 20px)',
   borderRadius: 22,
   background: 'rgba(255, 251, 240, 0.92)',
   border: `3px solid ${GOLD}`,

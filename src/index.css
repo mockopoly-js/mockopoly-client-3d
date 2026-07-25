@@ -14,6 +14,15 @@ html, body, #root {
   margin: 0;
   height: 100vh;
   height: 100dvh;
+}
+
+/* The page itself never scrolls — the fixed 3D game canvas stays put and can't
+   be dragged around by a finger. Full-screen HTML SCREEN overlays (menu, lobby,
+   game-over) each own their own `overflow-y:auto`, so when their content is
+   taller than a short/landscape viewport they scroll INTERNALLY instead of
+   being clipped. #root deliberately has NO `overflow:hidden`, so it never
+   force-clips a child that manages its own scroll. */
+html, body {
   overflow: hidden;
 }
 

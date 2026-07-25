@@ -1,11 +1,14 @@
 import { useState, useEffect } from 'react';
 
 /**
- * Returns true when the viewport width is <= breakpoint px.
+ * Returns true when the viewport is "mobile-sized": either narrow
+ * (width <= breakpoint px) OR short (height <= 600px). The short-edge clause
+ * routes landscape phones — which are wide-but-short — into the responsive
+ * branch alongside portrait phones. matchMedia treats a comma as OR.
  * SSR/jsdom-safe: if window or window.matchMedia is absent, returns false and does nothing.
  */
 export function useIsMobile(breakpoint = 768): boolean {
-  const query = `(max-width: ${breakpoint}px)`;
+  const query = `(max-width: ${breakpoint}px), (max-height: 600px)`;
 
   // Determine initial value without throwing when matchMedia is absent.
   const getMatch = (): boolean => {

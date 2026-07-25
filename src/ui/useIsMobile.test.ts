@@ -97,8 +97,9 @@ describe('useIsMobile', () => {
     window.matchMedia = original;
   });
 
-  it('respects a custom breakpoint in the query string', () => {
+  it('respects a custom breakpoint and ORs in the short-edge (landscape) clause', () => {
     renderHook(() => useIsMobile(1024));
-    expect(matchMediaSpy).toHaveBeenCalledWith('(max-width: 1024px)');
+    // Comma = OR: narrow (width) OR short (height, for landscape phones).
+    expect(matchMediaSpy).toHaveBeenCalledWith('(max-width: 1024px), (max-height: 600px)');
   });
 });
