@@ -27,6 +27,7 @@ import { BigMomentOverlay } from './ui/BigMomentOverlay';
 import { CardDrawnOverlay } from './ui/CardDrawnOverlay';
 import { MuteButton } from './ui/MuteButton';
 import { CameraViewButton } from './ui/CameraViewButton';
+import { FullscreenButton } from './ui/FullscreenButton';
 import { RotateHint } from './ui/RotateHint';
 import { PropertyCardModal } from './ui/PropertyCardModal';
 import { CameraDebugOverlay } from './ui/CameraDebugOverlay';
@@ -161,6 +162,7 @@ export default function App() {
           <PropertyCardModal />
           <CameraDebugOverlay />
           <CameraViewButton />
+          <FullscreenButton />
         </>
       )}
       {screen === 'game-over' && <GameOverScreen />}
