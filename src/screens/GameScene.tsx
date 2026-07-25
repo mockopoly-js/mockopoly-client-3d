@@ -1,7 +1,13 @@
 import { Suspense, useEffect } from 'react';
 import * as THREE from 'three';
 import { Canvas, useThree } from '@react-three/fiber';
-import { EffectComposer, Bloom, ToneMapping } from '@react-three/postprocessing';
+import {
+  EffectComposer,
+  Bloom,
+  ToneMapping,
+  HueSaturation,
+  BrightnessContrast,
+} from '@react-three/postprocessing';
 import { SoftShadows, useTexture } from '@react-three/drei';
 import { BoardTiles } from '../board/BoardTiles';
 import { PlayerTokens } from '../board/PlayerTokens';
@@ -49,17 +55,44 @@ const BG_INTENSITY = 1.0;
 const SHOW_HDRI_BACKGROUND = true;
 
 /**
+ * Global color-grade tunables — applied by the post FX chain AFTER tone mapping
+ * so we grade the tone-mapped LDR image (colors read punchy instead of washed
+ * out). Effect order in the composer: Bloom -> ToneMapping -> HueSaturation ->
+ * BrightnessContrast.
+ *
+ * SATURATION: this is the main "game look" knob (postprocessing HueSaturation
+ *   `saturation` prop). In postprocessing 6.39.3 the prop is NOT a raw
+ *   multiplier: 0 = unchanged, and positive values push colors away from their
+ *   per-pixel average (increasing saturation) via factor
+ *   (1 - 1/(1.001 - saturation)). So 0.28 ≈ +28% pop. Range roughly 0..0.5.
+ * BRIGHTNESS: postprocessing BrightnessContrast `brightness`; 0 = unchanged.
+ * CONTRAST: postprocessing BrightnessContrast `contrast`; 0 = unchanged,
+ *   positive tightens the tonal range (divides by 1 - contrast).
+ */
+const SATURATION = 0.28;
+const BRIGHTNESS = 0.0;
+const CONTRAST = 0.12;
+
+/**
  * Manually applies an equirectangular sky texture as scene.environment
  * (and optionally scene.background) so Three.js actually picks it up.
  * drei's <Environment files=...> path resolves ambiguously for LDR webp and
  * leaves scene.background null; this component is deterministic.
  */
 function HdriSky() {
-  const { scene } = useThree();
+  const scene = useThree((s) => s.scene);
+  const gl = useThree((s) => s.gl);
   const tex = useTexture('/images/sky.webp');
   useEffect(() => {
     tex.mapping = THREE.EquirectangularReflectionMapping;
     tex.colorSpace = THREE.SRGBColorSpace;
+    // Crisper sky: trilinear mip filtering + max anisotropy kills the shimmer
+    // and pixelation at grazing angles / when the sky fills large screen areas.
+    tex.magFilter = THREE.LinearFilter;
+    tex.minFilter = THREE.LinearMipmapLinearFilter;
+    tex.generateMipmaps = true;
+    tex.anisotropy = gl.capabilities.getMaxAnisotropy();
+    tex.needsUpdate = true;
     scene.environment = tex;
     scene.environmentIntensity = ENV_INTENSITY;
     // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- SHOW_HDRI_BACKGROUND is a documented build-time toggle (see header); keep the branch so it can be flipped without edits
@@ -72,7 +105,7 @@ function HdriSky() {
       // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- SHOW_HDRI_BACKGROUND is a documented build-time toggle (see header)
       if (SHOW_HDRI_BACKGROUND) scene.background = null;
     };
-  }, [tex, scene]);
+  }, [tex, scene, gl]);
   return null;
 }
 
@@ -152,8 +185,17 @@ export function GameScene() {
         <ForestEnvironment />
       </Suspense>
       <EffectComposer>
+        {/*
+          Order matters: Bloom -> ToneMapping -> global color grade. Grading runs
+          on the tone-mapped LDR image so saturation/contrast make colors POP
+          instead of just amplifying HDR values that tone mapping later clamps.
+        */}
         <Bloom intensity={0.35} luminanceThreshold={0.9} luminanceSmoothing={0.3} mipmapBlur />
         <ToneMapping />
+        {/* Main "game look" saturation knob (0 = unchanged, +0.28 ≈ +28% pop). */}
+        <HueSaturation saturation={SATURATION} />
+        {/* Brightness/contrast trim (both 0 = unchanged); slight contrast punch. */}
+        <BrightnessContrast brightness={BRIGHTNESS} contrast={CONTRAST} />
       </EffectComposer>
     </Canvas>
   );

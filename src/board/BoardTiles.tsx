@@ -50,8 +50,13 @@ const EDGE_COLOR = '#c9a06a';
  * 1.0 = unchanged; >1 = more saturated. Applied AFTER tonemapping_fragment on
  * gl_FragColor.rgb (post-lighting, post-tonemap) so lighting/IBL cannot wash
  * it back out. Board-only — edge, city, forest, tokens are unaffected.
+ *
+ * Reduced 1.6 -> 1.15 now that GameScene applies a GLOBAL post color grade
+ * (HueSaturation) over the whole scene. The old 1.6 double-boosted the board
+ * on top of the global grade; 1.15 keeps the board reading consistent with the
+ * rest of the graded scene while still nudging the printed art slightly punchier.
  */
-const BOARD_SATURATION = 1.6;
+const BOARD_SATURATION = 1.15;
 
 export function BoardTiles() {
   const texture = useTexture('/images/board.webp');
