@@ -3,6 +3,7 @@ import * as THREE from 'three';
 import { Canvas, useThree } from '@react-three/fiber';
 import {
   EffectComposer,
+  N8AO,
   Bloom,
   ToneMapping,
   HueSaturation,
@@ -22,14 +23,21 @@ import { BOARD_ROTATION } from '../board/positions';
 /**
  * Game screen: renders the static 3D board in a daylight diorama scene.
  *
- * Lighting:
- * - hemisphereLight: soft sky/ground fill (sky #cbe8f5, ground #8a9a5b) at
- *   low intensity 0.35 — keeps unlit sides warm and grounded without washing
- *   out the directional shadow.
- * - ambientLight: trimmed to 0.4 (was 0.5) since the HDRI Environment now adds
- *   image-based fill light — keeps the scene from over-brightening while the
- *   directional shadow still reads clearly against the hemisphere fill.
- * - directionalLight: unchanged — position, intensity, shadow map.
+ * Lighting (soft-GI look without path tracing — AO + a shaped 3-point rig do
+ * the grounding that flat ambient used to fake):
+ * - N8AO: screen-space ambient occlusion, FIRST effect in the composer. Darkens
+ *   contacts/crevices (under buildings, trees, tokens, board edges) so objects
+ *   read as sitting IN the scene instead of floating on a flat wash. Half-res
+ *   for perf. Tunables: AO_INTENSITY / AO_RADIUS / AO_DISTANCE_FALLOFF.
+ * - hemisphereLight: soft sky/ground fill (sky #cbe8f5, ground #8a9a5b),
+ *   trimmed 0.35 → 0.25 so it tints unlit sides without flattening.
+ * - ambientLight: trimmed 0.4 → 0.15 — AO now supplies the crevice darkening a
+ *   high flat ambient was washing out; this just lifts pure black.
+ * - directionalLight ×3 (key/fill/rim rig):
+ *     KEY  — warm sun (KEY_COLOR), the ONLY shadow caster; position + 1024²
+ *            shadow map + ortho bounds kept as before.
+ *     FILL — cool, low, opposite-ish angle; softens the shadow side. No shadow.
+ *     RIM  — cool-bright, high/behind; edge-lights tops for separation. No shadow.
  * - SoftShadows: drei helper (PCF soft shadows, no extra assets) with modest
  *   size/samples so shadow edges are feathered without tanking perf.
  * - CameraRig: drei OrbitControls tuned for tabletop overhead view + gentle
@@ -72,6 +80,53 @@ const SHOW_HDRI_BACKGROUND = true;
 const SATURATION = 0.28;
 const BRIGHTNESS = 0.0;
 const CONTRAST = 0.12;
+
+/**
+ * Ambient Occlusion tunables (N8AO — the FIRST effect in the composer, before
+ * Bloom/ToneMapping/grade). AO is the single biggest fix for the flat EEVEE
+ * look: it darkens contact shadows / crevices so geometry reads as grounded.
+ *
+ * - AO_INTENSITY: strength of the darkening (higher = deeper contact shadows).
+ * - AO_RADIUS: sample radius in WORLD units. The board/scene is ~10 units
+ *   across, so ~0.7 catches under-building/under-tree contacts without smearing
+ *   AO across whole tiles. Raise for softer, wider occlusion.
+ * - AO_DISTANCE_FALLOFF: how quickly occlusion fades with depth distance
+ *   (fraction of AO_RADIUS); ~1.0 keeps it local and avoids dark halos.
+ * - AO_HALF_RES: render AO at half resolution then upsample — big perf win for
+ *   this fragment-heavy pass; the denoiser hides the resolution drop.
+ * - AO_QUALITY: N8AO sample-count preset (performance|low|medium|high|ultra).
+ */
+const AO_INTENSITY = 1.2;
+const AO_RADIUS = 0.7;
+const AO_DISTANCE_FALLOFF = 1.0;
+const AO_HALF_RES = true;
+const AO_QUALITY = 'medium' as const;
+
+/**
+ * 3-point directional-light rig — replaces a single key + flat fill so the
+ * scene gets shaped light (warm sun / cool shadow-side fill / cool rim) instead
+ * of a uniform wash. The HDRI Environment (ENV_INTENSITY) stays as the soft
+ * global/IBL light; these are the DIRECT lights layered on top.
+ */
+// KEY — the sun. Warm tint, the only shadow caster. Position + shadow map + the
+// ortho shadow-camera bounds are kept exactly as the previous single light.
+const KEY_COLOR = '#fff1de';
+const KEY_INTENSITY = 1.3;
+const KEY_POSITION: [number, number, number] = [6, 10, 6];
+// FILL — cool, low intensity, from an opposite-ish angle. Lifts the shadow side
+// without flattening the form. No shadow (keeps perf + avoids double shadows).
+const FILL_COLOR = '#cfe0ff';
+const FILL_INTENSITY = 0.35;
+const FILL_POSITION: [number, number, number] = [-6, 5, -4];
+// RIM / BACK — cool-bright, high and behind. Edge-lights the tops of trees /
+// buildings / tokens so they separate from the sky. No shadow.
+const RIM_COLOR = '#e8f0ff';
+const RIM_INTENSITY = 0.4;
+const RIM_POSITION: [number, number, number] = [-4, 8, -8];
+// Flat fills reduced (ambient 0.4 → 0.15, hemi 0.35 → 0.25) so AO + the rig do
+// the shaping instead of a uniform wash brightening every surface equally.
+const AMBIENT_INTENSITY = 0.15;
+const HEMI_INTENSITY = 0.25;
 
 /**
  * Manually applies an equirectangular sky texture as scene.environment
@@ -149,16 +204,39 @@ export function GameScene() {
       {!SHOW_HDRI_BACKGROUND && <color attach="background" args={['#cbe8f5']} />}
       {/* Soft shadow injection (must be early in the scene, no assets). */}
       <SoftShadows size={12} samples={8} />
-      {/* Sky/ground hemisphere fill — warms the scene and lifts shadow darkness. */}
-      <hemisphereLight args={['#cbe8f5', '#8a9a5b', 0.35]} />
-      {/* Ambient trimmed (0.5 → 0.4) now that the HDRI Environment adds IBL fill. */}
-      <ambientLight intensity={0.4} />
+      {/* Sky/ground hemisphere fill — tints unlit sides; trimmed 0.35 → 0.25 so
+          AO + the rig shape the scene instead of a flat wash. */}
+      <hemisphereLight args={['#cbe8f5', '#8a9a5b', HEMI_INTENSITY]} />
+      {/* Ambient trimmed 0.4 → 0.15 — AO now darkens crevices the flat ambient
+          was washing out; this just lifts pure black. */}
+      <ambientLight intensity={AMBIENT_INTENSITY} />
+      {/* KEY (the sun): warm, the ONLY shadow caster. Position, 1024² shadow map
+          and ortho shadow-camera bounds kept exactly as the previous light. */}
       <directionalLight
-        position={[6, 10, 6]} intensity={1.15} castShadow
+        color={KEY_COLOR}
+        position={KEY_POSITION}
+        intensity={KEY_INTENSITY}
+        castShadow
         shadow-mapSize={[1024, 1024]}
       >
         <orthographicCamera attach="shadow-camera" args={[-8, 8, 8, -8, 0.1, 30]} />
       </directionalLight>
+      {/* FILL: cool, low, opposite-ish angle — softens the shadow side without
+          flattening the form. No shadow (perf + avoids double shadows). */}
+      <directionalLight
+        color={FILL_COLOR}
+        position={FILL_POSITION}
+        intensity={FILL_INTENSITY}
+        castShadow={false}
+      />
+      {/* RIM / BACK: cool-bright, high and behind — edge-lights the tops of
+          trees/buildings/tokens for separation from the sky. No shadow. */}
+      <directionalLight
+        color={RIM_COLOR}
+        position={RIM_POSITION}
+        intensity={RIM_INTENSITY}
+        castShadow={false}
+      />
       {/*
         HDRI sky — HdriSky uses useTexture (suspends while loading) to load
         /images/sky.webp, sets EquirectangularReflectionMapping + SRGBColorSpace,
@@ -204,10 +282,19 @@ export function GameScene() {
       </Suspense>
       <EffectComposer multisampling={2}>
         {/*
-          Order matters: Bloom -> ToneMapping -> global color grade. Grading runs
-          on the tone-mapped LDR image so saturation/contrast make colors POP
-          instead of just amplifying HDR values that tone mapping later clamps.
+          Order matters: N8AO -> Bloom -> ToneMapping -> global color grade. AO
+          runs FIRST so contact/crevice darkening is baked into the beauty pass
+          before Bloom reads luminance and before the tone-map + grade. Grading
+          then runs on the tone-mapped LDR image so saturation/contrast make
+          colors POP instead of amplifying HDR values tone mapping later clamps.
         */}
+        <N8AO
+          aoRadius={AO_RADIUS}
+          distanceFalloff={AO_DISTANCE_FALLOFF}
+          intensity={AO_INTENSITY}
+          quality={AO_QUALITY}
+          halfRes={AO_HALF_RES}
+        />
         <Bloom intensity={0.35} luminanceThreshold={0.9} luminanceSmoothing={0.3} mipmapBlur />
         <ToneMapping />
         {/* Main "game look" saturation knob (0 = unchanged, +0.28 ≈ +28% pop). */}
