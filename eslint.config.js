@@ -63,11 +63,21 @@ export default tseslint.config(
       // Keep the rule on for genuinely confusing cases, but allow the idiomatic
       // arrow shorthand `onClick={() => setX()}` (void-returning setters).
       '@typescript-eslint/no-confusing-void-expression': ['error', { ignoreArrowShorthand: true }],
+      // Interpolating a number into a template literal (`${count}`, money
+      // amounts, ids) is idiomatic and safe — no need to force `String(n)`.
+      '@typescript-eslint/restrict-template-expressions': ['error', { allowNumber: true }],
     },
   },
   // Tests run under jsdom/vitest with Node + browser globals.
   {
     files: ['**/*.{test,spec}.{ts,tsx}'],
     languageOptions: { globals: { ...globals.node } },
+    rules: {
+      // Testing-Library's getByRole/getByLabelText return the generic
+      // HTMLElement, so `as HTMLButtonElement`/`as HTMLInputElement` casts are
+      // genuinely required by tsc to reach element-specific props. eslint's
+      // jest-dom-augmented view wrongly flags them as redundant — off in tests.
+      '@typescript-eslint/no-unnecessary-type-assertion': 'off',
+    },
   },
 );
