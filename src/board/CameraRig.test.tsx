@@ -2,7 +2,8 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, act } from '@testing-library/react';
 import { forwardRef, useImperativeHandle } from 'react';
 import * as THREE from 'three';
-import { CameraRig, INITIAL_CAM_OFFSET, INITIAL_CAM_TARGET } from './CameraRig';
+import { CameraRig } from './CameraRig';
+import { INITIAL_CAM_OFFSET, INITIAL_CAM_TARGET } from './cameraConstants';
 import { useGameStore } from '../state/gameStore';
 import type { GameState } from '../types/GameState';
 

@@ -64,7 +64,10 @@ export function BoardTiles() {
     // Rotate about the artwork center so the board doesn't drift off the face.
     texture.center.set(0.5, 0.5);
     texture.rotation = TEX_ROTATION;
-    // Mirror horizontally via a negative repeat when requested.
+    // Mirror horizontally via a negative repeat when requested. TEX_FLIP_X is a
+    // deliberate build-time tuning knob (see header) — keep the branch so it can
+    // be flipped to `true` without further edits, even though it is false today.
+    // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- TEX_FLIP_X is a documented tuning constant meant to be toggled; the branch is intentional
     texture.repeat.set(TEX_FLIP_X ? -1 : 1, 1);
     texture.wrapS = THREE.ClampToEdgeWrapping;
     texture.wrapT = THREE.ClampToEdgeWrapping;

@@ -61,7 +61,8 @@ vi.mock('three/examples/jsm/utils/SkeletonUtils.js', () => ({
 }));
 
 // Import AFTER mocks are registered.
-import { CharacterToken, type CharacterTokenHandle, pickSkinMaterialNames, pickPrimaryMaterialName } from './CharacterToken';
+import { CharacterToken, type CharacterTokenHandle } from './CharacterToken';
+import { pickSkinMaterialNames, pickPrimaryMaterialName } from './skinMaterials';
 
 /* eslint-disable @typescript-eslint/no-deprecated -- this suite deliberately
    exercises the DEPRECATED back-compat surface (the `tint` no-op prop and the
