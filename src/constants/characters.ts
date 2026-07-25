@@ -80,19 +80,19 @@ function humanize(id: string): string {
 function categorize(id: string): CharacterCategory {
   const lower = id.toLowerCase();
   // Cowboy must beat the Animal `cow` match (Cowboy_* contains "cow").
-  if (/cowboy/.test(lower)) return 'Cowboy';
+  if (lower.includes('cowboy')) return 'Cowboy';
   // Animal = the literal Cow (not Cowboy) + Pug. Anchor `cow` so it can't
   // swallow "cowboy" (already handled above, but keep the regex precise).
   if (/^cow$|pug/.test(lower)) return 'Animal';
   if (/ninja|kimono/.test(lower)) return 'Ninja';
-  if (/viking/.test(lower)) return 'Viking';
-  if (/pirate/.test(lower)) return 'Pirate';
-  if (/zombie/.test(lower)) return 'Zombie';
+  if (lower.includes('viking')) return 'Viking';
+  if (lower.includes('pirate')) return 'Pirate';
+  if (lower.includes('zombie')) return 'Zombie';
   if (/wizard|witch|elf|goblin|knight/.test(lower)) return 'Fantasy';
-  if (/soldier/.test(lower)) return 'Soldier';
+  if (lower.includes('soldier')) return 'Soldier';
   if (/chef|doctor|worker/.test(lower)) return 'Worker';
   if (/suit|oldclassy/.test(lower)) return 'Suit';
-  if (/casual/.test(lower)) return 'Casual';
+  if (lower.includes('casual')) return 'Casual';
   return 'Other';
 }
 
@@ -161,7 +161,7 @@ export const CHARACTERS: readonly CharacterDef[] = CHARACTER_IDS.map((id) => ({
   name: humanize(id),
   category: categorize(id),
   url: `/models/characters/${id}.glb`,
-})) as readonly CharacterDef[];
+}));
 
 /**
  * Fast lookup by id.
@@ -179,5 +179,8 @@ export const DEFAULT_CHARACTER = 'Suit_Male';
  * falling back to the default. Handy for CT3 token rendering.
  */
 export function resolveCharacter(id: string | null | undefined): CharacterDef {
-  return (id && CHARACTER_BY_ID[id]) || CHARACTER_BY_ID[DEFAULT_CHARACTER];
+  // CHARACTER_BY_ID is typed as a total Record, but an unknown id (the reason
+  // this resolver exists) yields undefined at runtime — hence the real fallback.
+  const found = id != null ? CHARACTER_BY_ID[id] : undefined;
+  return found ?? CHARACTER_BY_ID[DEFAULT_CHARACTER];
 }

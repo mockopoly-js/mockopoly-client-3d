@@ -4,6 +4,7 @@ import { MemoryRouter } from 'react-router-dom';
 import { useGameStore } from '../state/gameStore';
 import { CHARACTERS, CHARACTER_CATEGORIES, DEFAULT_CHARACTER } from '../constants/characters';
 import { resolveSkinMeta, RARITY_LABEL } from '../constants/skins';
+import { requireDefined } from '../test-utils';
 
 // ── Mock the lazy 3D preview canvas — no WebGL in jsdom, and we don't want to
 //    pull three/drei into the test. The locker keeps ONE live canvas; the grid
@@ -40,7 +41,7 @@ describe('CharacterSelect (locker)', () => {
     expect(cards.length).toBe(52);
     // Every card carries a thumbnail <img> pointing at /images/characters/<id>.png.
     for (const c of CHARACTERS.slice(0, 5)) {
-      const img = screen.getByAltText(c.name) as HTMLImageElement;
+      const img = screen.getByAltText(c.name);
       expect(img.tagName).toBe('IMG');
       expect(img.getAttribute('src')).toBe(`/images/characters/${c.id}.png`);
     }
@@ -101,9 +102,9 @@ describe('CharacterSelect (locker)', () => {
   it('clicking a card selects it (aria-selected) and updates the preview', () => {
     renderSelect();
     const cards = screen.getAllByRole('option');
-    const notSelected = cards.find((c) => c.getAttribute('aria-selected') !== 'true')!;
+    const notSelected = requireDefined(cards.find((c) => c.getAttribute('aria-selected') !== 'true'));
     const targetName = within(notSelected).getByRole('img').getAttribute('alt');
-    const targetDef = CHARACTERS.find((c) => c.name === targetName)!;
+    const targetDef = requireDefined(CHARACTERS.find((c) => c.name === targetName));
     fireEvent.click(notSelected);
     expect(notSelected.getAttribute('aria-selected')).toBe('true');
     // The single preview canvas now points at the selected skin's url.
@@ -113,7 +114,7 @@ describe('CharacterSelect (locker)', () => {
   it('shows the selected skin rarity, name, and description in the info panel', () => {
     renderSelect();
     const meta = resolveSkinMeta(DEFAULT_CHARACTER);
-    const def = CHARACTERS.find((c) => c.id === DEFAULT_CHARACTER)!;
+    const def = requireDefined(CHARACTERS.find((c) => c.id === DEFAULT_CHARACTER));
     // Rarity badge label.
     expect(screen.getByTestId('rarity-badge').textContent).toBe(RARITY_LABEL[meta.rarity]);
     // Name (heading) + description line present in the panel.
@@ -134,7 +135,7 @@ describe('CharacterSelect (locker)', () => {
     renderSelect();
     const cards = screen.getAllByRole('option');
     const targetName = within(cards[0]).getByRole('img').getAttribute('alt');
-    const targetDef = CHARACTERS.find((c) => c.name === targetName)!;
+    const targetDef = requireDefined(CHARACTERS.find((c) => c.name === targetName));
     fireEvent.click(cards[0]);
     // Switch to the Player color tab to access identity swatches.
     fireEvent.click(screen.getByTestId('tab-player-color'));
@@ -152,7 +153,7 @@ describe('CharacterSelect (locker)', () => {
       .filter((el) => el.getAttribute('aria-selected') === 'true');
     expect(selectedCards).toHaveLength(1);
     const selName = within(selectedCards[0]).getByRole('img').getAttribute('alt');
-    const defName = CHARACTERS.find((c) => c.id === DEFAULT_CHARACTER)!.name;
+    const defName = requireDefined(CHARACTERS.find((c) => c.id === DEFAULT_CHARACTER)).name;
     expect(selName).toBe(defName);
   });
 

@@ -35,7 +35,7 @@ export interface CameraReadout {
  * - 'free'        — default free-orbit navigation (Blender-style), unchanged.
  * - 'thirdPerson' — over-the-shoulder view locked behind the active player token.
  */
-export type CameraMode = 'free' | 'thirdPerson';
+type CameraMode = 'free' | 'thirdPerson';
 
 interface GameStore {
   // ── durable mirror of server state (was LocalGameState) ──
@@ -99,11 +99,13 @@ interface GameStore {
 }
 
 function getStoredCharacter(): string {
-  try { return localStorage.getItem(CHARACTER_KEY) || DEFAULT_CHARACTER; } catch { return DEFAULT_CHARACTER; }
+  // getItem returns string | null; ?? falls back only on a genuinely absent key
+  // (the app only ever stores non-empty ids, so "" never occurs here).
+  try { return localStorage.getItem(CHARACTER_KEY) ?? DEFAULT_CHARACTER; } catch { return DEFAULT_CHARACTER; }
 }
 
 function getStoredCharacterColor(): string | null {
-  try { return localStorage.getItem(CHARACTER_COLOR_KEY) || null; } catch { return null; }
+  try { return localStorage.getItem(CHARACTER_COLOR_KEY); } catch { return null; }
 }
 
 function getStoredToken(): TokenType {
@@ -222,8 +224,9 @@ export function selectMyPlayer(s: GameStore): Player | undefined {
   return s.state.players.find((p) => p.id === s.myPlayerId);
 }
 export function selectCurrentPlayer(s: GameStore): Player | undefined {
-  if (!s.state) return undefined;
-  return s.state.players.find((p) => p.id === s.state!.turn.currentPlayerId);
+  const state = s.state;
+  if (!state) return undefined;
+  return state.players.find((p) => p.id === state.turn.currentPlayerId);
 }
 export function selectIsMyTurn(s: GameStore): boolean {
   if (!s.state || !s.myPlayerId) return false;

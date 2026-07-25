@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { noop, requireDefined } from '../test-utils';
 import { render, screen, fireEvent } from '@testing-library/react';
 import { MortgagePanel } from './MortgagePanel';
 import { useGameStore } from '../state/gameStore';
@@ -8,7 +9,8 @@ import { BOARD_SPACES } from '../constants/board';
 import type { GameState, Partnership, PropertyState } from '../types/GameState';
 
 // prop = first buildable property (Old Kent Road, index 1, colorGroup 'brown')
-const prop = BOARD_SPACES.find((s) => s.type === 'property' && (s.houseCost ?? 0) > 0)!;
+const prop = requireDefined(BOARD_SPACES.find((s) => s.type === 'property' && (s.houseCost ?? 0) > 0));
+const propColorGroup = requireDefined(prop.colorGroup);
 // All sibling spaces in the same color group
 const groupSpaces = BOARD_SPACES.filter(
   (s) => s.type === 'property' && s.colorGroup === prop.colorGroup,
@@ -91,7 +93,7 @@ describe('MortgagePanel', () => {
 
   it('shows the selected property and mortgages it', () => {
     setState({});
-    const emit = vi.spyOn(socketManager, 'emit').mockImplementation(() => {});
+    const emit = vi.spyOn(socketManager, 'emit').mockImplementation(noop);
     render(<MortgagePanel />);
     expect(screen.getByText(prop.name)).toBeTruthy();
     fireEvent.click(screen.getByRole('button', { name: /^mortgage$/i }));
@@ -100,7 +102,7 @@ describe('MortgagePanel', () => {
 
   it('buys a house when full group is owned and emits BUILD_BUY_HOUSE', () => {
     setState({ houses: 1 });
-    const emit = vi.spyOn(socketManager, 'emit').mockImplementation(() => {});
+    const emit = vi.spyOn(socketManager, 'emit').mockImplementation(noop);
     render(<MortgagePanel />);
     fireEvent.click(screen.getByRole('button', { name: /buy house/i }));
     expect(emit).toHaveBeenCalledWith(EVENTS.BUILD_BUY_HOUSE, { spaceIndex: prop.index });
@@ -154,7 +156,7 @@ describe('MortgagePanel', () => {
       partnerships: [
         {
           partnershipId: 'ps1',
-          colorGroup: prop.colorGroup!,
+          colorGroup: propColorGroup,
           partners: [
             { playerId: 'p1', percentage: 50 },
             { playerId: 'p2', percentage: 50 },
@@ -185,7 +187,7 @@ describe('MortgagePanel', () => {
       partnerships: [
         {
           partnershipId: 'ps1',
-          colorGroup: prop.colorGroup!,
+          colorGroup: propColorGroup,
           partners: [
             { playerId: 'p1', percentage: 50 },
             { playerId: 'p2', percentage: 50 },

@@ -25,7 +25,7 @@ describe('BigMomentOverlay', () => {
   it('announces a rent hit with names + amount', () => {
     render(<BigMomentOverlay />);
     act(() => { gameBus.emit('rent-collected', { fromId: 'p2', toId: 'p1', amount: 2_400_000, spaceIndex: 6 }); });
-    const t = screen.getByText(/jonas/i).textContent ?? '';
+    const t = screen.getByText(/jonas/i).textContent;
     expect(t).toMatch(/jonas/i); expect(t).toMatch(/maya/i); expect(t).toMatch(/2\.400M/);
   });
 

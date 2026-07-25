@@ -6,24 +6,11 @@ import type { OrbitControls as OrbitControlsImpl } from 'three-stdlib';
 import { useGameStore, selectCurrentPlayer, selectMyPlayer } from '../state/gameStore';
 import type { CameraReadout } from '../state/gameStore';
 import { thirdPersonPose } from './positions';
-
-// Re-export so callers can assert the shared constant is wired in.
-export { BOARD_ROTATION } from './positions';
+import { INITIAL_CAM_TARGET, INITIAL_CAM_OFFSET } from './cameraConstants';
 
 // Frame-rate-aware smoothing rate for the follow lerp. Higher = snappier.
 // alpha = 1 - exp(-RATE * delta) → ease-out, no snapping, stable at any FPS.
 const FOLLOW_LERP_RATE = 6;
-
-// ── Tunable initial-framing constants ─────────────────────────────────────────
-// These values were dialed in live via the debug overlay.
-//
-// INITIAL_CAM_TARGET — fixed orbit target. The camera always loads aimed here
-// and stays here unless the user manually pans. NOT tied to any player tile.
-//
-// INITIAL_CAM_OFFSET — world-space offset from the target. Camera position =
-// INITIAL_CAM_TARGET + INITIAL_CAM_OFFSET → [-11.04, 7.64, 0.91]; distance ~10.12.
-export const INITIAL_CAM_TARGET: [number, number, number] = [-3.77, 0.61, 0.67];
-export const INITIAL_CAM_OFFSET: [number, number, number] = [-7.27, 7.04, 0.24];
 
 /**
  * CameraRig: free Blender-style viewport navigation with a fixed initial framing.
@@ -164,13 +151,11 @@ export function CameraRig() {
     if (!controls) return;
 
     // Capture originals once on first run (controls is mounted by this point).
-    if (!origClampsRef.current) {
-      origClampsRef.current = {
-        minDistance: controls.minDistance,
-        maxDistance: controls.maxDistance,
-        maxPolarAngle: controls.maxPolarAngle,
-      };
-    }
+    origClampsRef.current ??= {
+      minDistance: controls.minDistance,
+      maxDistance: controls.maxDistance,
+      maxPolarAngle: controls.maxPolarAngle,
+    };
 
     if (cameraMode === 'thirdPerson') {
       // Lock LEFT so orbit cannot fight the follow lerp.

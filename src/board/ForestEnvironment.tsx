@@ -118,9 +118,11 @@ function applyForestFade(material: THREE.Material): void {
   if (mat.userData.forestFadeApplied) return;
   mat.userData.forestFadeApplied = true;
 
-  const prevOnBeforeCompile = mat.onBeforeCompile?.bind(mat);
+  // three.js always provides a default onBeforeCompile (a no-op function), so
+  // it is safe to bind and chain unconditionally.
+  const prevOnBeforeCompile = mat.onBeforeCompile.bind(mat);
   mat.onBeforeCompile = (shader, renderer) => {
-    prevOnBeforeCompile?.(shader, renderer);
+    prevOnBeforeCompile(shader, renderer);
 
     // ── VERTEX: compute the fragment's WORLD position, INSTANCING-AWARE ────────
     // Declare the varying on the always-present <common> include.
@@ -209,6 +211,7 @@ export function ForestEnvironment(): React.JSX.Element {
     const scene = gltf.scene.clone(true);
     scene.traverse((o) => {
       const m = o as THREE.Mesh;
+      // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- runtime narrowing: o is Object3D; only actual meshes have isMesh===true
       if (m.isMesh) {
         m.receiveShadow = true; // ground/foliage takes the board's shadow
         m.frustumCulled = false;
@@ -216,8 +219,9 @@ export function ForestEnvironment(): React.JSX.Element {
         // dissolve out of the way of the board (see applyForestFade). The forest
         // likely shares one material across all meshes, but handle arrays too;
         // applyForestFade is idempotent so a shared material is patched once.
-        const mats = Array.isArray(m.material) ? m.material : [m.material];
-        for (const mat of mats) if (mat) applyForestFade(mat);
+        const material: THREE.Material | THREE.Material[] = m.material;
+        const mats: THREE.Material[] = Array.isArray(material) ? material : [material];
+        for (const mat of mats) applyForestFade(mat);
       }
     });
     scene.updateMatrixWorld(true);
@@ -243,6 +247,7 @@ export function ForestEnvironment(): React.JSX.Element {
     const instPos = new THREE.Vector3();
     scene.traverse((o) => {
       const im = o as THREE.InstancedMesh;
+      // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- runtime narrowing: o is Object3D; only actual InstancedMeshes have isInstancedMesh===true
       if (!im.isInstancedMesh) return;
       if (!/meadow|grass|path|lake/i.test(im.name)) return;
       im.geometry.computeBoundingBox();

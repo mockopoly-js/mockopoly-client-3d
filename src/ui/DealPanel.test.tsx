@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { noop, requireDefined } from '../test-utils';
 import { render, screen, fireEvent } from '@testing-library/react';
 import { DealPanel } from './DealPanel';
 import { useGameStore } from '../state/gameStore';
@@ -28,7 +29,7 @@ describe('DealPanel', () => {
   it('offers a GO deduction when I owe rent', () => {
     base({ mustPayRent: true, rentAmount: 3_000_000, rentOwnerId: 'p2' });
     useGameStore.getState().toggleDealPanel(true);
-    const emit = vi.spyOn(socketManager, 'emit').mockImplementation(() => {});
+    const emit = vi.spyOn(socketManager, 'emit').mockImplementation(noop);
     render(<DealPanel />);
     fireEvent.click(screen.getByRole('button', { name: /take 2/i }));
     expect(emit).toHaveBeenCalledWith(EVENTS.LOAN_GO_DEDUCTION, { count: 2 });
@@ -37,7 +38,7 @@ describe('DealPanel', () => {
   it('sends a rent-deal offer to the creditor', () => {
     base({ mustPayRent: true, rentAmount: 3_000_000, rentOwnerId: 'p2' });
     useGameStore.getState().toggleDealPanel(true);
-    const emit = vi.spyOn(socketManager, 'emit').mockImplementation(() => {});
+    const emit = vi.spyOn(socketManager, 'emit').mockImplementation(noop);
     render(<DealPanel />);
     fireEvent.click(screen.getByRole('button', { name: /propose deal|send offer/i }));
     expect(emit).toHaveBeenCalledWith(EVENTS.DEAL_OFFER, expect.objectContaining({
@@ -47,7 +48,7 @@ describe('DealPanel', () => {
 
   it('creditor accepts an active deal (I am not lastOfferBy)', () => {
     base({ mustPayRent: false }, { dealId: 'd1', debtorId: 'p2', creditorIds: ['p1'], spaceIndex: 9, totalRentOwed: 2_000_000, offeredProperties: [], offeredMoney: 1_000_000, requestedExemption: 1_000_000, lastOfferBy: 'p2', acceptedPlayerIds: [], status: 'pending' });
-    const emit = vi.spyOn(socketManager, 'emit').mockImplementation(() => {});
+    const emit = vi.spyOn(socketManager, 'emit').mockImplementation(noop);
     render(<DealPanel />);
     fireEvent.click(screen.getByRole('button', { name: /^accept$/i }));
     expect(emit).toHaveBeenCalledWith(EVENTS.DEAL_ACCEPT, { dealId: 'd1' });
@@ -61,7 +62,7 @@ describe('DealPanel', () => {
       totalRentOwed: 4_000_000, offeredProperties: [1], offeredMoney: 500_000,
       requestedExemption: 2_000_000, lastOfferBy: 'p2', acceptedPlayerIds: [], status: 'pending',
     });
-    const emit = vi.spyOn(socketManager, 'emit').mockImplementation(() => {});
+    const emit = vi.spyOn(socketManager, 'emit').mockImplementation(noop);
     render(<DealPanel />);
     fireEvent.click(screen.getByRole('button', { name: /^counter$/i }));
     // Counter mode UI should show, but no DEAL_COUNTER has been emitted yet
@@ -76,7 +77,7 @@ describe('DealPanel', () => {
       requestedExemption: 2_000_000, lastOfferBy: 'p2', acceptedPlayerIds: [], status: 'pending',
     };
     base({ mustPayRent: false }, originalDeal);
-    const emit = vi.spyOn(socketManager, 'emit').mockImplementation(() => {});
+    const emit = vi.spyOn(socketManager, 'emit').mockImplementation(noop);
     render(<DealPanel />);
 
     // Enter counter mode
@@ -103,9 +104,8 @@ describe('DealPanel', () => {
     }));
 
     // Crucially: emitted values differ from the original deal values
-    const call = emit.mock.calls.find((c) => c[0] === EVENTS.DEAL_COUNTER);
-    expect(call).toBeDefined();
-    const payload = call![1] as { offeredMoney: number; requestedExemption: number };
+    const call = requireDefined(emit.mock.calls.find((c) => c[0] === EVENTS.DEAL_COUNTER));
+    const payload = call[1] as { offeredMoney: number; requestedExemption: number };
     expect(payload.offeredMoney).not.toBe(500_000);       // edited, not verbatim
     expect(payload.requestedExemption).not.toBe(2_000_000); // edited, not verbatim
   });
@@ -115,7 +115,7 @@ describe('DealPanel', () => {
   it('offer sends offeredProperties: [] when none selected', () => {
     base({ mustPayRent: true, rentAmount: 3_000_000, rentOwnerId: 'p2' });
     useGameStore.getState().toggleDealPanel(true);
-    const emit = vi.spyOn(socketManager, 'emit').mockImplementation(() => {});
+    const emit = vi.spyOn(socketManager, 'emit').mockImplementation(noop);
     render(<DealPanel />);
     fireEvent.click(screen.getByRole('button', { name: /propose deal/i }));
     expect(emit).toHaveBeenCalledWith(EVENTS.DEAL_OFFER, expect.objectContaining({
@@ -130,7 +130,7 @@ describe('DealPanel', () => {
     ];
     base({ mustPayRent: true, rentAmount: 3_000_000, rentOwnerId: 'p2' }, null, 15_000_000, 0, 0, properties);
     useGameStore.getState().toggleDealPanel(true);
-    const emit = vi.spyOn(socketManager, 'emit').mockImplementation(() => {});
+    const emit = vi.spyOn(socketManager, 'emit').mockImplementation(noop);
     render(<DealPanel />);
 
     // Find and click the property toggle button for Old Kent Road

@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { noop } from '../test-utils';
 import { render, screen, fireEvent, act } from '@testing-library/react';
 import { Lobby } from './Lobby';
 import { socketManager } from '../network/SocketManager';
@@ -37,7 +38,7 @@ describe('Lobby', () => {
 
   it('emits ROOM_READY when the ready button is clicked', () => {
     setState([seat('p1', 'Maya', { isHost: true })]);
-    const emit = vi.spyOn(socketManager, 'emit').mockImplementation(() => {});
+    const emit = vi.spyOn(socketManager, 'emit').mockImplementation(noop);
     render(<Lobby />);
     fireEvent.click(screen.getByRole('button', { name: /ready/i }));
     expect(emit).toHaveBeenCalledWith(EVENTS.ROOM_READY, { isReady: true });

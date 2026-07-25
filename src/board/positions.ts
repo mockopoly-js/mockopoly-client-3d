@@ -15,7 +15,7 @@ for (let i = 0; i < 9; i++) S.push(CORNER + SW / 2 + i * SW);
 export interface TilePos { x: number; y: number }
 
 function buildPositions(): TilePos[] {
-  const p: TilePos[] = new Array(40);
+  const p: TilePos[] = new Array<TilePos>(40);
   p[0] = { x: CE, y: CE };                                 // GO
   for (let i = 1; i <= 9; i++) p[i] = { x: S[9 - i], y: CE };   // bottom row
   p[10] = { x: CC, y: CE };                                // Jail

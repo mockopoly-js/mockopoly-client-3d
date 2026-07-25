@@ -28,24 +28,30 @@ export function CardDrawnOverlay() {
   const [draw, setDraw] = useState<Draw | null>(null);
 
   useGameBusEvent('card-drawn', (d: S_CardDrawn) => {
-    if (!d || !d.deck) return;
+    // gameBus is untyped at the emit site, so guard the payload defensively even
+    // though the S_CardDrawn contract types these fields as required.
+    // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- payload arrives over an untyped bus; guard against a missing deck
+    if (!d.deck) return;
     const isChance = d.deck === 'chance';
     setDraw((prev) => ({
       deck: d.deck,
       title: isChance ? 'CHANCE' : 'COMMUNITY CHEST',
+      // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- untyped bus payload: card/description may be absent
       description: d.card?.description ?? '',
       header: isChance ? CHANCE : COMMUNITY,
       id: (prev?.id ?? 0) + 1,
     }));
   });
 
-  // Auto-dismiss; re-armed whenever a new draw arrives (keyed on id).
+  // Auto-dismiss; re-armed whenever a new draw arrives. `draw` is only ever
+  // replaced with a fresh object carrying an incremented id, so depending on the
+  // whole `draw` re-arms the timer exactly once per draw (same as keying on id).
   useEffect(() => {
     if (!draw) return;
     if (typeof window === 'undefined') return;
     const t = window.setTimeout(() => setDraw(null), HOLD_MS);
     return () => window.clearTimeout(t);
-  }, [draw?.id]);
+  }, [draw]);
 
   if (!draw) return null;
 

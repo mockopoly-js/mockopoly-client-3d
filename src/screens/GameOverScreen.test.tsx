@@ -1,10 +1,13 @@
-import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach } from 'vitest';
 import { render, screen, fireEvent } from '@testing-library/react';
 import { GameOverScreen } from './GameOverScreen';
 import { useGameStore } from '../state/gameStore';
+import type { Player } from '../types/GameState';
 
-function seat(id: string, name: string, money: number, isBankrupt = false) {
-  return { id, name, token: 'red', money, isBankrupt } as any;
+function seat(id: string, name: string, money: number, isBankrupt = false): Player {
+  // Only the fields GameOverScreen reads are set; the rest of Player is
+  // irrelevant to this view, so cast the partial fixture to the full type.
+  return { id, name, token: 'red', money, isBankrupt } as unknown as Player;
 }
 function setOver(winnerId: string) {
   useGameStore.getState().setGameOver({

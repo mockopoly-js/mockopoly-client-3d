@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach, type MockInstance } from 'vitest';
 import { renderHook, act } from '@testing-library/react';
 import { useIsMobile } from './useIsMobile';
 
@@ -31,9 +31,7 @@ function makeMockMql(matches: boolean) {
 
 describe('useIsMobile', () => {
   let mockMql: ReturnType<typeof makeMockMql>;
-  // Use a loose type so strict TS doesn't complain about overloaded matchMedia signatures.
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  let matchMediaSpy: any = null;
+  let matchMediaSpy: MockInstance<typeof window.matchMedia> | null = null;
 
   beforeEach(() => {
     mockMql = makeMockMql(false);
@@ -85,6 +83,7 @@ describe('useIsMobile', () => {
   it('returns false and does not throw when matchMedia is absent', () => {
     matchMediaSpy?.mockRestore();
     // Delete matchMedia to simulate jsdom/SSR absence
+    // eslint-disable-next-line @typescript-eslint/unbound-method -- we save the property reference only to restore it verbatim below; it is never invoked detached from `window`, so `this` binding is irrelevant.
     const original = window.matchMedia;
     // @ts-expect-error intentionally removing matchMedia
     delete window.matchMedia;

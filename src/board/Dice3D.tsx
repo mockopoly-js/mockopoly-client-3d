@@ -8,7 +8,7 @@ import {
 } from '@react-three/rapier';
 import * as THREE from 'three';
 import { useGameBusEvent } from '../state/useGameBus';
-import { FACE_NORMAL, resolveQuaternion, resolveQuaternionNear } from './dice-orientation';
+import { FACE_NORMAL, resolveQuaternionNear } from './dice-orientation';
 
 // ---- Geometry / placement constants -----------------------------------------
 const DIE_SIZE = 0.5;               // cube edge length
@@ -236,7 +236,7 @@ function throwDie(body: RapierRigidBody, startX: number) {
  */
 export function Dice3D() {
   const rootRef = useRef<THREE.Group | null>(null);
-  const bodies = useRef<Array<RapierRigidBody | null>>([null, null]);
+  const bodies = useRef<(RapierRigidBody | null)[]>([null, null]);
   const states = useRef<[DieState, DieState]>([makeDieState(), makeDieState()]);
   const active = useRef(false);
   // `running` mirrors `active` for the <Physics paused> prop: the world only
@@ -246,7 +246,7 @@ export function Dice3D() {
   const [running, setRunning] = useState(false);
 
   useGameBusEvent('dice-rolled', (d: { dice?: [number, number] }) => {
-    if (!d?.dice) return;
+    if (!d.dice) return;
     const [b0, b1] = bodies.current;
     if (!b0 || !b1) return;
 

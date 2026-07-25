@@ -15,7 +15,9 @@ import {
 // clip prop drives an animation action, NOT to exercise WebGL/skinning
 // (browser-only). The `tint` prop is a no-op (characters render native colors);
 // it is still accepted for back-compat, so the tests pass it harmlessly.
-vi.mock('@react-three/fiber', () => ({ useFrame: () => {} }));
+import { noop } from '../test-utils';
+
+vi.mock('@react-three/fiber', () => ({ useFrame: noop }));
 
 // Fake useGLTF/useAnimations so the component mounts without fetching a .glb or
 // spinning up an AnimationMixer. useAnimations returns a controllable `actions`
@@ -39,7 +41,7 @@ const walkAction = makeAction();
 
 vi.mock('@react-three/drei', () => {
   const useGLTF = () => ({
-    scene: { traverse: (_fn: (o: unknown) => void) => {} },
+    scene: { traverse: noop },
     animations: [],
   });
   useGLTF.preload = vi.fn();
@@ -55,11 +57,17 @@ vi.mock('@react-three/drei', () => {
 // SkeletonUtils.clone: return a minimal cloned "scene" with a no-op traverse so
 // the per-instance material-clone pass runs without a real Object3D graph.
 vi.mock('three/examples/jsm/utils/SkeletonUtils.js', () => ({
-  clone: () => ({ traverse: (_fn: (o: unknown) => void) => {} }),
+  clone: () => ({ traverse: noop }),
 }));
 
 // Import AFTER mocks are registered.
-import { CharacterToken, type CharacterTokenHandle, pickSkinMaterialNames, pickPrimaryMaterialName } from './CharacterToken';
+import { CharacterToken, type CharacterTokenHandle } from './CharacterToken';
+import { pickSkinMaterialNames, pickPrimaryMaterialName } from './skinMaterials';
+
+/* eslint-disable @typescript-eslint/no-deprecated -- this suite deliberately
+   exercises the DEPRECATED back-compat surface (the `tint` no-op prop and the
+   `pickPrimaryMaterialName` delegate) precisely to guard that they keep working;
+   the deprecation warnings here are expected and intentional, not accidents. */
 
 describe('CHARACTERS catalog', () => {
   it('has 52 entries with unique ids and well-formed urls', () => {

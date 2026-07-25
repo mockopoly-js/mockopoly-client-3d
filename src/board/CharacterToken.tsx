@@ -2,6 +2,7 @@ import { useRef, useMemo, useEffect, forwardRef, useImperativeHandle } from 'rea
 import { useGLTF, useAnimations } from '@react-three/drei';
 import * as THREE from 'three';
 import { clone as cloneSkeleton } from 'three/examples/jsm/utils/SkeletonUtils.js';
+import { pickSkinMaterialNames } from './skinMaterials';
 
 /**
  * A rigged, animated character usable as a player token (ported from the
@@ -70,93 +71,6 @@ function cloneMaterial(mat: THREE.Material): THREE.Material {
 }
 
 /**
- * Flesh material name fragments (case-insensitive, partial match).
- * Materials whose names contain any of these tokens are the character's actual
- * flesh/body — they are the TARGET of the "Skin Color" recolor. All other
- * materials (outfit, hair, eyes, facial features, accessories) are untouched.
- *
- * Only "skin" is a flesh token. Across all 52 models the "Skin" material's
- * primitive spans the whole body (head + torso + arms + hands + legs), so a
- * single recolor covers the face flesh AND the hands uniformly.
- *
- * "face" is deliberately NOT a flesh token: the "Face" material is the flat
- * eyes/eyebrows/mouth DECAL panel in front of the head, not flesh (see the file
- * header for the verified bbox data). It is additionally listed in the exclude
- * set below so it can never be recolored.
- */
-const SKIN_MATERIAL_TOKENS = ['skin'];
-
-/**
- * Explicit exclude list — any material whose name (case-insensitive, partial)
- * contains ANY of these tokens is NEVER recolored, even if it also matches a
- * flesh token. The exclude wins unconditionally.
- *
- * "face" heads the list: the "Face" material is the drawn eyes/eyebrows/mouth
- * decal (NOT flesh), and recoloring it was the reported bug (blue eyes/brows).
- *
- * Also covers: hair & facial hair, eyes & ocular components, other facial
- * features, and accessories that may share naming fragments with the flesh
- * material.
- *
- *   face,
- *   hair, beard, mustache, moustache, stubble, goatee, sideburn, whisker,
- *   facial,
- *   eye, eyes, eyebrow, brow, lash, pupil, iris, sclera, lens,
- *   teeth, tooth, mouth, lip, tongue, nose, ear, nail,
- *   glasses, mask
- */
-const SKIN_EXCLUDE_TOKENS = [
-  // Eyes/eyebrows/mouth decal panel (the "Face" material) — NOT flesh.
-  'face',
-  // Hair & facial hair
-  'hair', 'beard', 'mustache', 'moustache', 'stubble', 'goatee', 'sideburn', 'whisker', 'facial',
-  // Eyes & ocular
-  'eye', 'brow', 'lash', 'pupil', 'iris', 'sclera', 'lens',
-  // Other facial features / accessories
-  'teeth', 'tooth', 'mouth', 'lip', 'tongue', 'nose', 'ear', 'nail', 'glasses', 'mask',
-];
-
-/**
- * Given a list of material names from a cloned scene, return all names that
- * are FLESH materials (the body "Skin"). These are the only materials that get
- * recolored when the player picks a skin color. Outfit, hair, eyes, the "Face"
- * feature decal, and all other accessories are NEVER touched.
- *
- * A material is included when:
- *   1. Its name (case-insensitive) contains "skin"  AND
- *   2. Its name does NOT contain any of the exclude tokens (face, eye, brow,
- *      hair, mouth, …).
- *
- * The exclude check wins — e.g. "FaceSkin" is still excluded (it would be a
- * feature-decal-tone material, not flesh).
- *
- * Returns an empty array when the model has no flesh material (rare).
- *
- * Exported so it can be unit-tested independently of Three.js.
- */
-export function pickSkinMaterialNames(names: string[]): string[] {
-  return names.filter((n) => {
-    const lower = n.toLowerCase();
-    const isSkin = SKIN_MATERIAL_TOKENS.some((token) => lower.includes(token));
-    if (!isSkin) return false;
-    // Exclude all non-flesh materials: the "Face" feature decal, hair, facial
-    // hair, eyes, ocular, other facial features, and accessories — even if they
-    // also match a flesh token.
-    const isExcluded = SKIN_EXCLUDE_TOKENS.some((token) => lower.includes(token));
-    return !isExcluded;
-  });
-}
-
-/**
- * @deprecated Use pickSkinMaterialNames. Kept for back-compat — delegates to
- * pickSkinMaterialNames and returns the first match or null.
- */
-export function pickPrimaryMaterialName(names: string[]): string | null {
-  const matches = pickSkinMaterialNames(names);
-  return matches.length > 0 ? matches[0] : null;
-}
-
-/**
  * Apply `baseColor` to the flesh "Skin" material of a cloned scene. Outfit
  * materials (Shirt, Clothes, Main, Jacket, Armor, Hat, Belt, Pants, etc.), the
  * "Face" eyes/eyebrows/mouth decal, hair, and all other accessories are NEVER
@@ -173,10 +87,13 @@ function applyBaseColor(scene: THREE.Group, baseColor: string): void {
   const matNames: string[] = [];
   scene.traverse((o) => {
     const mesh = o as THREE.Mesh;
+    // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- runtime narrowing: o is Object3D; only actual meshes have isMesh===true
     if (!mesh.isMesh) return;
-    const mats = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
+    const material: THREE.Material | THREE.Material[] = mesh.material;
+    const mats: THREE.Material[] = Array.isArray(material) ? material : [material];
     for (const m of mats) {
-      if (m && m.name && !matNames.includes(m.name)) {
+      // Skip unnamed materials (empty name); dedupe by name.
+      if (m.name && !matNames.includes(m.name)) {
         matNames.push(m.name);
       }
     }
@@ -190,10 +107,12 @@ function applyBaseColor(scene: THREE.Group, baseColor: string): void {
   const color = new THREE.Color(baseColor);
   scene.traverse((o) => {
     const mesh = o as THREE.Mesh;
+    // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- runtime narrowing: o is Object3D; only actual meshes have isMesh===true
     if (!mesh.isMesh) return;
-    const mats = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
+    const material: THREE.Material | THREE.Material[] = mesh.material;
+    const mats: THREE.Material[] = Array.isArray(material) ? material : [material];
     for (const m of mats) {
-      if (m && skinNameSet.has(m.name)) {
+      if (skinNameSet.has(m.name)) {
         (m as THREE.MeshStandardMaterial).color.set(color);
       }
     }
@@ -264,11 +183,13 @@ export const CharacterToken = forwardRef<CharacterTokenHandle, CharacterTokenPro
       const cloned = cloneSkeleton(gltf.scene) as THREE.Group;
       cloned.traverse((o) => {
         const mesh = o as THREE.Mesh;
+        // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- runtime narrowing: o is Object3D; only actual meshes have isMesh===true
         if (!mesh.isMesh) return;
         mesh.castShadow = true;
         mesh.receiveShadow = false;
         if (Array.isArray(mesh.material)) {
           mesh.material = mesh.material.map((mm) => cloneMaterial(mm));
+          // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- defensive: a mesh could carry a null/undefined material slot at runtime
         } else if (mesh.material) {
           mesh.material = cloneMaterial(mesh.material);
         }
@@ -278,7 +199,7 @@ export const CharacterToken = forwardRef<CharacterTokenHandle, CharacterTokenPro
         applyBaseColor(cloned, baseColor);
       }
       return cloned;
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+     
     }, [gltf.scene, baseColor]);
 
     // Dispose the per-instance cloned materials on unmount / re-clone. Geometry
@@ -288,10 +209,11 @@ export const CharacterToken = forwardRef<CharacterTokenHandle, CharacterTokenPro
       return () => {
         scene.traverse((o) => {
           const mesh = o as THREE.Mesh;
+          // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- runtime narrowing: o is Object3D; only actual meshes have isMesh===true
           if (!mesh.isMesh) return;
-          (Array.isArray(mesh.material) ? mesh.material : [mesh.material]).forEach((m) =>
-            m?.dispose(),
-          );
+          const material: THREE.Material | THREE.Material[] = mesh.material;
+          const mats: THREE.Material[] = Array.isArray(material) ? material : [material];
+          for (const m of mats) m.dispose();
         });
       };
     }, [scene]);
@@ -388,4 +310,6 @@ export const CharacterToken = forwardRef<CharacterTokenHandle, CharacterTokenPro
  * `ModelMesh.preload`). Call only for characters that
  * are actually in the current game, not all 52 upfront.
  */
-CharacterToken.preload = useGLTF.preload;
+// Forward through an arrow (rather than aliasing the bare method) so `this`
+// stays bound to `useGLTF` — avoids the unbound-method footgun.
+CharacterToken.preload = (url: string): void => { useGLTF.preload(url); };

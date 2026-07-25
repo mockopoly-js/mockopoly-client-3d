@@ -1,7 +1,7 @@
 import { useGameStore } from '../state/gameStore';
 import { TOKEN_HEX } from '../constants/theme';
 import { formatMoney } from '../utils/format';
-import type { Player, TokenType } from '../types/GameState';
+import type { Player } from '../types/GameState';
 import { FONT_FAMILY } from '../constants/fonts';
 import { useIsMobile } from '../ui/useIsMobile';
 import { GameButton } from '../ui/GameButton';
@@ -28,7 +28,7 @@ export function GameOverScreen() {
           {standings.map((p: Player, i) => (
             <div key={p.id} data-testid="standing" style={{ ...row, opacity: p.isBankrupt ? 0.5 : 1 }}>
               <span style={{ width: 22, color: '#8888a0', fontWeight: 800 }}>{i + 1}</span>
-              <span style={{ ...dot, background: TOKEN_HEX[p.token as TokenType] }} />
+              <span style={{ ...dot, background: TOKEN_HEX[p.token] }} />
               <span style={{ flex: 1, fontWeight: 800, fontSize: 15 }}>{p.name}</span>
               <span style={{ fontVariantNumeric: 'tabular-nums', fontWeight: 800, color: p.isBankrupt ? '#e5533d' : '#e8e8f0', fontSize: 14 }}>
                 {p.isBankrupt ? 'Bankrupt' : formatMoney(p.money)}
@@ -50,7 +50,7 @@ export function GameOverScreen() {
         {standings.map((p: Player, i) => (
           <div key={p.id} data-testid="standing" style={{ ...row, opacity: p.isBankrupt ? 0.5 : 1 }}>
             <span style={{ width: 22, color: '#8888a0', fontWeight: 800 }}>{i + 1}</span>
-            <span style={{ ...dot, background: TOKEN_HEX[p.token as TokenType] }} />
+            <span style={{ ...dot, background: TOKEN_HEX[p.token] }} />
             <span style={{ flex: 1, fontWeight: 800 }}>{p.name}</span>
             <span style={{ fontVariantNumeric: 'tabular-nums', fontWeight: 800, color: p.isBankrupt ? '#e5533d' : '#e8e8f0' }}>
               {p.isBankrupt ? 'Bankrupt' : formatMoney(p.money)}

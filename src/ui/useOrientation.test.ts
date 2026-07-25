@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach, type MockInstance } from 'vitest';
 import { renderHook, act } from '@testing-library/react';
 import { useOrientation } from './useOrientation';
 
@@ -29,8 +29,7 @@ function makeMockMql(matches: boolean) {
 // ---------- tests ----------
 
 describe('useOrientation', () => {
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  let matchMediaSpy: any = null;
+  let matchMediaSpy: MockInstance<typeof window.matchMedia> | null = null;
   let mockMql: ReturnType<typeof makeMockMql>;
 
   beforeEach(() => {
@@ -47,14 +46,14 @@ describe('useOrientation', () => {
 
   it('returns landscape when matchMedia(portrait) does not match', () => {
     mockMql = makeMockMql(false);
-    matchMediaSpy.mockReturnValue(mockMql as unknown as MediaQueryList);
+    matchMediaSpy?.mockReturnValue(mockMql as unknown as MediaQueryList);
     const { result } = renderHook(() => useOrientation());
     expect(result.current).toBe('landscape');
   });
 
   it('returns portrait when matchMedia(portrait) matches', () => {
     mockMql = makeMockMql(true);
-    matchMediaSpy.mockReturnValue(mockMql as unknown as MediaQueryList);
+    matchMediaSpy?.mockReturnValue(mockMql as unknown as MediaQueryList);
     const { result } = renderHook(() => useOrientation());
     expect(result.current).toBe('portrait');
   });
@@ -70,7 +69,7 @@ describe('useOrientation', () => {
 
   it('updates from portrait back to landscape when media query fires', () => {
     mockMql = makeMockMql(true);
-    matchMediaSpy.mockReturnValue(mockMql as unknown as MediaQueryList);
+    matchMediaSpy?.mockReturnValue(mockMql as unknown as MediaQueryList);
     const { result } = renderHook(() => useOrientation());
     expect(result.current).toBe('portrait');
     act(() => {
@@ -89,6 +88,7 @@ describe('useOrientation', () => {
 
   it('returns landscape and does not throw when matchMedia is absent', () => {
     matchMediaSpy?.mockRestore();
+    // eslint-disable-next-line @typescript-eslint/unbound-method -- we save the property reference only to restore it verbatim below; it is never invoked detached from `window`, so `this` binding is irrelevant.
     const original = window.matchMedia;
     // @ts-expect-error intentionally removing matchMedia
     delete window.matchMedia;

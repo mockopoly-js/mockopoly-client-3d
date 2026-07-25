@@ -8,6 +8,7 @@ import {
 } from './gameStore';
 import { DEFAULT_CHARACTER } from '../constants/characters';
 import type { GameState } from '../types/GameState';
+import type { S_GameOver } from '../types/SocketEvents';
 
 function fakeState(): GameState {
   // Minimal shape sufficient for the store's reads. Cast covers unused fields.
@@ -84,7 +85,7 @@ describe('gameStore', () => {
   });
 
   it('stores and clears the gameOver payload', () => {
-    const go = { winnerId: 'p1', finalStandings: [] } as any;
+    const go: S_GameOver = { winnerId: 'p1', finalStandings: [] };
     useGameStore.getState().setGameOver(go);
     expect(useGameStore.getState().gameOver).toBe(go);
     useGameStore.getState().reset();

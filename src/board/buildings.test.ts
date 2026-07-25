@@ -4,7 +4,7 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { houseSlots, hotelSlot } from './Buildings';
+import { houseSlots, hotelSlot } from './buildingSlots';
 import { tileToWorld } from './positions';
 
 // Helpers

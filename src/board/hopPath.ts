@@ -11,8 +11,8 @@ export function hopPath(from: number, to: number): number[] {
 }
 
 /** Planar (x,z) offsets so up to 4 tokens sharing a tile don't overlap. World units. */
-export const STACK = 0.28;
-export const STACK_OFFSETS: [number, number][] = [
+const STACK = 0.28;
+const STACK_OFFSETS: [number, number][] = [
   [-STACK, -STACK], [STACK, -STACK], [-STACK, STACK], [STACK, STACK],
 ];
 export function stackOffset(indexInTile: number): [number, number] {

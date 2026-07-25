@@ -3,7 +3,6 @@ import type { TokenType, ColorGroup } from '../types/GameState';
 /** Shared gold palette — used by the game-button family and panel borders. */
 export const GOLD = '#d4af37';
 export const GOLD_BRIGHT = '#f0d060';
-export const GOLD_DARK = '#9a6b1e';
 
 /** Player token colors (hex), matching the 2D client's TOKEN_HEX. */
 export const TOKEN_HEX: Record<TokenType, string> = {
