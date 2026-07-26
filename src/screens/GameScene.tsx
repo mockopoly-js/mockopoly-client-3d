@@ -333,12 +333,12 @@ export function GameScene() {
     <>
     {/* Fixed container that hosts the stats.js DOM panel. Must be a sibling of
         Canvas (not a child) so it sits in normal DOM flow outside the WebGL layer.
-        top:104px places it below the CameraDebugOverlay (top:56 + ~4 lines ≈ 96px). */}
+        Uses safe-area-inset-top to clear notches on landscape mobile. */}
     <div
       ref={statsParentRef}
       style={{
         position: 'fixed',
-        top: 104,
+        top: 'max(8px, env(safe-area-inset-top))',
         left: 8,
         zIndex: 60,
         pointerEvents: 'none',
@@ -488,11 +488,11 @@ export function GameScene() {
         {/* Edge AA replacement for the dropped MSAA (see note above). */}
         <SMAA />
       </EffectComposer>
-      {/* FPS counter — DEV-only perf readout (never ships to production) and
-          hidden on mobile so the in-game view stays clean. Mounted into
-          statsParentRef (the fixed div sibling above) so it appears below the
-          CameraDebugOverlay at top:104px left:8px rather than the top-left origin. */}
-      {import.meta.env.DEV && !isMobile && <Stats parent={statsParentRef} />}
+      {/* FPS counter — DEV-only perf readout (never ships to production).
+          Shown on mobile too so devs can check mobile framerate during HMR dev.
+          Mounted into statsParentRef (the fixed div sibling above) with safe-area
+          positioning to clear notches. */}
+      {import.meta.env.DEV && <Stats parent={statsParentRef} />}
     </Canvas>
     </>
   );
