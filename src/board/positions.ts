@@ -133,37 +133,48 @@ export interface ThirdPersonPose {
 }
 
 /**
- * Compute the over-the-shoulder camera pose for a token sitting on `tileIndex`.
- *
- * The pose is derived PURELY from tile indices — no dependency on any token
- * facing rotation (the token has none at rest). The forward direction is the
- * normalized world-space vector from the current tile to the NEXT tile in the
- * ring, i.e. the token's direction of travel.
- *
- * CRITICAL: every position here comes from `tileToWorldRotated`, which already
- * applies BOARD_ROTATION and therefore returns the token's ACTUAL visual world
- * position. The returned pose is in that same world space — the space the camera
- * and OrbitControls live in — so it must NOT be rotated again by the caller.
+ * Ring "direction of travel" for `tileIndex`: the normalized, planar, world-space
+ * vector from the current tile to the NEXT tile in the ring. World-space because
+ * it comes from `tileToWorldRotated` (BOARD_ROTATION already applied), matching
+ * the camera's space. Falls back to +Z on the (impossible for a 40-tile ring)
+ * degenerate case.
  */
-export function thirdPersonPose(tileIndex: number): ThirdPersonPose {
+function ringForward(tileIndex: number): THREE.Vector3 {
   const cur = ((tileIndex % 40) + 40) % 40;
   const next = (cur + 1) % 40;
-
-  const curPos = tileToWorldRotated(cur);
-  const nextPos = tileToWorldRotated(next);
-
-  // Direction of travel in world space (planar; y is flat on the board).
-  const forward = nextPos.clone().sub(curPos);
+  const forward = tileToWorldRotated(next).sub(tileToWorldRotated(cur));
   forward.y = 0;
   if (forward.lengthSq() < 1e-8) {
-    // Degenerate (should not happen for a 40-tile ring) — face +Z as a fallback.
     forward.set(0, 0, 1);
   } else {
     forward.normalize();
   }
+  return forward;
+}
 
-  // Token position at its base height.
-  const tokenPos = curPos.clone();
+/**
+ * Compute the over-the-shoulder camera pose for a token at an EXPLICIT world
+ * position `tokenWorldPos`, with the "behind" direction taken from the ring
+ * (tile → next) via `tileIndex`.
+ *
+ * This is the LIVE-position variant used by the third-person follow cam: the
+ * token LOCATION comes from the actual animated mesh position (so the camera
+ * eases along with the walking character every frame), while the behind-direction
+ * still tracks the discrete ring tile the token is moving along.
+ *
+ * `tokenWorldPos` MUST be the token's ACTUAL world-space position (BOARD_ROTATION
+ * applied — i.e. `group.getWorldPosition(...)`), so it lives in the same world
+ * space the camera / OrbitControls do and the returned pose must NOT be rotated
+ * again by the caller. `tokenWorldPos` is treated as read-only (it is cloned).
+ */
+export function thirdPersonPoseAt(
+  tokenWorldPos: THREE.Vector3,
+  tileIndex: number,
+): ThirdPersonPose {
+  const forward = ringForward(tileIndex);
+
+  // Token position at its base height (do NOT mutate the caller's vector).
+  const tokenPos = tokenWorldPos.clone();
   tokenPos.y = TOKEN_BASE_Y;
 
   // Camera sits BEHIND the token (−forward) and ABOVE it.
@@ -177,4 +188,27 @@ export function thirdPersonPose(tileIndex: number): ThirdPersonPose {
   target.y = TOKEN_BASE_Y + THIRD_PERSON_TARGET_Y;
 
   return { cameraPos, target };
+}
+
+/**
+ * Compute the over-the-shoulder camera pose for a token sitting on `tileIndex`.
+ *
+ * The pose is derived PURELY from tile indices — no dependency on any token
+ * facing rotation (the token has none at rest). The forward direction is the
+ * normalized world-space vector from the current tile to the NEXT tile in the
+ * ring, i.e. the token's direction of travel.
+ *
+ * CRITICAL: every position here comes from `tileToWorldRotated`, which already
+ * applies BOARD_ROTATION and therefore returns the token's ACTUAL visual world
+ * position. The returned pose is in that same world space — the space the camera
+ * and OrbitControls live in — so it must NOT be rotated again by the caller.
+ *
+ * This is the DISCRETE-tile pose (used as the follow-cam fallback before a live
+ * token position has been published, and everywhere else the tile is the source
+ * of truth); `thirdPersonPoseAt` is the live-position variant. Delegating keeps
+ * the two byte-for-byte consistent.
+ */
+export function thirdPersonPose(tileIndex: number): ThirdPersonPose {
+  const cur = ((tileIndex % 40) + 40) % 40;
+  return thirdPersonPoseAt(tileToWorldRotated(cur), tileIndex);
 }

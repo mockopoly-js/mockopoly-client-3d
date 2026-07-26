@@ -5,7 +5,8 @@ import * as THREE from 'three';
 import type { OrbitControls as OrbitControlsImpl } from 'three-stdlib';
 import { useGameStore, selectCurrentPlayer, selectMyPlayer } from '../state/gameStore';
 import type { CameraReadout } from '../state/gameStore';
-import { thirdPersonPose } from './positions';
+import { thirdPersonPose, thirdPersonPoseAt } from './positions';
+import { getLiveTokenPosition } from './liveTokenPositions';
 import { INITIAL_CAM_TARGET, INITIAL_CAM_OFFSET, MOBILE_INITIAL_CAM_OFFSET } from './cameraConstants';
 import { useIsMobile } from '../ui/useIsMobile';
 import { beginCameraMotion, endCameraMotion } from './mobileRender';
@@ -102,6 +103,12 @@ export function CameraRig() {
   const followTileRef = useRef<number | null>(null);
   followTileRef.current =
     activePlayer?.position ?? myPlayer?.position ?? null;
+  // Id of the SAME follow-target player (active player, else my player), used to
+  // look up that token's LIVE animated world position from the live-position bus.
+  // Parallels followTileRef so the tile (for the behind-direction) and the live
+  // position (for the location) always describe the same token.
+  const followIdRef = useRef<string | null>(null);
+  followIdRef.current = activePlayer?.id ?? myPlayer?.id ?? null;
 
   // Reusable scratch vectors so the follow lerp allocates nothing per frame.
   const scratchCamPos = useRef(new THREE.Vector3());
@@ -212,7 +219,16 @@ export function CameraRig() {
     if (cameraModeRef.current === 'thirdPerson') {
       const tile = followTileRef.current;
       if (tile != null) {
-        const pose = thirdPersonPose(tile);
+        // Follow the LIVE animated token world position (published every frame by
+        // PlayerTokens) so the camera eases along WITH the walking character —
+        // not just snapping to the destination tile once the walk stops. The
+        // behind-direction still comes from the discrete ring tile. Fall back to
+        // the discrete-tile pose before any live position has been published
+        // (e.g. the very first frame). getLiveTokenPosition returns the shared
+        // stored vector; thirdPersonPoseAt clones it and never mutates it.
+        const followId = followIdRef.current;
+        const livePos = followId != null ? getLiveTokenPosition(followId) : undefined;
+        const pose = livePos ? thirdPersonPoseAt(livePos, tile) : thirdPersonPose(tile);
         // Frame-rate-aware ease-out: alpha grows with delta, capped at 1.
         const alpha = 1 - Math.exp(-FOLLOW_LERP_RATE * delta);
         const cam = controls.object;

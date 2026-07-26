@@ -4,6 +4,7 @@ import * as THREE from 'three';
 import { useGameStore } from '../state/gameStore';
 import { useGameBusEvent } from '../state/useGameBus';
 import { tileToWorld, buildTilePath } from './positions';
+import { setLiveTokenPosition } from './liveTokenPositions';
 import { stackOffset } from './hopPath';
 import { TOKEN_HEX } from '../constants/theme';
 import { CharacterToken, type CharacterTokenHandle } from './CharacterToken';
@@ -196,6 +197,9 @@ export function PlayerTokens() {
   const playersRef = useRef<Player[]>(players);
   playersRef.current = players;
   const groups = useRef<Record<string, THREE.Group | null>>({});
+  // Reused scratch for reading each token's live world position each frame (fed
+  // to the live-position bus for the follow cam) — allocates nothing per frame.
+  const scratchWorld = useRef(new THREE.Vector3());
   // Value types carry `| undefined` because these are sparse, id-keyed maps:
   // a key is absent until that token first walks / is seeded, so reads must be
   // (and are) guarded. Typing them honestly keeps the runtime guards meaningful.
@@ -543,6 +547,15 @@ export function PlayerTokens() {
           });
         }
       }
+
+      // Publish this token's LIVE world position for the third-person follow cam.
+      // Runs for BOTH branches above (walking → smoothly interpolated position;
+      // idle → resting tile + stack slot), AFTER group.position is fully updated
+      // this frame. getWorldPosition() applies the parent BOARD_ROTATION group's
+      // transform, so the value is the token's ACTUAL world position — the same
+      // space the camera lives in. This is a plain ref/map write: no re-render.
+      group.getWorldPosition(scratchWorld.current);
+      setLiveTokenPosition(p.id, scratchWorld.current);
     }
   });
 

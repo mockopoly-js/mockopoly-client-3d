@@ -6,10 +6,12 @@ import {
   buildTilePath,
   BOARD_WORLD_SIZE,
   thirdPersonPose,
+  thirdPersonPoseAt,
   THIRD_PERSON_DIST,
   THIRD_PERSON_HEIGHT,
   THIRD_PERSON_TARGET_Y,
 } from './positions';
+import * as THREE from 'three';
 
 describe('SPACE_POSITIONS', () => {
   it('has 40 tiles', () => {
@@ -155,6 +157,71 @@ describe('thirdPersonPose', () => {
     const atNeg1 = thirdPersonPose(-1);
     expect(atNeg1.cameraPos.x).toBeCloseTo(at39.cameraPos.x, 9);
     expect(atNeg1.cameraPos.z).toBeCloseTo(at39.cameraPos.z, 9);
+  });
+});
+
+describe('thirdPersonPoseAt', () => {
+  const TOKEN_BASE_Y = 0.15;
+
+  it('is byte-for-byte equal to thirdPersonPose when fed the tile world position', () => {
+    // thirdPersonPose delegates to thirdPersonPoseAt(tileToWorldRotated(tile), tile);
+    // this guards that the discrete-tile pose is unchanged by the refactor.
+    for (const tile of [0, 1, 5, 10, 17, 25, 30, 33, 39]) {
+      const discrete = thirdPersonPose(tile);
+      const viaAt = thirdPersonPoseAt(tileToWorldRotated(tile), tile);
+      expect(viaAt.cameraPos.x).toBeCloseTo(discrete.cameraPos.x, 9);
+      expect(viaAt.cameraPos.y).toBeCloseTo(discrete.cameraPos.y, 9);
+      expect(viaAt.cameraPos.z).toBeCloseTo(discrete.cameraPos.z, 9);
+      expect(viaAt.target.x).toBeCloseTo(discrete.target.x, 9);
+      expect(viaAt.target.y).toBeCloseTo(discrete.target.y, 9);
+      expect(viaAt.target.z).toBeCloseTo(discrete.target.z, 9);
+    }
+  });
+
+  it('targets the LIVE world position (mid-tile), not the tile center — the follow fix', () => {
+    // A token mid-walk sits BETWEEN two tile centers. The pose target must land
+    // over that live position (upper-body height), not snap to the discrete tile.
+    const tile = 5;
+    const a = tileToWorldRotated(tile);
+    const b = tileToWorldRotated(tile + 1);
+    const live = a.clone().lerp(b, 0.5); // halfway along the walk
+    live.y = TOKEN_BASE_Y;
+
+    const pose = thirdPersonPoseAt(live, tile);
+    expect(pose.target.x).toBeCloseTo(live.x, 6);
+    expect(pose.target.z).toBeCloseTo(live.z, 6);
+    expect(pose.target.y).toBeCloseTo(TOKEN_BASE_Y + THIRD_PERSON_TARGET_Y, 6);
+    // It must NOT be the discrete tile center (proves the live position is used).
+    expect(Math.abs(pose.target.x - a.x) + Math.abs(pose.target.z - a.z)).toBeGreaterThan(0.1);
+  });
+
+  it('places the camera behind the live position along the ring direction, above it', () => {
+    const tile = 5;
+    const cur = tileToWorldRotated(tile);
+    const next = tileToWorldRotated((tile + 1) % 40);
+    const forward = next.clone().sub(cur);
+    forward.y = 0;
+    forward.normalize();
+
+    const live = new THREE.Vector3(cur.x + 0.3, TOKEN_BASE_Y, cur.z + 0.3);
+    const pose = thirdPersonPoseAt(live, tile);
+
+    expect(pose.cameraPos.y).toBeCloseTo(TOKEN_BASE_Y + THIRD_PERSON_HEIGHT, 6);
+    const camToTokenPlanar = new THREE.Vector3(live.x, 0, live.z);
+    const camPlanar = pose.cameraPos.clone();
+    camPlanar.y = 0;
+    const delta = camToTokenPlanar.sub(camPlanar);
+    expect(delta.length()).toBeCloseTo(THIRD_PERSON_DIST, 5);
+    expect(delta.normalize().dot(forward)).toBeCloseTo(1, 5);
+  });
+
+  it('does not mutate the caller-supplied world position vector', () => {
+    const live = new THREE.Vector3(1.23, 0.15, -4.56);
+    const snapshot = live.clone();
+    thirdPersonPoseAt(live, 7);
+    expect(live.x).toBe(snapshot.x);
+    expect(live.y).toBe(snapshot.y);
+    expect(live.z).toBe(snapshot.z);
   });
 });
 
