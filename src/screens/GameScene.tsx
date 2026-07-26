@@ -133,13 +133,14 @@ const HEMI_INTENSITY = 0.25;
 /**
  * Mobile-only devicePixelRatio ceiling. Desktop uses dpr={[1, 1.5]} (lowered
  * previously for desktop perf and left untouched here). Many phones are 3x
- * displays; capping mobile dpr at a fixed 2 still upscales the render below
- * the device's native pixel ratio and reads soft/blurry across the whole
- * scene (board + city). Mobile now targets the device's actual
- * devicePixelRatio (capped at 3, since >3x buys no visible sharpness and
- * costs fill-rate) so the render resolution matches the physical screen.
+ * displays, but rendering at dpr 3 pushes 9x the base pixel count through EVERY
+ * full-screen pass (tone map, color grade, SMAA) — that per-pixel fill cost is
+ * the dominant mobile FPS killer, not resolution or textures. Capping mobile
+ * dpr at 2 cuts fill-rate ~2.25x vs 3 while staying crisp: the 4096 board
+ * texture (anisotropy + mipmaps) plus SMAA keep edges and detail sharp at dpr 2,
+ * so the resolution drop is not perceptible in practice. Do not drop below 2.
  */
-const MOBILE_DPR_MAX = 3;
+const MOBILE_DPR_MAX = 2;
 
 /**
  * Manually applies an equirectangular sky texture as scene.environment
@@ -372,8 +373,12 @@ export function GameScene() {
       */}
       {/* eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- SHOW_HDRI_BACKGROUND is a documented build-time toggle (see header) */}
       {!SHOW_HDRI_BACKGROUND && <color attach="background" args={['#cbe8f5']} />}
-      {/* Soft shadow injection (must be early in the scene, no assets). */}
-      <SoftShadows size={12} samples={8} />
+      {/* Soft shadow injection (must be early in the scene, no assets).
+          Desktop only: SoftShadows (drei PCSS) costs a per-fragment sample loop
+          on every shadow-receiving pixel. On mobile we skip it so Canvas
+          `shadows` falls back to the cheaper built-in PCFSoftShadowMap —
+          shadows stay ON (they add depth), just rendered more cheaply. */}
+      {!isMobile && <SoftShadows size={12} samples={8} />}
       {/* DEV-only culling audit — press "c" to log material side counts.
           Skipped on mobile (no keyboard; keeps the mobile scene graph lean). */}
       {!isMobile && <CullingAudit />}
@@ -383,14 +388,17 @@ export function GameScene() {
       {/* Ambient trimmed 0.4 → 0.15 — AO now darkens crevices the flat ambient
           was washing out; this just lifts pure black. */}
       <ambientLight intensity={AMBIENT_INTENSITY} />
-      {/* KEY (the sun): warm, the ONLY shadow caster. Position, 1024² shadow map
-          and ortho shadow-camera bounds kept exactly as the previous light. */}
+      {/* KEY (the sun): warm, the ONLY shadow caster. Position and ortho
+          shadow-camera bounds kept exactly as the previous light. Shadow map is
+          1024² on desktop; halved to 512² on mobile (a quarter of the shadow
+          fragments to filter each frame) — cheaper with the coarser mobile
+          shadows still reading fine at phone screen size. */}
       <directionalLight
         color={KEY_COLOR}
         position={KEY_POSITION}
         intensity={KEY_INTENSITY}
         castShadow
-        shadow-mapSize={[1024, 1024]}
+        shadow-mapSize={isMobile ? [512, 512] : [1024, 1024]}
       >
         <orthographicCamera attach="shadow-camera" args={[-8, 8, 8, -8, 0.1, 30]} />
       </directionalLight>
@@ -453,41 +461,70 @@ export function GameScene() {
             stays fixed as the board turns within its clearing. */}
         <ForestEnvironment />
       </Suspense>
-      <EffectComposer multisampling={0} stencilBuffer={false}>
-        {/*
-          Order matters: N8AO -> Bloom -> ToneMapping -> global color grade ->
-          SMAA. AO runs FIRST so contact/crevice darkening is baked into the
-          beauty pass before Bloom reads luminance and before the tone-map +
-          grade. Grading then runs on the tone-mapped LDR image so
-          saturation/contrast make colors POP instead of amplifying HDR values
-          tone mapping later clamps. SMAA runs LAST (post-grade) to smooth
-          final edges.
+      {isMobile ? (
+        /*
+          MOBILE composer (light). The full-screen fill hogs — N8AO's depth /
+          AO passes and Bloom's mip-chain downsample/upsample — are the dominant
+          mobile FPS cost and contribute NOTHING to sharpness, so they are
+          dropped here. Kept, because they are cheap and carry the "game look" +
+          crispness: ToneMapping, the HueSaturation / BrightnessContrast color
+          grade (the punchy saturation/contrast), and SMAA (cheap edge AA that
+          keeps edges crisp). Effect order mirrors the desktop tail:
+          ToneMapping -> grade -> SMAA. multisampling={0} + stencilBuffer={false}
+          match desktop so SMAA (not MSAA) does the anti-aliasing.
 
-          multisampling={0} + stencilBuffer={false}: MSAA is intentionally
-          OFF here. With multisampling>0 the composer renders to a
-          multisampled target with a combined depth-stencil attachment, and
-          N8AO's depth read during that MSAA resolve blit collides with it —
-          GL_INVALID_OPERATION: glBlitFramebuffer (read/write depth-stencil
-          same image). Dropping MSAA removes that resolve blit entirely.
-          depthBuffer stays default (true) since N8AO needs depth. SMAA below
-          replaces MSAA for edge anti-aliasing (and is cheaper than 2x MSAA).
-        */}
-        <N8AO
-          aoRadius={AO_RADIUS}
-          distanceFalloff={AO_DISTANCE_FALLOFF}
-          intensity={AO_INTENSITY}
-          quality={AO_QUALITY}
-          halfRes={AO_HALF_RES}
-        />
-        <Bloom intensity={0.35} luminanceThreshold={0.9} luminanceSmoothing={0.3} mipmapBlur />
-        <ToneMapping />
-        {/* Main "game look" saturation knob (0 = unchanged, +0.28 ≈ +28% pop). */}
-        <HueSaturation saturation={SATURATION} />
-        {/* Brightness/contrast trim (both 0 = unchanged); slight contrast punch. */}
-        <BrightnessContrast brightness={BRIGHTNESS} contrast={CONTRAST} />
-        {/* Edge AA replacement for the dropped MSAA (see note above). */}
-        <SMAA />
-      </EffectComposer>
+          Rendered as a SEPARATE composer (rather than conditionally toggling
+          children of one) because @react-three/postprocessing merges/orders
+          effect passes from its children and conditional children are flaky
+          there; two composers keep the desktop chain below byte-identical and
+          the mobile swap a clean remount.
+        */
+        <EffectComposer multisampling={0} stencilBuffer={false}>
+          <ToneMapping />
+          {/* Main "game look" saturation knob (0 = unchanged, +0.28 ≈ +28% pop). */}
+          <HueSaturation saturation={SATURATION} />
+          {/* Brightness/contrast trim (both 0 = unchanged); slight contrast punch. */}
+          <BrightnessContrast brightness={BRIGHTNESS} contrast={CONTRAST} />
+          {/* Edge AA (keeps edges crisp without the fill cost of the AO/Bloom passes). */}
+          <SMAA />
+        </EffectComposer>
+      ) : (
+        <EffectComposer multisampling={0} stencilBuffer={false}>
+          {/*
+            Order matters: N8AO -> Bloom -> ToneMapping -> global color grade ->
+            SMAA. AO runs FIRST so contact/crevice darkening is baked into the
+            beauty pass before Bloom reads luminance and before the tone-map +
+            grade. Grading then runs on the tone-mapped LDR image so
+            saturation/contrast make colors POP instead of amplifying HDR values
+            tone mapping later clamps. SMAA runs LAST (post-grade) to smooth
+            final edges.
+
+            multisampling={0} + stencilBuffer={false}: MSAA is intentionally
+            OFF here. With multisampling>0 the composer renders to a
+            multisampled target with a combined depth-stencil attachment, and
+            N8AO's depth read during that MSAA resolve blit collides with it —
+            GL_INVALID_OPERATION: glBlitFramebuffer (read/write depth-stencil
+            same image). Dropping MSAA removes that resolve blit entirely.
+            depthBuffer stays default (true) since N8AO needs depth. SMAA below
+            replaces MSAA for edge anti-aliasing (and is cheaper than 2x MSAA).
+          */}
+          <N8AO
+            aoRadius={AO_RADIUS}
+            distanceFalloff={AO_DISTANCE_FALLOFF}
+            intensity={AO_INTENSITY}
+            quality={AO_QUALITY}
+            halfRes={AO_HALF_RES}
+          />
+          <Bloom intensity={0.35} luminanceThreshold={0.9} luminanceSmoothing={0.3} mipmapBlur />
+          <ToneMapping />
+          {/* Main "game look" saturation knob (0 = unchanged, +0.28 ≈ +28% pop). */}
+          <HueSaturation saturation={SATURATION} />
+          {/* Brightness/contrast trim (both 0 = unchanged); slight contrast punch. */}
+          <BrightnessContrast brightness={BRIGHTNESS} contrast={CONTRAST} />
+          {/* Edge AA replacement for the dropped MSAA (see note above). */}
+          <SMAA />
+        </EffectComposer>
+      )}
       {/* FPS counter — DEV-only perf readout (never ships to production).
           Shown on mobile too so devs can check mobile framerate during HMR dev.
           Mounted into statsParentRef (the fixed div sibling above) with safe-area
