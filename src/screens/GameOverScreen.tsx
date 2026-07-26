@@ -45,33 +45,38 @@ export function GameOverScreen() {
 
   return (
     <div style={wrap}>
-      <div style={inner}>
-        <h1 style={title}>
-          {winner ? (winner.id === myId ? 'You Win!' : `${winner.name} Wins!`) : 'Game Over'}
-        </h1>
-        <div style={card}>
-          {standings.map((p: Player, i) => (
-            <div key={p.id} data-testid="standing" style={{ ...row, opacity: p.isBankrupt ? 0.5 : 1 }}>
-              <span style={{ width: 22, color: '#8888a0', fontWeight: 800 }}>{i + 1}</span>
-              <span style={{ ...dot, background: TOKEN_HEX[p.token] }} />
-              <span style={{ flex: 1, fontWeight: 800 }}>{p.name}</span>
-              <span style={{ fontVariantNumeric: 'tabular-nums', fontWeight: 800, color: p.isBankrupt ? '#e5533d' : '#e8e8f0' }}>
-                {p.isBankrupt ? 'Bankrupt' : formatMoney(p.money)}
-              </span>
-            </div>
-          ))}
-        </div>
-        <GameButton variant="primary" onClick={reset}>Back to Menu</GameButton>
+      <h1 style={{ margin: 0, fontSize: 40, fontWeight: 800 }}>
+        {winner ? (winner.id === myId ? 'You Win!' : `${winner.name} Wins!`) : 'Game Over'}
+      </h1>
+      <div style={card}>
+        {standings.map((p: Player, i) => (
+          <div key={p.id} data-testid="standing" style={{ ...row, opacity: p.isBankrupt ? 0.5 : 1 }}>
+            <span style={{ width: 22, color: '#8888a0', fontWeight: 800 }}>{i + 1}</span>
+            <span style={{ ...dot, background: TOKEN_HEX[p.token] }} />
+            <span style={{ flex: 1, fontWeight: 800 }}>{p.name}</span>
+            <span style={{ fontVariantNumeric: 'tabular-nums', fontWeight: 800, color: p.isBankrupt ? '#e5533d' : '#e8e8f0' }}>
+              {p.isBankrupt ? 'Bankrupt' : formatMoney(p.money)}
+            </span>
+          </div>
+        ))}
       </div>
+      <GameButton variant="primary" onClick={reset}>Back to Menu</GameButton>
     </div>
   );
 }
 
-// ── Center-or-scroll wrappers ──
-// Both branches are fixed full-screen flex COLUMNS that scroll (overflowY:auto)
-// instead of clipping. The children live in an `inner` group whose `margin:auto`
-// centers the block when it fits and clamps it to the top (reachable) + scrolls
-// when a short/landscape viewport can't fit the standings.
+// ── Desktop styles (restored from `main`) — fixed full-screen flex COLUMN,
+// centered both axes, no scroll; the standings card sits dead-center. ──
+const wrap: React.CSSProperties = {
+  position: 'fixed', inset: 0, display: 'flex', flexDirection: 'column', gap: 22,
+  alignItems: 'center', justifyContent: 'center', background: '#08080f', color: '#e8e8f0',
+  fontFamily: FONT_FAMILY, zIndex: 60,
+};
+const card: React.CSSProperties = { background: '#12121e', borderRadius: 16, padding: 20, width: 340, display: 'flex', flexDirection: 'column', gap: 6 };
+
+// ── Mobile styles (current responsive layout) — center-or-scroll wrapper; the
+// `inner` group's `margin:auto` centers the block when it fits and scrolls
+// (top reachable) on short/landscape viewports. ──
 const wrapBase: React.CSSProperties = {
   position: 'fixed',
   inset: 0,
@@ -88,7 +93,6 @@ const wrapBase: React.CSSProperties = {
   padding:
     'max(16px, env(safe-area-inset-top)) max(16px, env(safe-area-inset-right)) max(16px, env(safe-area-inset-bottom)) max(16px, env(safe-area-inset-left))',
 };
-const wrap: React.CSSProperties = { ...wrapBase };
 const wrapMobile: React.CSSProperties = { ...wrapBase };
 
 const inner: React.CSSProperties = {
@@ -100,7 +104,6 @@ const inner: React.CSSProperties = {
   width: '100%',
 };
 
-const title: React.CSSProperties = { margin: 0, fontSize: 'clamp(28px, 6vw, 40px)', fontWeight: 800, textAlign: 'center' };
 const titleMobile: React.CSSProperties = { margin: 0, fontSize: 'clamp(24px, 7vw, 30px)', fontWeight: 800, textAlign: 'center' };
 
 const cardBase: React.CSSProperties = {
@@ -112,8 +115,8 @@ const cardBase: React.CSSProperties = {
   flexDirection: 'column',
   gap: 6,
 };
-const card: React.CSSProperties = { ...cardBase, padding: 'clamp(14px, 3vw, 20px)' };
 const cardMobile: React.CSSProperties = { ...cardBase, padding: 'clamp(14px, 4vw, 18px)' };
 
+// ── Shared row styles ──
 const row: React.CSSProperties = { display: 'flex', alignItems: 'center', gap: 10, padding: '6px 0' };
 const dot: React.CSSProperties = { width: 18, height: 18, borderRadius: '50%', flexShrink: 0 };

@@ -91,10 +91,10 @@ export function MainMenu() {
   };
 
   // Shared control cluster (name / tokens / character / create / join / error).
-  // Sizing is fully fluid (clamp), so mobile & desktop render the identical
-  // cluster — only the wrapper/panel chrome (background position, width, shadow)
-  // differs between the two branches below.
-  const controls = () => (
+  // `m` toggles presentation only: `m === true` = the current responsive mobile
+  // sizing (fluid clamps), `m === false` = the fixed desktop sizing restored
+  // verbatim from `main`. State/handlers/socket calls are shared across both.
+  const controls = (m: boolean) => (
     <>
       <input
         className="mm-input"
@@ -102,23 +102,23 @@ export function MainMenu() {
         maxLength={16}
         value={name}
         onChange={(e) => setName(e.target.value)}
-        style={input}
+        style={m ? inputMobile : input}
       />
-      <div style={swatchRow}>
+      <div style={m ? swatchRowMobile : swatchRow}>
         {TOKENS.map((t) => (
           <button
             key={t}
             className="mm-swatch"
             aria-label={t}
             onClick={() => setToken(t)}
-            style={swatch(token === t, TOKEN_HEX[t])}
+            style={m ? swatchMobile(token === t, TOKEN_HEX[t]) : swatch(token === t, TOKEN_HEX[t])}
           />
         ))}
       </div>
       <button
         className="mm-char-btn"
         onClick={() => navigate('/character-select')}
-        style={charBtn}
+        style={m ? charBtnMobile : charBtn}
         aria-label="Choose character"
       >
         <span style={charBtnIcon}>&#128100;</span>
@@ -128,14 +128,14 @@ export function MainMenu() {
       <GameButton variant="primary" fullWidth onClick={create} disabled={!canCreate}>
         Create Room
       </GameButton>
-      <div style={joinRow}>
+      <div style={m ? joinRowMobile : joinRow}>
         <input
           className="mm-input"
           placeholder="ABCDEF"
           maxLength={6}
           value={code}
           onChange={(e) => setCode(e.target.value.toUpperCase())}
-          style={{ ...input, flex: 1, minWidth: 0, textTransform: 'uppercase', letterSpacing: '0.2em', textAlign: 'center' }}
+          style={{ ...(m ? inputMobile : input), flex: 1, minWidth: 0, textTransform: 'uppercase', letterSpacing: '0.2em', textAlign: 'center' }}
         />
         <GameButton variant="secondary" onClick={join} disabled={!canJoin} style={{ flexShrink: 0 }}>
           Join
@@ -148,14 +148,14 @@ export function MainMenu() {
   if (isMobile) {
     return (
       <div style={heroMobile}>
-        <div style={panelMobile}>{controls()}</div>
+        <div style={panelMobile}>{controls(true)}</div>
       </div>
     );
   }
 
   return (
     <div style={hero}>
-      <div style={panel}>{controls()}</div>
+      <div style={panel}>{controls(false)}</div>
     </div>
   );
 }
@@ -166,10 +166,8 @@ const RED = '#c53a26';
 const HERO_URL = '/images/home-hero.webp';
 
 // ── Backdrop (the baked-in "MOCKOPOLY MANIA" logo + toy city) ──
-// Center-or-scroll wrapper: a fixed, full-screen flex box that CENTERS the panel
-// (via the panel's `margin:auto`) when it fits, and SCROLLS (`overflowY:auto`)
-// without ever clipping the top when the panel is taller than a short/landscape
-// viewport. Safe-area padding keeps it clear of notches/home indicators.
+// Desktop base restored from `main`: a plain fixed full-screen flex box (no
+// scroll / no padding); the panel is bottom-anchored via the wrapper's flex-end.
 const heroBase: React.CSSProperties = {
   position: 'fixed',
   inset: 0,
@@ -180,29 +178,57 @@ const heroBase: React.CSSProperties = {
   fontFamily: FONT,
   display: 'flex',
   boxSizing: 'border-box',
+};
+
+// Mobile base (current responsive layout): center-or-scroll wrapper with
+// safe-area padding so the card never clips on short/landscape phones.
+const heroBaseMobile: React.CSSProperties = {
+  ...heroBase,
   overflowY: 'auto',
   WebkitOverflowScrolling: 'touch',
   padding:
     'max(12px, env(safe-area-inset-top)) max(12px, env(safe-area-inset-right)) max(12px, env(safe-area-inset-bottom)) max(12px, env(safe-area-inset-left))',
 };
 
-// Desktop: cover + plaza centered.
+// Desktop (from `main`): cover + centered so the plaza sits mid-screen; panel
+// floats in the sandy circle (lower-middle), clear of the top logo.
 const hero: React.CSSProperties = {
   ...heroBase,
   backgroundPosition: 'center center',
+  alignItems: 'flex-end',
+  justifyContent: 'center',
 };
 
-// Mobile/portrait: keep the logo up top (background-position: top center).
+// Mobile/portrait (current): keep the logo up top (background-position: top center).
 const heroMobile: React.CSSProperties = {
-  ...heroBase,
+  ...heroBaseMobile,
   backgroundPosition: 'top center',
 };
 
-// ── Control panel (shared chrome) ──
-// `margin:auto` centers the panel in the flex wrapper when it fits and clamps to
-// the top (top stays reachable) + scrolls when it overflows. `maxHeight:100%`
-// keeps it from exceeding the scrollable wrapper. All spacing is fluid (clamp)
-// so the card scales down gracefully on small screens.
+// ── Desktop control panel (restored from `main`) — floats in the sandy plaza
+// (~52–60% vertical), nudged up 9vh from the very bottom ──
+const panel: React.CSSProperties = {
+  display: 'flex',
+  flexDirection: 'column',
+  gap: 14,
+  alignItems: 'center',
+  width: 'min(420px, 90vw)',
+  boxSizing: 'border-box',
+  padding: '24px 26px',
+  // Sit in the plaza (lower-middle) rather than dead-center — nudged up from
+  // the very bottom so the whole card lands inside the sandy circle.
+  marginBottom: '9vh',
+  borderRadius: 24,
+  background: 'rgba(255, 251, 240, 0.9)',
+  border: `3px solid ${GOLD}`,
+  boxShadow: '0 18px 48px rgba(0,0,0,0.45), inset 0 0 0 1px rgba(255,255,255,0.6)',
+  backdropFilter: 'blur(2px)',
+  WebkitBackdropFilter: 'blur(2px)',
+};
+
+// ── Mobile control panel (current) — near-full-width scrim card ──
+// `margin:auto` centers the panel in the scroll wrapper when it fits and clamps
+// to the top (top stays reachable) + scrolls when it overflows.
 const panelBase: React.CSSProperties = {
   display: 'flex',
   flexDirection: 'column',
@@ -217,16 +243,6 @@ const panelBase: React.CSSProperties = {
   backdropFilter: 'blur(2px)',
   WebkitBackdropFilter: 'blur(2px)',
 };
-
-// ── Desktop control panel — floats in the sandy plaza (centered) ──
-const panel: React.CSSProperties = {
-  ...panelBase,
-  width: 'min(420px, 90vw)',
-  borderRadius: 24,
-  boxShadow: '0 18px 48px rgba(0,0,0,0.45), inset 0 0 0 1px rgba(255,255,255,0.6)',
-};
-
-// ── Mobile control panel — near-full-width scrim card ──
 const panelMobile: React.CSSProperties = {
   ...panelBase,
   width: '100%',
@@ -236,18 +252,28 @@ const panelMobile: React.CSSProperties = {
 };
 
 // ── Inputs ──
-// fontSize stays at 16px (below that, iOS zooms the page on focus). Padding is
-// fluid and minHeight keeps a ≥44px tap target.
-const input: React.CSSProperties = {
+// Desktop (from `main`): fixed padding. fontSize stays 16px (below that iOS
+// zooms the page on focus).
+const inputBase: React.CSSProperties = {
   fontFamily: FONT,
   fontWeight: 600,
-  fontSize: 16,
+  fontSize: 16, // 16px avoids iOS focus zoom
   color: '#3b3224',
   background: 'rgba(255,255,255,0.95)',
   border: '2px solid #e2c98a',
   outline: 'none',
   boxSizing: 'border-box',
   touchAction: 'manipulation',
+};
+const input: React.CSSProperties = {
+  ...inputBase,
+  padding: '11px 16px',
+  borderRadius: 14,
+  width: '100%',
+};
+// Mobile (current): fluid padding + ≥44px tap target.
+const inputMobile: React.CSSProperties = {
+  ...inputBase,
   width: '100%',
   borderRadius: 14,
   padding: 'clamp(11px, 2.6vw, 14px) 16px',
@@ -255,16 +281,41 @@ const input: React.CSSProperties = {
 };
 
 // ── Token swatches ──
-// Dots are fluid (28→44px) and wrap; on typical phones the 8 tokens fit one row,
-// on the narrowest they wrap cleanly to two rows — never clipped.
+// Desktop (from `main`): fixed 34px dots, 8px gap.
 const swatchRow: React.CSSProperties = {
+  display: 'flex',
+  gap: 8,
+  flexWrap: 'wrap',
+  justifyContent: 'center',
+  width: '100%',
+};
+const swatch = (selected: boolean, hex: string): React.CSSProperties => {
+  const size = 34;
+  return {
+    width: size,
+    height: size,
+    borderRadius: '50%',
+    cursor: 'pointer',
+    padding: 0,
+    background: hex,
+    border: selected ? `3px solid ${GOLD}` : '3px solid rgba(255,255,255,0.85)',
+    boxShadow: selected
+      ? `0 0 0 2px rgba(212,175,55,0.4), 0 2px 6px rgba(0,0,0,0.35)`
+      : '0 2px 5px rgba(0,0,0,0.3)',
+    transform: selected ? 'scale(1.15)' : 'scale(1)',
+    transition: 'transform 0.12s ease, box-shadow 0.12s ease',
+    touchAction: 'manipulation',
+  };
+};
+// Mobile (current): fluid 28→44px dots that wrap cleanly on the narrowest phones.
+const swatchRowMobile: React.CSSProperties = {
   display: 'flex',
   gap: 'clamp(6px, 1.5vw, 10px)',
   flexWrap: 'wrap',
   justifyContent: 'center',
   width: '100%',
 };
-const swatch = (selected: boolean, hex: string): React.CSSProperties => {
+const swatchMobile = (selected: boolean, hex: string): React.CSSProperties => {
   const size = 'clamp(28px, 7vw, 44px)';
   return {
     width: size,
@@ -283,12 +334,19 @@ const swatch = (selected: boolean, hex: string): React.CSSProperties => {
   };
 };
 
+// Desktop (from `main`): 8px gap. Mobile (current): fluid gap.
 const joinRow: React.CSSProperties = {
+  display: 'flex',
+  gap: 8,
+  width: '100%',
+};
+const joinRowMobile: React.CSSProperties = {
   display: 'flex',
   gap: 'clamp(8px, 2vw, 10px)',
   width: '100%',
 };
 
+// Identical for both branches (14px).
 const errorText: React.CSSProperties = {
   color: RED,
   fontFamily: FONT,
@@ -299,7 +357,26 @@ const errorText: React.CSSProperties = {
 };
 
 // ── Character chooser affordance ──
+// Desktop (from `main`): fixed padding + 14px label. Mobile (current): fluid.
 const charBtn: React.CSSProperties = {
+  display: 'flex',
+  alignItems: 'center',
+  gap: 8,
+  width: '100%',
+  padding: '9px 14px',
+  borderRadius: 14,
+  border: `2px solid ${GOLD}`,
+  background: 'rgba(255,255,255,0.85)',
+  cursor: 'pointer',
+  fontFamily: FONT,
+  fontWeight: 600,
+  fontSize: 14,
+  color: '#3b3224',
+  textAlign: 'left',
+  boxSizing: 'border-box',
+  touchAction: 'manipulation',
+};
+const charBtnMobile: React.CSSProperties = {
   display: 'flex',
   alignItems: 'center',
   gap: 8,

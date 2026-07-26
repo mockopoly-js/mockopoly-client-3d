@@ -174,28 +174,25 @@ const backdropBase: React.CSSProperties = {
   boxSizing: 'border-box',
 };
 
-// ── Desktop: center-or-scroll wrapper. `overflowY:auto` + the panel's
-// `margin:auto` center the card when it fits and scroll it (top reachable)
-// when a short/landscape/tablet viewport can't fit it. ──
+// ── Desktop (restored from `main`): cover + centered so the panel lands in the
+// mid-frame plaza ──
 const wrap: React.CSSProperties = {
   ...backdropBase,
   backgroundPosition: 'center center',
-  overflowY: 'auto',
-  WebkitOverflowScrolling: 'touch',
-  padding:
-    'max(12px, env(safe-area-inset-top)) max(12px, env(safe-area-inset-right)) max(12px, env(safe-area-inset-bottom)) max(12px, env(safe-area-inset-left))',
+  alignItems: 'center',
+  justifyContent: 'center',
 };
 
-// ── Desktop control panel — floats in the sandy plaza (centered both axes) ──
+// ── Desktop control panel (restored from `main`) — floats in the sandy plaza
+// (centered both axes) ──
 const panel: React.CSSProperties = {
   display: 'flex',
   flexDirection: 'column',
-  gap: 'clamp(10px, 2vw, 14px)',
+  gap: 14,
   alignItems: 'center',
   width: 'min(420px, 90vw)',
   boxSizing: 'border-box',
-  margin: 'auto',
-  padding: 'clamp(16px, 3vw, 26px)',
+  padding: '24px 26px',
   borderRadius: 24,
   background: 'rgba(255, 251, 240, 0.9)',
   border: `3px solid ${GOLD}`,
