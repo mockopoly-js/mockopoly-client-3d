@@ -51,8 +51,8 @@ const SIZE = new THREE.Vector3(24, 1, 24);
 const CENTER = new THREE.Vector3(0, 0, 0);
 
 // Shipped defaults (mirrored so tests exercise the real thresholds).
-const MIN_CHUNK = 8;
-const MERGE_MIN = 3;
+const MIN_CHUNK = 4;
+const MERGE_MIN = 1;
 
 /** Base params for a chunk build over the 24-unit box; override per test. */
 function params(over: Partial<Parameters<typeof rebuildForestAsChunks>[0]>) {
@@ -113,7 +113,7 @@ describe('rebuildForestAsChunks', () => {
 
   it('(b) emits a NON-ground type below MIN_CHUNK_INSTANCES as a single local-bounded cullable chunk', () => {
     const tree = makeMesh('PP_Tree_10', [
-      [-9, -9], [9, 9], [-9, 9], [9, -9], [0, 0], // 5 < MIN_CHUNK(8)
+      [-9, -9], [9, 9], [0, 0], // 3 < MIN_CHUNK(4)
     ]);
     const scene = makeScene(tree);
     rebuildForestAsChunks(params({ scene }));
@@ -124,7 +124,7 @@ describe('rebuildForestAsChunks', () => {
     expect(meshes[0].name).toMatch(/-chunk\d+$/);
     expect(meshes[0].frustumCulled).toBe(true); // cullable local bound
     expect(meshes[0].boundingSphere).not.toBeNull();
-    expect(countInstances(scene)).toBe(5); // no instances lost, not thinned
+    expect(countInstances(scene)).toBe(3); // no instances lost, not thinned
   });
 
   it('(c) splits a dense tree type into >1 frustum-cullable chunk with LOCAL bounds', () => {
@@ -185,22 +185,56 @@ describe('rebuildForestAsChunks', () => {
     }
   });
 
-  it('(f) emits a sparse NON-ground type (mountains) as one unthinned local-bounded cullable chunk', () => {
-    // 9 instances, one per distinct grid cell → no cell clears mergeCellMin(3),
-    // but count ≥ MIN_CHUNK(8), so this exercises the too-sparse fallback (FIX C).
+  it('(f) grid-splits a sparse NON-ground type (mountains) into small chunks instead of one island-wide chunk', () => {
+    // 9 instances, one per distinct grid cell, count(9) ≥ MIN_CHUNK(4). With
+    // MERGE_MIN(1) every occupied cell trivially clears the fold threshold (≥1
+    // surviving instance), so the old "too-sparse → ONE island-wide fallback
+    // chunk" path is no longer reachable this way — the type grid-splits into
+    // one tight chunk per cell instead. This is the fix for real sparse types
+    // (e.g. the Forest_Mountain_Moss_* types at 9-11 instances) that used to
+    // fall back to a single chunk spanning the whole ~55-65u ring — a bound fat
+    // enough to contain the camera and defeat frustum culling from any angle.
     const spread: [number, number][] = [];
     for (const x of [-9, -3, 3]) for (const z of [-9, -3, 3]) spread.push([x, z]);
     const mountain = makeMesh('Forest_Mountain_Moss_01', spread);
     const scene = makeScene(mountain);
-    // Aggressive thinning must NOT reach the fallback chunk (mountains never thinned).
-    rebuildForestAsChunks(params({ scene, thinDistance: 1, keepFraction: 0.25 }));
+    rebuildForestAsChunks(params({ scene })); // keepFraction defaults to 1 → nothing thinned
+
+    expect(mountain.parent).toBeNull(); // original island-wide mesh replaced
+    const chunks = allInstanced(scene);
+    expect(chunks.length).toBeGreaterThan(1); // grid-split, NOT one giant fallback chunk
+    for (const c of chunks) {
+      expect(c.name).toMatch(/-chunk\d+$/);
+      expect(c.frustumCulled).toBe(true); // local bound → cullable when off-screen
+      expect(c.boundingSphere).not.toBeNull();
+      // Tight per-cell bound, nowhere near the ~17-unit half-diagonal of the
+      // 24-unit test box (the old fallback's bound would have spanned that).
+      expect(c.boundingSphere?.radius).toBeLessThan(3);
+    }
+    expect(countInstances(scene)).toBe(spread.length); // all 9 preserved
+  });
+
+  it('(f2) the underlying "no cell clears the threshold" fallback still works with an explicit high mergeCellMin', () => {
+    // Regression coverage for the fallback branch itself, independent of the
+    // shipped default (1): with mergeCellMin explicitly raised back to the old
+    // style threshold (3), these 9 one-instance-per-cell buckets never clear
+    // it, so the type is still emitted as ONE local-bounded, cullable chunk of
+    // ALL its instances rather than left island-wide. (With the shipped default
+    // of 1 this branch is effectively unreachable via thinning alone, since the
+    // first surviving instance of any type always occupies some cell — see (f)
+    // for the shipped, grid-split behavior.)
+    const spread: [number, number][] = [];
+    for (const x of [-9, -3, 3]) for (const z of [-9, -3, 3]) spread.push([x, z]);
+    const mountain = makeMesh('Forest_Mountain_Sparse_01', spread);
+    const scene = makeScene(mountain);
+    rebuildForestAsChunks(params({ scene, mergeCellMin: 3 }));
 
     expect(mountain.parent).toBeNull(); // never left island-wide
     const meshes = allInstanced(scene);
-    expect(meshes).toHaveLength(1); // single fallback chunk (not partitioned)
+    expect(meshes).toHaveLength(1); // no cell (1 instance each) clears mergeCellMin(3)
     expect(meshes[0].name).toMatch(/-chunk\d+$/);
     expect(meshes[0].frustumCulled).toBe(true); // local bound → cullable when off-screen
     expect(meshes[0].boundingSphere).not.toBeNull();
-    expect(countInstances(scene)).toBe(spread.length); // all 9 preserved — NOT thinned
+    expect(countInstances(scene)).toBe(spread.length); // all 9 preserved — unthinned
   });
 });

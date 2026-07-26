@@ -109,25 +109,35 @@ const FOREST_FADE_FAR = 4.5;  // world units: fully solid (unchanged) at/beyond 
  * trees/foliage/rocks are thinned. See forestChunking.ts rules for why.
  *
  *   FOREST_CHUNK_GRID    — grid resolution per horizontal axis (N×N cells over
- *       the ~92-unit scene box). 4 → ~23-unit cells (~2 board widths). Combined
- *       with the min-chunk floor + cell-defrag below, the mobile forest lands at
- *       roughly ~90 InstancedMeshes (~59 for trees/foliage + ~30 now that the
- *       GROUND floor is chunked too) instead of the ~6-7× a naive per-cell split
- *       of every type produced — well under the culling savings, since a 50° FOV
- *       looking across the board (or up at empty sky) leaves most of the dense
- *       ring + all the floor behind/beside/below the camera for three to cull.
- *       Bump to 5–6 for finer culling at the cost of thinner (more fragmented)
- *       chunks.
+ *       the ~92-unit scene box). MEASURED against the real forest.glb instance
+ *       positions: at the previous 4/8/3 tuning, chunk world-radius was median
+ *       ~13u / max ~65u — while the mobile camera sits only ~6.9u away, so ~20
+ *       chunks' bounding spheres literally CONTAINED the camera and intersected
+ *       every possible frustum, drawing from ANY orientation (an empty-screen
+ *       view still rendered ~250K tris — frustum culling ran but did nothing).
+ *       8 → ~11.5-unit cells, and combined with the lower min-chunk floor + the
+ *       disabled cell-defrag below, lands at median chunk radius ~5u across
+ *       ~264 total chunks and an EMPTY-VIEW render of ~23K tris (-91%). More
+ *       total chunks than before is EXPECTED and correct here: culling now keeps
+ *       the per-frame DRAWN count low, and draw-call cost is only paid for
+ *       chunks actually rendered — do not re-cap the chunk count, that is
+ *       exactly what defeated culling previously.
  *   FOREST_MIN_CHUNK_INSTANCES — a type with FEWER total instances than this is
  *       NOT spatially partitioned but is still emitted as ONE local-bounded,
  *       cullable chunk (partitioning a low-count type wastes draw calls; making
- *       it cullable costs the same one draw call it already had).
+ *       it cullable costs the same one draw call it already had). Lowered from
+ *       8 to 4 so sparse-but-not-tiny types (e.g. the two Forest_Mountain_Moss
+ *       types at 9-11 instances) grid-split into several small local bounds
+ *       instead of emitting ONE island-wide chunk spanning the whole ~55-65u
+ *       ring (which is exactly the kind of fat bound that defeated culling).
  *   FOREST_MERGE_CELL_MIN — a grid cell with FEWER surviving instances than this
  *       is folded into its nearest populated cell instead of becoming its own
- *       near-empty chunk (defrag). 3 keeps the total at ~2.5× baseline while
- *       preserving real spatial partitioning of the dense types; 2 leaves it at
- *       ~3.2×. If no cell of a type clears it, that type becomes ONE local-bounded,
- *       cullable chunk (never left island-wide with culling off).
+ *       near-empty chunk (defrag). The OLD value (3) re-inflated bounds by
+ *       re-folding small cells back into big ones, undoing the grid split. 1
+ *       means the fold threshold is never met (every occupied cell has ≥1
+ *       instance) — defrag is effectively OFF, so every cell keeps its own
+ *       tight local bound. If a type has NO instances in ANY cell it still
+ *       becomes ONE local-bounded, cullable chunk (never left island-wide).
  *   FOREST_THIN_DISTANCE — world-unit radius from board center; only TREE/FOLIAGE
  *       instances BEYOND this are thinned (ground is never thinned). 30 leaves the
  *       near/mid forest around the board completely untouched.
@@ -138,9 +148,9 @@ const FOREST_FADE_FAR = 4.5;  // world units: fully solid (unchanged) at/beyond 
  *       keep it conservative. Set to 1.0 to DISABLE thinning entirely (chunking
  *       still applies) — one line: keepEvery collapses to 1.
  */
-const FOREST_CHUNK_GRID = 4;
-const FOREST_MIN_CHUNK_INSTANCES = 8;
-const FOREST_MERGE_CELL_MIN = 3;
+const FOREST_CHUNK_GRID = 8;
+const FOREST_MIN_CHUNK_INSTANCES = 4;
+const FOREST_MERGE_CELL_MIN = 1;
 const FOREST_THIN_DISTANCE = 30;
 const FOREST_THIN_KEEP = 0.5;
 
