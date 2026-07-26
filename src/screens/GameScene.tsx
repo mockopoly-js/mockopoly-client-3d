@@ -492,7 +492,7 @@ export function GameScene() {
           Shown on mobile too so devs can check mobile framerate during HMR dev.
           Mounted into statsParentRef (the fixed div sibling above) with safe-area
           positioning to clear notches. */}
-      {import.meta.env.DEV && <Stats parent={statsParentRef} />}
+      {import.meta.env.DEV && <Stats parent={statsParentRef} className="fps-stats" />}
     </Canvas>
     </>
   );

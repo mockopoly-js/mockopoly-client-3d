@@ -93,3 +93,11 @@ button:active:not(:disabled) {
   border-color: #d4af37;
   box-shadow: 0 0 0 3px rgb(212 175 55 / 28%);
 }
+
+/* --- Mobile FPS stats safe-area positioning --- */
+.fps-stats {
+  left: max(8px, env(safe-area-inset-left)) !important;
+  top: max(8px, env(safe-area-inset-top)) !important;
+  right: auto !important;
+  z-index: 60 !important;
+}
