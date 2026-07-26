@@ -133,6 +133,32 @@ const FOREST_OPAQUE_EXIT = FOREST_FADE_FAR + 1.0;   // 5.5: revert to fade well 
 const FOREST_SWAP_INTERVAL = 0.05;                   // s: throttle the per-chunk distance recheck (~20x/s)
 
 /**
+ * ── MOBILE-ONLY: MINECRAFT-STYLE RENDER DISTANCE (distance-from-CAMERA cull) ──
+ * The forest.glb spans a ~92-unit island, so even with per-chunk frustum culling a
+ * chunk that is FAR from the camera but still IN VIEW (the far map edge — distant
+ * trees, rocks, mountains, and the ground/terrain tiles out there) keeps drawing
+ * for no visible benefit. On TOP of frustum culling we add a dynamic
+ * distance-from-CAMERA cull: any forest chunk whose NEAREST point sits beyond
+ * FOREST_RENDER_DISTANCE from the camera is not rendered at all
+ * (`InstancedMesh.visible = false` → three skips it entirely: no draw call, no
+ * geometry submit, no fill). As the camera moves closer, chunks inside the radius
+ * render (Minecraft-style POP-IN at the edge — intended; no fog is added to hide
+ * it, per the no-extra-cost constraint).
+ *
+ * The check reuses the SAME per-chunk nearest-camera distance the opaque/fade swap
+ * already computes (camPos.distanceTo(chunk world center) − chunk world radius) in
+ * the SAME throttled loop — no new loop, no new per-frame allocation.
+ *
+ * Applies to ALL mobile forest chunks INCLUDING the ground/terrain tiles and the
+ * edge mountains (culling the far terrain is the whole point). It NEVER touches the
+ * board/tokens/city (those are not forest chunks). The camera sits ~7u from the
+ * board center and the island extends to ~46u; 32u keeps the near/mid forest that
+ * rings the board rendered (no bald ring around the board) while the far island
+ * edge/mountains cull. Tunable (world units).
+ */
+const FOREST_RENDER_DISTANCE = 32;
+
+/**
  * ── MOBILE-ONLY FOREST CHUNKING + DISTANCE THINNING (revertable experiment) ──
  * See `forestChunking.ts` for the mechanism. These are the live tunables; ALL of
  * this is gated on `isMobile` — when !isMobile the forest is byte-identical to
@@ -590,8 +616,10 @@ export function ForestEnvironment({ isMobile = false }: { isMobile?: boolean }):
     return { object: scene, groupScale, mobileChunks, forestFadeMat, forestOpaqueMat };
   }, [gltf, isMobile]);
 
-  // ── MOBILE-ONLY per-frame opaque/fade chunk swap ──────────────────────────────
-  // Throttled (~20x/s) camera-distance check that flips each far, non-board chunk to
+  // ── MOBILE-ONLY per-frame render-distance cull + opaque/fade chunk swap ───────
+  // Throttled (~20x/s) camera-distance pass that (1) hides chunks beyond
+  // FOREST_RENDER_DISTANCE (Minecraft-style render distance — visible=false, no
+  // draw) and (2) for the still-visible far chunks, flips each non-board chunk to
   // the discard-free opaque material and back. Desktop early-returns (no chunks).
   // Chunk world bounds are static, so they are cached on the first frame; the loop
   // does only a distanceTo + compares (no allocation). See the swap-threshold notes.
@@ -616,9 +644,25 @@ export function ForestEnvironment({ isMobile = false }: { isMobile?: boolean }):
     const camPos = state.camera.position;
     const metas = store.metas;
     for (const meta of metas) {
-      if (meta.needsBoardClip) continue; // near-board chunks stay on fade+clip forever
-      // Distance from the camera to the chunk's NEAREST possible fragment.
+      // Distance from the camera to the chunk's NEAREST possible fragment
+      // (drives BOTH the render-distance cull and the opaque/fade swap). No
+      // allocation: distanceTo computes the delta inline.
       const nearest = camPos.distanceTo(meta.worldCenter) - meta.worldRadius;
+
+      // ── MINECRAFT-STYLE RENDER DISTANCE ──────────────────────────────────────
+      // Chunks (trees/rocks/mountains/ground alike) whose nearest point is beyond
+      // FOREST_RENDER_DISTANCE from the camera are not rendered at all — three
+      // skips a mesh with visible=false entirely (no draw call/geometry/fill).
+      // Only reassign .visible on an actual change to avoid churn. Near-board
+      // chunks overlap the board footprint, so their nearest is always well within
+      // the radius → they never get hidden (the forest ring around the board and
+      // the board itself always render). This applies BEFORE the material swap so
+      // an out-of-range chunk skips the swap work for this frame (no point).
+      const shouldRender = nearest <= FOREST_RENDER_DISTANCE;
+      if (meta.mesh.visible !== shouldRender) meta.mesh.visible = shouldRender;
+      if (!shouldRender) continue;
+
+      if (meta.needsBoardClip) continue; // near-board chunks stay on fade+clip forever
       if (!meta.isOpaque) {
         if (nearest > FOREST_OPAQUE_ENTER) {
           meta.mesh.material = forestOpaqueMat;
