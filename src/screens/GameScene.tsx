@@ -131,16 +131,18 @@ const AMBIENT_INTENSITY = 0.15;
 const HEMI_INTENSITY = 0.25;
 
 /**
- * Mobile-only devicePixelRatio ceiling. Desktop uses dpr={[1, 1.5]} (lowered
- * previously for desktop perf and left untouched here). Many phones are 3x
- * displays, but rendering at dpr 3 pushes 9x the base pixel count through EVERY
- * full-screen pass (tone map, color grade, SMAA) — that per-pixel fill cost is
- * the dominant mobile FPS killer, not resolution or textures. Capping mobile
- * dpr at 2 cuts fill-rate ~2.25x vs 3 while staying crisp: the 4096 board
- * texture (anisotropy + mipmaps) plus SMAA keep edges and detail sharp at dpr 2,
- * so the resolution drop is not perceptible in practice. Do not drop below 2.
+ * Mobile-only devicePixelRatio ceiling. Desktop uses dpr={[1, 1.5]} (left
+ * untouched here). The real mobile FPS killer turned out to be SCENE cost, not
+ * per-pixel fill: the forest's per-fragment `discard` shader defeated early-Z
+ * (huge overdraw across the overlapping tree ring) and the shadow pass added a
+ * whole extra render. With the discard skipped on mobile (opaque, early-Z
+ * restored) and shadows off, that budget is freed — so we spend it back on
+ * RESOLUTION for a crisp board, raising the mobile cap to 3 to render at the
+ * phone's native 3x (iPhone 13 Pro). Combined with the 4096 board texture
+ * (anisotropy + mipmaps) and SMAA, board text reads razor-sharp. If fps still
+ * falls short, dial this back toward ~2.5 before touching the scene again.
  */
-const MOBILE_DPR_MAX = 2;
+const MOBILE_DPR_MAX = 3;
 
 /**
  * Manually applies an equirectangular sky texture as scene.environment
@@ -354,7 +356,9 @@ export function GameScene() {
       // group instead of moving the camera — camera props only apply on mount and
       // are HMR-inert; rotating the board content is reliable and frame-accurate.
       camera={{ position: [0, 8.5, 12], fov: 50 }}
-      shadows
+      // Shadows ON for desktop; OFF on mobile. Dropping the whole shadow render
+      // pass is a big mobile win (see the KEY light + MOBILE_DPR_MAX notes).
+      shadows={!isMobile}
       dpr={
         isMobile
           ? Math.min(
@@ -388,17 +392,18 @@ export function GameScene() {
       {/* Ambient trimmed 0.4 → 0.15 — AO now darkens crevices the flat ambient
           was washing out; this just lifts pure black. */}
       <ambientLight intensity={AMBIENT_INTENSITY} />
-      {/* KEY (the sun): warm, the ONLY shadow caster. Position and ortho
-          shadow-camera bounds kept exactly as the previous light. Shadow map is
-          1024² on desktop; halved to 512² on mobile (a quarter of the shadow
-          fragments to filter each frame) — cheaper with the coarser mobile
-          shadows still reading fine at phone screen size. */}
+      {/* KEY (the sun): warm, the ONLY shadow caster (desktop). Position and ortho
+          shadow-camera bounds kept exactly as the previous light. Shadows are OFF
+          on mobile (Canvas shadows={!isMobile} + castShadow={!isMobile}) —
+          dropping the entire shadow pass is a big mobile win; shadow-mapSize
+          (1024²) is inert there since no shadow map is rendered. Desktop keeps
+          shadows + SoftShadows exactly. */}
       <directionalLight
         color={KEY_COLOR}
         position={KEY_POSITION}
         intensity={KEY_INTENSITY}
-        castShadow
-        shadow-mapSize={isMobile ? [512, 512] : [1024, 1024]}
+        castShadow={!isMobile}
+        shadow-mapSize={[1024, 1024]}
       >
         <orthographicCamera attach="shadow-camera" args={[-8, 8, 8, -8, 0.1, 30]} />
       </directionalLight>

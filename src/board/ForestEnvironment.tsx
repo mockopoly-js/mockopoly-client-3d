@@ -2,6 +2,7 @@ import { useMemo } from 'react';
 import * as THREE from 'three';
 import { useGLTF } from '@react-three/drei';
 import { BOARD_WORLD_SIZE } from './positions';
+import { useIsMobile } from '../ui/useIsMobile';
 
 /**
  * The low-poly FOREST environment (`public/models/forest.glb`, ~1.7 MB,
@@ -219,6 +220,7 @@ const FOREST_URL = '/models/forest.glb';
 
 export function ForestEnvironment(): React.JSX.Element {
   const gltf = useGLTF(FOREST_URL);
+  const isMobile = useIsMobile();
 
   const { object, groupScale } = useMemo(() => {
     const scene = gltf.scene.clone(true);
@@ -232,9 +234,18 @@ export function ForestEnvironment(): React.JSX.Element {
         // dissolve out of the way of the board (see applyForestFade). The forest
         // likely shares one material across all meshes, but handle arrays too;
         // applyForestFade is idempotent so a shared material is patched once.
-        const material: THREE.Material | THREE.Material[] = m.material;
-        const mats: THREE.Material[] = Array.isArray(material) ? material : [material];
-        for (const mat of mats) applyForestFade(mat);
+        //
+        // MOBILE: skip the discard shader entirely. Its per-fragment `discard`
+        // (dither-fade + board-footprint clip) DEFEATS early-Z hidden-surface
+        // removal, so the overlapping tree ring shades tons of hidden fragments —
+        // brutal overdraw on a mobile tile GPU (the #1 mobile FPS cost). Leaving
+        // the material plain opaque + depth-tested restores early-Z and collapses
+        // the overdraw. Desktop keeps the full fade/clip shader unchanged.
+        if (!isMobile) {
+          const material: THREE.Material | THREE.Material[] = m.material;
+          const mats: THREE.Material[] = Array.isArray(material) ? material : [material];
+          for (const mat of mats) applyForestFade(mat);
+        }
       }
     });
     scene.updateMatrixWorld(true);
@@ -292,7 +303,7 @@ export function ForestEnvironment(): React.JSX.Element {
     );
 
     return { object: scene, groupScale };
-  }, [gltf]);
+  }, [gltf, isMobile]);
 
   return (
     <group
