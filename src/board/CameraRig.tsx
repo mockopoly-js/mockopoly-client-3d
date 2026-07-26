@@ -8,6 +8,7 @@ import type { CameraReadout } from '../state/gameStore';
 import { thirdPersonPose } from './positions';
 import { INITIAL_CAM_TARGET, INITIAL_CAM_OFFSET, MOBILE_INITIAL_CAM_OFFSET } from './cameraConstants';
 import { useIsMobile } from '../ui/useIsMobile';
+import { bumpMotion } from './mobileRender';
 
 // Frame-rate-aware smoothing rate for the follow lerp. Higher = snappier.
 // alpha = 1 - exp(-RATE * delta) → ease-out, no snapping, stable at any FPS.
@@ -254,6 +255,14 @@ export function CameraRig() {
       maxPolarAngle={1.55}
       minDistance={2.5}
       maxDistance={70}
+      // MOBILE on-demand: fires on EVERY camera change — orbit, zoom, pan, the
+      // damping tail after release, AND the third-person follow lerp (which moves
+      // the camera via controls.update()). Marks motion (cheap dpr) + requests a
+      // render; when the camera stops changing it settles to a crisp frame. drei
+      // already invalidate()s on change, so this only ADDS the dpr/settle
+      // tracking. Desktop passes undefined → OrbitControls behaves exactly as
+      // before (byte-identical).
+      onChange={isMobile ? bumpMotion : undefined}
     />
   );
 }

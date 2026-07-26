@@ -2,7 +2,6 @@ import { useMemo } from 'react';
 import * as THREE from 'three';
 import { useGLTF } from '@react-three/drei';
 import { BOARD_WORLD_SIZE } from './positions';
-import { useIsMobile } from '../ui/useIsMobile';
 
 /**
  * The low-poly FOREST environment (`public/models/forest.glb`, ~1.7 MB,
@@ -220,7 +219,6 @@ const FOREST_URL = '/models/forest.glb';
 
 export function ForestEnvironment(): React.JSX.Element {
   const gltf = useGLTF(FOREST_URL);
-  const isMobile = useIsMobile();
 
   const { object, groupScale } = useMemo(() => {
     const scene = gltf.scene.clone(true);
@@ -230,22 +228,23 @@ export function ForestEnvironment(): React.JSX.Element {
       if (m.isMesh) {
         m.receiveShadow = true; // ground/foliage takes the board's shadow
         m.frustumCulled = false;
-        // Per-fragment near-camera dither-fade so trees close to the camera
-        // dissolve out of the way of the board (see applyForestFade). The forest
-        // likely shares one material across all meshes, but handle arrays too;
-        // applyForestFade is idempotent so a shared material is patched once.
+        // Per-fragment near-camera dither-fade + board-footprint clip so trees
+        // close to the camera dissolve out of the way of the board and no terrain
+        // hump pokes up through it (see applyForestFade). The forest likely shares
+        // one material across all meshes, but handle arrays too; applyForestFade
+        // is idempotent so a shared material is patched once.
         //
-        // MOBILE: skip the discard shader entirely. Its per-fragment `discard`
-        // (dither-fade + board-footprint clip) DEFEATS early-Z hidden-surface
-        // removal, so the overlapping tree ring shades tons of hidden fragments —
-        // brutal overdraw on a mobile tile GPU (the #1 mobile FPS cost). Leaving
-        // the material plain opaque + depth-tested restores early-Z and collapses
-        // the overdraw. Desktop keeps the full fade/clip shader unchanged.
-        if (!isMobile) {
-          const material: THREE.Material | THREE.Material[] = m.material;
-          const mats: THREE.Material[] = Array.isArray(material) ? material : [material];
-          for (const mat of mats) applyForestFade(mat);
-        }
+        // Applied on MOBILE too (identical to desktop): the see-through fade and
+        // the board-footprint clip are load-bearing for the look (without them
+        // near trees block the view and terrain clips through the board). The
+        // extra overdraw the per-fragment `discard` reintroduces (it defeats
+        // early-Z on the overlapping tree ring) is paid for by the mobile
+        // on-demand render loop + adaptive dpr in GameScene: it renders at the
+        // cheap MOVING dpr while the camera moves and NOT AT ALL when idle, so
+        // the overdraw never runs sustained and never causes thermal throttle.
+        const material: THREE.Material | THREE.Material[] = m.material;
+        const mats: THREE.Material[] = Array.isArray(material) ? material : [material];
+        for (const mat of mats) applyForestFade(mat);
       }
     });
     scene.updateMatrixWorld(true);
@@ -303,7 +302,7 @@ export function ForestEnvironment(): React.JSX.Element {
     );
 
     return { object: scene, groupScale };
-  }, [gltf, isMobile]);
+  }, [gltf]);
 
   return (
     <group

@@ -1,4 +1,4 @@
-import { Suspense, useEffect, useRef, useState } from 'react';
+import { Suspense, useCallback, useEffect, useRef, useState } from 'react';
 import * as THREE from 'three';
 import { Canvas, useThree } from '@react-three/fiber';
 import {
@@ -19,6 +19,8 @@ import { ForestEnvironment } from '../board/ForestEnvironment';
 import { Dice3D } from '../board/Dice3D';
 import { CameraRig } from '../board/CameraRig';
 import { BoardClickTargets } from '../board/BoardClickTargets';
+import { MobileRenderController, type ComposerHandle } from '../board/MobileRenderController';
+import { pokeRender } from '../board/mobileRender';
 import { BOARD_ROTATION } from '../board/positions';
 import { useIsMobile } from '../ui/useIsMobile';
 
@@ -131,18 +133,27 @@ const AMBIENT_INTENSITY = 0.15;
 const HEMI_INTENSITY = 0.25;
 
 /**
- * Mobile-only devicePixelRatio ceiling. Desktop uses dpr={[1, 1.5]} (left
- * untouched here). The real mobile FPS killer turned out to be SCENE cost, not
- * per-pixel fill: the forest's per-fragment `discard` shader defeated early-Z
- * (huge overdraw across the overlapping tree ring) and the shadow pass added a
- * whole extra render. With the discard skipped on mobile (opaque, early-Z
- * restored) and shadows off, that budget is freed — so we spend it back on
- * RESOLUTION for a crisp board, raising the mobile cap to 3 to render at the
- * phone's native 3x (iPhone 13 Pro). Combined with the 4096 board texture
- * (anisotropy + mipmaps) and SMAA, board text reads razor-sharp. If fps still
- * falls short, dial this back toward ~2.5 before touching the scene again.
+ * ── MOBILE ADAPTIVE DPR (mobile only; desktop stays dpr={[1, 1.5]}) ───────────
+ * On mobile the <Canvas> runs `frameloop="demand"` (see the Canvas below) and a
+ * <MobileRenderController> swaps the device-pixel-ratio between two values based
+ * on whether anything is moving (see mobileRender.ts):
+ *  - MOBILE_DPR_MOVING — the cheap dpr held while ORBITING or while a token /
+ *    dice / character animation runs, so motion (and the forest's per-fragment
+ *    dither-discard overdraw, now restored on mobile) stays fast and smooth.
+ *  - MOBILE_DPR_STILL — the phone's NATIVE dpr (capped at 3, e.g. iPhone 13 Pro).
+ *    Once the scene SETTLES (no motion for MOBILE_SETTLE_MS) the controller bumps
+ *    to this and renders ONE crisp frame. Because rendering is on-demand that
+ *    native-dpr frame draws once then idles — a razor-sharp board (4096 texture +
+ *    anisotropy/mipmaps + SMAA) with NO sustained GPU load, so no thermal
+ *    throttle. It is also the initial `dpr` prop so the first paint is crisp.
+ * MOBILE_SETTLE_MS is the no-motion debounce before that crisp frame is drawn.
  */
-const MOBILE_DPR_MAX = 2;
+const MOBILE_DPR_MOVING = 1.3;
+const MOBILE_DPR_STILL = Math.min(
+  typeof window !== 'undefined' ? window.devicePixelRatio || 2 : 2,
+  3,
+);
+const MOBILE_SETTLE_MS = 250;
 
 /**
  * Manually applies an equirectangular sky texture as scene.environment
@@ -171,6 +182,12 @@ function HdriSky() {
       scene.background = tex;
       scene.backgroundIntensity = BG_INTENSITY;
     }
+    // MOBILE on-demand: this sets scene.environment/background IMPERATIVELY in a
+    // passive effect, which does NOT self-invalidate (no R3F reconciliation), so
+    // the sky/IBL could otherwise wait for the next unrelated frame. Poke a burst
+    // so it paints the moment the HDRI loads. Hard no-op off mobile → desktop
+    // (frameloop="always") is unaffected.
+    pokeRender();
     return () => {
       scene.environment = null;
       // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- SHOW_HDRI_BACKGROUND is a documented build-time toggle (see header)
@@ -331,6 +348,13 @@ export function GameScene() {
   // Mobile in-game view must be clean: all dev/debug overlays are suppressed on
   // phones (the FPS Stats, CullingBadge, CullingAudit). Desktop is unchanged.
   const isMobile = useIsMobile();
+  // Handle to the MOBILE post composer so adaptive dpr can resize its buffers
+  // (mobile only; desktop composer takes no ref → byte-identical). Stable ref
+  // callback so it isn't detached/re-attached every render.
+  const composerRef = useRef<ComposerHandle | null>(null);
+  const handleComposerRef = useCallback((c: ComposerHandle | null) => {
+    composerRef.current = c;
+  }, []);
 
   return (
     <>
@@ -357,16 +381,17 @@ export function GameScene() {
       // are HMR-inert; rotating the board content is reliable and frame-accurate.
       camera={{ position: [0, 8.5, 12], fov: 50 }}
       // Shadows ON for desktop; OFF on mobile. Dropping the whole shadow render
-      // pass is a big mobile win (see the KEY light + MOBILE_DPR_MAX notes).
+      // pass is a big mobile win (see the KEY light + adaptive-dpr notes).
       shadows={!isMobile}
-      dpr={
-        isMobile
-          ? Math.min(
-              typeof window !== 'undefined' ? window.devicePixelRatio || 2 : 2,
-              MOBILE_DPR_MAX,
-            )
-          : [1, 1.5]
-      }
+      // MOBILE: on-demand rendering — NOTHING renders unless invalidate() is
+      // called. The <MobileRenderController> + every animation source wire the
+      // invalidations (see mobileRender.ts), giving a crisp still frame, a cheap
+      // moving render, and zero work when idle (no thermal throttle). DESKTOP is
+      // untouched: frameloop="always", dpr={[1, 1.5]}.
+      frameloop={isMobile ? 'demand' : 'always'}
+      // MOBILE starts at the crisp native dpr; the controller swaps to
+      // MOBILE_DPR_MOVING while moving and back on settle. Desktop unchanged.
+      dpr={isMobile ? MOBILE_DPR_STILL : [1, 1.5]}
       performance={{ min: 0.5 }}
       gl={{ powerPreference: 'high-performance', antialias: false }}
     >
@@ -386,6 +411,18 @@ export function GameScene() {
       {/* DEV-only culling audit — press "c" to log material side counts.
           Skipped on mobile (no keyboard; keeps the mobile scene graph lean). */}
       {!isMobile && <CullingAudit />}
+      {/* MOBILE-ONLY on-demand render + adaptive-dpr controller. Registers the
+          invalidate bus, wires the pointer/store safety nets, and drives the
+          moving↔still dpr swap. NEVER mounted on desktop, so the
+          frameloop="always" path stays byte-identical. */}
+      {isMobile && (
+        <MobileRenderController
+          composerRef={composerRef}
+          dprMoving={MOBILE_DPR_MOVING}
+          dprStill={MOBILE_DPR_STILL}
+          settleMs={MOBILE_SETTLE_MS}
+        />
+      )}
       {/* Sky/ground hemisphere fill — tints unlit sides; trimmed 0.35 → 0.25 so
           AO + the rig shape the scene instead of a flat wash. */}
       <hemisphereLight args={['#cbe8f5', '#8a9a5b', HEMI_INTENSITY]} />
@@ -484,7 +521,7 @@ export function GameScene() {
           there; two composers keep the desktop chain below byte-identical and
           the mobile swap a clean remount.
         */
-        <EffectComposer multisampling={0} stencilBuffer={false}>
+        <EffectComposer ref={handleComposerRef} multisampling={0} stencilBuffer={false}>
           <ToneMapping />
           {/* Main "game look" saturation knob (0 = unchanged, +0.28 ≈ +28% pop). */}
           <HueSaturation saturation={SATURATION} />

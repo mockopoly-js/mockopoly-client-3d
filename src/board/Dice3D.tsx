@@ -9,6 +9,7 @@ import {
 import * as THREE from 'three';
 import { useGameBusEvent } from '../state/useGameBus';
 import { FACE_NORMAL, resolveQuaternionNear } from './dice-orientation';
+import { bumpMotion } from './mobileRender';
 
 // ---- Geometry / placement constants -----------------------------------------
 const DIE_SIZE = 0.5;               // cube edge length
@@ -264,6 +265,9 @@ export function Dice3D() {
     active.current = true;
     setRunning(true); // un-pause the physics world for this roll
     if (rootRef.current) rootRef.current.visible = true;
+    // On-demand (mobile): kick the render loop so the tumble starts painting —
+    // this event fires outside the frame loop, so nothing renders until we ask.
+    bumpMotion();
   });
 
   useFrame((_, delta) => {
@@ -273,6 +277,10 @@ export function Dice3D() {
       root.visible = false;
       return;
     }
+    // On-demand (mobile): request the next frame every frame the roll is live so
+    // the tumble/snap/hold animates smoothly; the final frame (which sets
+    // active.current=false) stops asking → the loop drains and settles crisp.
+    bumpMotion();
     const dtMs = delta * 1000;
 
     for (let i = 0; i < 2; i++) {
