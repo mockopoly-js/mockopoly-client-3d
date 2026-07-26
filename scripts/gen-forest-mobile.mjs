@@ -10,8 +10,8 @@
  * VISUALLY-NEAR-IDENTICAL variant loaded at runtime only when `isMobile`.
  * Desktop keeps `forest.glb` byte-identical.
  *
- * THREE INVISIBLE / NEAR-INVISIBLE OPTIMIZATIONS
- * ----------------------------------------------
+ * TWO INVISIBLE / NEAR-INVISIBLE OPTIMIZATIONS
+ * --------------------------------------------
  *   (A) MESHOPT compression on the whole asset (EXT_meshopt_compression, FILTER
  *       method). Smaller download + faster parse, ZERO visual change. The
  *       decoder is bundled in three-stdlib and auto-installed by drei's useGLTF,
@@ -24,12 +24,7 @@
  *       transform in the original FLOAT space (verified byte-identical instance
  *       T/S), so all downstream position math is unchanged.
  *
- *   (B) FLAT-GROUND uniform decimation: the flat ground tiles (Meadow / Meadow
- *       Path / Lake_Ground — NOT grass, which the geometry scan showed to be 3D
- *       relief tufts) are simplified ~90% in place. A near-planar tile viewed
- *       from above is visually identical at a fraction of the triangles.
- *
- *   (C) TRUE far-chunk LOD: every 3D-relief type (trees, flowers, mushrooms,
+ *   (B) TRUE far-chunk LOD: every 3D-relief type (trees, flowers, mushrooms,
  *       grass, rocks, mountains) keeps its FULL geometry AND gains a decimated
  *       `<name>_LOD` sibling mesh (kept ~50%). The chunker (mobile only) points
  *       FAR chunks — those whose every instance sits beyond FOREST_THIN_DISTANCE
@@ -38,6 +33,17 @@
  *       nothing pops mid-motion. The `_LOD` meshes ride in the glb as
  *       non-instanced nodes at the origin; ForestEnvironment harvests their
  *       geometry into a lookup and removes them before they can render.
+ *
+ * FLAT-GROUND DECIMATION — REMOVED. Earlier builds decimated the flat ground
+ * tiles (Meadow / Meadow_Path / Lake_Ground) ~90% in place on the assumption
+ * they were near-planar. They are NOT: the tiles carry ~12-15% Y-relief, so the
+ * position-weld + simplify + attribute-rebuild mangled their surface, UVs and
+ * normals — producing a torn/jagged ground on device. Ground now keeps its
+ * ORIGINAL geometry and gets NO `_LOD` sibling, so the runtime chunker falls back
+ * to the full geometry for it. Ground is still chunked + frustum-culled at
+ * runtime, so there is no perf regression. Grass is NOT ground here — the
+ * geometry scan showed PP_Grass_* to be 3D relief tufts, so it stays a relief
+ * type with an `_LOD`.
  *
  * meshoptimizer's simplifier collapses edges in the INDEX topology. The source
  * props are hard-edged low-poly "triangle soup": corner positions are bitwise
@@ -67,18 +73,16 @@ const IN = resolve(PROJECT_ROOT, 'public/models/forest.glb');
 const OUT = resolve(PROJECT_ROOT, 'public/models/forest.mobile.glb');
 
 /**
- * FLAT ground tiles — decimated HARD in place. Matches Meadow / Meadow_Path /
- * Lake_Ground ONLY. Grass is intentionally EXCLUDED: the geometry scan measured
- * PP_Grass_11/15 as small bushy 3D tufts (Y/XZ ≈ 1.0), not flat planes, so they
- * are treated as relief and get an LOD instead (below).
+ * FLAT ground tiles — Meadow / Meadow_Path / Lake_Ground. These now KEEP their
+ * ORIGINAL geometry: decimation was REMOVED (see the banner — the tiles carry
+ * ~12-15% Y-relief and the simplify pass tore the surface on device). We still
+ * MATCH them here to route them AWAY from the relief branch so they get NO `_LOD`
+ * sibling; the runtime chunker then falls back to their full geometry. Grass is
+ * intentionally EXCLUDED: the geometry scan measured PP_Grass_11/15 as small
+ * bushy 3D tufts (Y/XZ ≈ 1.0), not flat planes, so it is treated as relief and
+ * gets an `_LOD` instead (below).
  */
 const FLAT_RE = /meadow|path|lake/i;
-
-// Flat ground: keep ~10% of triangles (90% reduction). error is a fraction of
-// mesh radius; a near-planar tile carries negligible error even when halved
-// again, so a loose bound lets it actually reach the aggressive target.
-const GROUND_RATIO = 0.1;
-const GROUND_ERROR = 0.5;
 
 // Relief LOD: keep ~50% of triangles, tight error bound so silhouettes hold up.
 const LOD_RATIO = 0.5;
@@ -196,21 +200,21 @@ async function main() {
   let reliefFullTris = 0;
   let reliefLodTris = 0;
 
-  console.log('[gen-forest-mobile] decimating flat ground + adding relief *_LOD meshes ...');
+  console.log('[gen-forest-mobile] keeping ground at full geometry + adding relief *_LOD meshes ...');
   for (const mesh of [...root.listMeshes()]) {
     const name = mesh.getName();
     const prim = mesh.listPrimitives()[0];
     if (!prim) continue;
 
     if (FLAT_RE.test(name)) {
-      // (B) Flat ground — decimate HARD, in place.
-      groundBefore += triOf(prim);
-      const simplified = simplifyByPosition(doc, prim, GROUND_RATIO, GROUND_ERROR);
-      mesh.removePrimitive(prim).addPrimitive(simplified);
-      prim.dispose();
-      groundAfter += triOf(simplified);
+      // Flat ground — DECIMATION REMOVED (see banner). Keep the ORIGINAL geometry
+      // untouched and add NO `_LOD` sibling, so the runtime chunker falls back to
+      // this full geometry. Ground is still chunked + frustum-culled at runtime.
+      const tris = triOf(prim);
+      groundBefore += tris;
+      groundAfter += tris; // unchanged — ground is no longer decimated
     } else {
-      // (C) Relief — keep full geometry, add a decimated `<name>_LOD` sibling.
+      // (B) Relief — keep full geometry, add a decimated `<name>_LOD` sibling.
       reliefFullTris += triOf(prim);
       const lodPrim = simplifyByPosition(doc, prim, LOD_RATIO, LOD_ERROR);
       const lodMesh = doc.createMesh(name + '_LOD').addPrimitive(lodPrim);
@@ -224,7 +228,7 @@ async function main() {
     }
   }
 
-  // Drop orphaned accessors from the decimated ground primitives.
+  // Drop any accessors orphaned by the dedup/LOD passes (harmless no-op if none).
   await doc.transform(prune());
 
   // (A) Meshopt compression — FILTER method (keeps FLOAT space; see banner).
@@ -256,7 +260,7 @@ async function main() {
   console.log('\n[gen-forest-mobile] DONE');
   console.log(`  out:               ${OUT}`);
   console.log(`  size:              ${MB(statSync(IN).size)} -> ${MB(outSize)} (${outSize} bytes)`);
-  console.log(`  flat-ground tris:  ${groundBefore} -> ${groundAfter}`);
+  console.log(`  flat-ground tris:  ${groundBefore} -> ${groundAfter} (full-res, decimation removed)`);
   console.log(`  relief LOD tiers:  ${lodMeshes} added (full ${reliefFullTris} -> LOD ${reliefLodTris} tris)`);
   console.log(`  instanced nodes:   ${instancedNodes} (placements: ${instPlacements})`);
   console.log(`  _LOD meshes:       ${lodOut}`);
