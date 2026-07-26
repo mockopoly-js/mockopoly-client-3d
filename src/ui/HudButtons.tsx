@@ -33,26 +33,10 @@ export function HudButtons() {
       (activeRentDeal.creditorIds.includes(myId) || activeRentDeal.debtorId === myId))
   );
 
-  if (isMobile) {
-    // On mobile: row of buttons in the bottom action bar (above the safe area),
-    // offset above TurnHud's hotbarMobile which sits at the very bottom.
-    return (
-      <div style={wrapMobile}>
-        <div style={btnWrap}>
-          <GameButton variant="dark" onClick={() => trade(true)} style={btnMobileOverride}>Trade</GameButton>
-          {tradeBadge && <span style={dot} aria-hidden="true" />}
-        </div>
-        <div style={btnWrap}>
-          <GameButton variant="dark" onClick={() => partnership(true)} style={btnMobileOverride}>Partnership</GameButton>
-          {partnershipBadge && <span style={dot} aria-hidden="true" />}
-        </div>
-        <div style={btnWrap}>
-          <GameButton variant="dark" onClick={() => deal(true)} style={btnMobileOverride}>Deal</GameButton>
-          {dealBadge && <span style={dot} aria-hidden="true" />}
-        </div>
-      </div>
-    );
-  }
+  // On mobile these three secondary actions live behind the ⋯ button in
+  // TurnHud's bottom-right cluster (see ActionsSheet) instead of crowding the
+  // board with a full-width bar. Desktop keeps the compact left sidebar below.
+  if (isMobile) return null;
 
   return (
     <div style={wrap}>
@@ -98,30 +82,5 @@ const wrap: React.CSSProperties = {
 const btnDesktopOverride: React.CSSProperties = {
   fontSize: 13,
   padding: '9px 14px',
-  borderRadius: 12,
-};
-
-// ── Mobile styles ──
-// Sits above the TurnHud bottom bar; uses a second fixed row just above it.
-const wrapMobile: React.CSSProperties = {
-  position: 'fixed',
-  bottom: 'calc(64px + env(safe-area-inset-bottom))',
-  left: 0,
-  right: 0,
-  display: 'flex',
-  flexDirection: 'row',
-  gap: 8,
-  zIndex: 30,
-  fontFamily: F,
-  padding: '0 12px',
-  paddingLeft: 'calc(12px + env(safe-area-inset-left))',
-  paddingRight: 'calc(12px + env(safe-area-inset-right))',
-};
-
-const btnMobileOverride: React.CSSProperties = {
-  flex: 1,
-  minHeight: 44,
-  fontSize: 13,
-  padding: '10px 0',
   borderRadius: 12,
 };

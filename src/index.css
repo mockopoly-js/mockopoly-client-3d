@@ -78,6 +78,12 @@ button:active:not(:disabled) {
   .game-btn:not(:disabled):active { transform: none; }
 }
 
+/* --- Mobile game-log toast fade-in (GameLog mobile entries) --- */
+@keyframes logToastIn {
+  from { opacity: 0; transform: translateY(4px); }
+  to { opacity: 0.85; transform: translateY(0); }
+}
+
 /* --- MainMenu swatch press CSS (retained from MainMenu inline style) --- */
 .mm-swatch:hover { transform: scale(1.12); }
 .mm-swatch:active { transform: scale(1.05); }

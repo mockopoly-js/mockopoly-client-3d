@@ -5,6 +5,14 @@ import { useIsMobile } from './useIsMobile';
 import type { Player } from '../types/GameState';
 import { FONT_FAMILY } from '../constants/fonts';
 
+/** 1–2 char avatar initials from a player name (word initials, else first chars). */
+function initials(name: string): string {
+  const words = name.trim().split(/\s+/).filter(Boolean);
+  if (words.length >= 2) return (words[0][0] + words[1][0]).toUpperCase();
+  const w = words[0] ?? '';
+  return (w.slice(0, 2) || '?').toUpperCase();
+}
+
 export function PlayerPods() {
   const players: Player[] = useGameStore((s) => s.state?.players) ?? [];
   const currentId = useGameStore((s) => s.state?.turn.currentPlayerId);
@@ -14,22 +22,29 @@ export function PlayerPods() {
   if (!players.length) return null;
 
   if (isMobile) {
-    // Slim horizontal strip pinned just below the top status bar (which is ~36px tall).
+    // Compact avatar chips (initials) in the top-left safe area. The current
+    // player's chip is ringed gold; bankrupt chips dim. Names/money live in the
+    // top-center chip (me) — the board stays uncluttered.
     return (
       <div style={wrapMobile}>
-        {players.map((p) => (
-          <div key={p.id} style={{ ...podMobile, outline: p.id === currentId ? '2px solid #d4af37' : 'none', opacity: p.isBankrupt ? 0.5 : 1 }}>
-            <span style={{ ...dotMobile, background: TOKEN_HEX[p.token] }} />
-            <div style={{ minWidth: 0, flex: 1 }}>
-              <div style={{ fontWeight: 800, fontSize: 11, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                {p.name}{p.id === myId && <span style={{ color: '#8888a0' }}> (you)</span>}
-              </div>
-              <div style={{ fontWeight: 800, fontSize: 10, fontVariantNumeric: 'tabular-nums', color: p.money < 0 ? '#e5533d' : '#46b16a' }}>
-                {formatMoney(p.money)}
-              </div>
+        {players.map((p) => {
+          const isCurrent = p.id === currentId;
+          return (
+            <div
+              key={p.id}
+              title={`${p.name}${p.id === myId ? ' (you)' : ''} · ${formatMoney(p.money)}`}
+              style={{
+                ...avatarMobile,
+                background: TOKEN_HEX[p.token],
+                outline: isCurrent ? '2px solid #f0d060' : '2px solid rgba(0,0,0,0.35)',
+                boxShadow: isCurrent ? '0 0 10px rgba(240,208,96,0.7)' : '0 2px 6px rgba(0,0,0,0.5)',
+                opacity: p.isBankrupt ? 0.4 : 1,
+              }}
+            >
+              {initials(p.name)}
             </div>
-          </div>
-        ))}
+          );
+        })}
       </div>
     );
   }
@@ -73,26 +88,21 @@ const pod: React.CSSProperties = {
 };
 const dot: React.CSSProperties = { width: 20, height: 20, borderRadius: '50%', flex: 'none' };
 
-// ── Mobile styles: slim top strip ──
+// ── Mobile styles: top-left avatar chips ──
 const wrapMobile: React.CSSProperties = {
   position: 'fixed',
-  // Sit below TurnHud topBarMobile (~36px) + safe-area-inset-top (notch).
-  top: 'calc(36px + env(safe-area-inset-top))',
-  left: 0,
-  right: 0,
+  top: 'calc(8px + env(safe-area-inset-top))',
+  left: 'calc(8px + env(safe-area-inset-left))',
   display: 'flex',
   flexDirection: 'row',
-  gap: 6,
-  padding: '4px 8px',
-  paddingLeft: 'calc(8px + env(safe-area-inset-left))',
-  paddingRight: 'calc(8px + env(safe-area-inset-right))',
+  gap: 7,
   fontFamily: FONT_FAMILY,
-  zIndex: 29,
-  overflowX: 'auto',
+  zIndex: 30,
 };
-const podMobile: React.CSSProperties = {
-  display: 'flex', alignItems: 'center', gap: 6, background: '#12121e', color: '#e8e8f0',
-  borderRadius: 10, padding: '5px 8px', boxShadow: '0 4px 12px -6px rgba(0,0,0,.6)',
-  flex: '1 1 0', minWidth: 70, maxWidth: 130,
+const avatarMobile: React.CSSProperties = {
+  width: 36, height: 36, borderRadius: '50%',
+  display: 'flex', alignItems: 'center', justifyContent: 'center',
+  color: '#fff', fontWeight: 800, fontSize: 13, letterSpacing: '0.02em',
+  textShadow: '0 1px 2px rgba(0,0,0,0.55)',
+  flex: 'none', boxSizing: 'border-box',
 };
-const dotMobile: React.CSSProperties = { width: 12, height: 12, borderRadius: '50%', flex: 'none' };

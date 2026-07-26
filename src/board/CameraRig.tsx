@@ -6,7 +6,8 @@ import type { OrbitControls as OrbitControlsImpl } from 'three-stdlib';
 import { useGameStore, selectCurrentPlayer, selectMyPlayer } from '../state/gameStore';
 import type { CameraReadout } from '../state/gameStore';
 import { thirdPersonPose } from './positions';
-import { INITIAL_CAM_TARGET, INITIAL_CAM_OFFSET } from './cameraConstants';
+import { INITIAL_CAM_TARGET, INITIAL_CAM_OFFSET, MOBILE_INITIAL_CAM_OFFSET } from './cameraConstants';
+import { useIsMobile } from '../ui/useIsMobile';
 
 // Frame-rate-aware smoothing rate for the follow lerp. Higher = snappier.
 // alpha = 1 - exp(-RATE * delta) → ease-out, no snapping, stable at any FPS.
@@ -66,6 +67,14 @@ export function CameraRig() {
   // Access the R3F camera for the initial snap (sets camera position too).
   const camera = useThree((s) => s.camera);
 
+  // Mobile framing: dolly the initial view IN so the board fills the short
+  // landscape viewport. Read into a ref so the (dependency-array-free) initial
+  // snap effect always sees the current value without re-subscribing. Desktop
+  // (isMobile === false) uses INITIAL_CAM_OFFSET exactly as before.
+  const isMobile = useIsMobile();
+  const isMobileRef = useRef(isMobile);
+  isMobileRef.current = isMobile;
+
   // Active player = whose turn it is (NOT socket.id). Doubles as the store-hydration
   // guard for the initial snap below.
   const activePlayer = useGameStore(selectCurrentPlayer);
@@ -100,10 +109,12 @@ export function CameraRig() {
     const target = new THREE.Vector3(...INITIAL_CAM_TARGET);
     controls.target.copy(target);
 
+    // Same aim/angle on both; mobile just dollies closer (MOBILE_CAM_DIST).
+    const offset = isMobileRef.current ? MOBILE_INITIAL_CAM_OFFSET : INITIAL_CAM_OFFSET;
     camera.position.set(
-      target.x + INITIAL_CAM_OFFSET[0],
-      target.y + INITIAL_CAM_OFFSET[1],
-      target.z + INITIAL_CAM_OFFSET[2],
+      target.x + offset[0],
+      target.y + offset[1],
+      target.z + offset[2],
     );
     controls.update();
 

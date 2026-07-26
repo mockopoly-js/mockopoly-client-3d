@@ -11,8 +11,9 @@ export function GameLog() {
   const recent = log.slice(-6).reverse();
 
   if (isMobile) {
-    // On mobile: show only the most recent 2 entries in a slim strip at the top-right
-    // (below PlayerPods strip, above the board), does not overlap the bottom action bar.
+    // On mobile: a small, low-opacity toast at the bottom-left showing the two
+    // most recent entries. Each new entry fades in (keyed by timestamp). It sits
+    // clear of the bottom-right action cluster and never covers the board.
     const slim = recent.slice(0, 2);
     return (
       <div style={wrapMobile}>
@@ -42,20 +43,28 @@ const wrap: React.CSSProperties = {
 const hdr: React.CSSProperties = { fontSize: 10, letterSpacing: '.12em', textTransform: 'uppercase', color: '#555570', fontWeight: 800, marginBottom: 6 };
 const entry: React.CSSProperties = { fontSize: 12, fontWeight: 500, padding: '3px 0', lineHeight: 1.35 };
 
-// ── Mobile styles: slim strip, top-right, 2 entries max ──
+// ── Mobile styles: low-opacity fading toast, bottom-left, 2 entries max ──
 const wrapMobile: React.CSSProperties = {
   position: 'fixed',
-  // below topBarMobile (~36px) + PlayerPods strip (~54px); add notch inset so it
-  // clears the safe area on notched phones (top) and landscape side-notch (right).
-  top: 'calc(90px + env(safe-area-inset-top))',
-  right: 'calc(6px + env(safe-area-inset-right))',
-  width: 170,
-  maxWidth: '55vw',
-  background: 'rgba(18,18,30,0.82)',
-  color: '#8888a0',
-  borderRadius: 8,
-  padding: '5px 8px',
+  bottom: 'calc(10px + env(safe-area-inset-bottom))',
+  left: 'calc(10px + env(safe-area-inset-left))',
+  maxWidth: '46vw',
+  display: 'flex',
+  flexDirection: 'column',
+  gap: 4,
+  alignItems: 'flex-start',
   fontFamily: FONT_FAMILY,
-  zIndex: 29,
+  zIndex: 28,
+  pointerEvents: 'none',
 };
-const entryMobile: React.CSSProperties = { fontSize: 11, fontWeight: 500, padding: '2px 0', lineHeight: 1.3 };
+const entryMobile: React.CSSProperties = {
+  fontSize: 11,
+  fontWeight: 600,
+  color: '#e8e8f0',
+  background: 'rgba(8,8,15,0.55)',
+  borderRadius: 8,
+  padding: '4px 9px',
+  lineHeight: 1.25,
+  opacity: 0.85,
+  animation: 'logToastIn 0.3s ease',
+};

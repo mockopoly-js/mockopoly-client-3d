@@ -29,16 +29,19 @@ const baseStyle: React.CSSProperties = {
   justifyContent: 'center',
 };
 
-// In-game on mobile the full-width bottom action bars (Roll/End, Trade/…) own the
-// bottom edge, so the corner chips move to a compact horizontal cluster that sits
-// ABOVE those bars and BELOW any modal (z:35 < modal z:40). Mute is the rightmost
-// chip; CameraView / Fullscreen step left of it.
+// In-game on mobile the bottom-right corner is owned by the action cluster
+// ([⋯][End turn][ROLL]), so the icon chips move to the TOP-RIGHT safe area as a
+// compact round cluster below any modal (z:35 < modal z:40). Mute is the
+// rightmost chip; CameraView / Fullscreen step left of it (right +52 each).
 const mobileStyle: React.CSSProperties = {
-  bottom: 'calc(116px + env(safe-area-inset-bottom))',
+  top: 'calc(8px + env(safe-area-inset-top))',
   right: 'calc(8px + env(safe-area-inset-right))',
+  bottom: 'auto',
   zIndex: 35,
-  minWidth: 44,
-  minHeight: 44,
+  width: 44,
+  height: 44,
+  padding: 0,
+  borderRadius: 999,
 };
 
 /**

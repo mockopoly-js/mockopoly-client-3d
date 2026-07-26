@@ -20,6 +20,7 @@ import { Dice3D } from '../board/Dice3D';
 import { CameraRig } from '../board/CameraRig';
 import { BoardClickTargets } from '../board/BoardClickTargets';
 import { BOARD_ROTATION } from '../board/positions';
+import { useIsMobile } from '../ui/useIsMobile';
 
 /**
  * Game screen: renders the static 3D board in a daylight diorama scene.
@@ -313,6 +314,9 @@ export function GameScene() {
   // Container for the drei Stats panel — positioned below CameraDebugOverlay
   // (which sits at top:56) so the two don't overlap.
   const statsParentRef = useRef<HTMLDivElement>(null);
+  // Mobile in-game view must be clean: all dev/debug overlays are suppressed on
+  // phones (the FPS Stats, CullingBadge, CullingAudit). Desktop is unchanged.
+  const isMobile = useIsMobile();
 
   return (
     <>
@@ -329,8 +333,9 @@ export function GameScene() {
         pointerEvents: 'none',
       }}
     />
-    {/* DEV-only culling state badge — placed below FPS stats panel. */}
-    <CullingBadge />
+    {/* DEV-only culling state badge — placed below FPS stats panel. Hidden on
+        mobile so the in-game view stays clean. */}
+    {!isMobile && <CullingBadge />}
     <Canvas
       style={{ position: 'fixed', inset: 0 }}
       // Reverted to original nice framing. Board content is rotated via BOARD_ROTATION
@@ -351,8 +356,9 @@ export function GameScene() {
       {!SHOW_HDRI_BACKGROUND && <color attach="background" args={['#cbe8f5']} />}
       {/* Soft shadow injection (must be early in the scene, no assets). */}
       <SoftShadows size={12} samples={8} />
-      {/* DEV-only culling audit — press "c" to log material side counts. */}
-      <CullingAudit />
+      {/* DEV-only culling audit — press "c" to log material side counts.
+          Skipped on mobile (no keyboard; keeps the mobile scene graph lean). */}
+      {!isMobile && <CullingAudit />}
       {/* Sky/ground hemisphere fill — tints unlit sides; trimmed 0.35 → 0.25 so
           AO + the rig shape the scene instead of a flat wash. */}
       <hemisphereLight args={['#cbe8f5', '#8a9a5b', HEMI_INTENSITY]} />
@@ -464,10 +470,11 @@ export function GameScene() {
         {/* Edge AA replacement for the dropped MSAA (see note above). */}
         <SMAA />
       </EffectComposer>
-      {/* FPS counter — always-on dev/perf readout. Mounted into statsParentRef
-          (the fixed div sibling above) so it appears below the CameraDebugOverlay
-          at top:104px left:8px rather than defaulting to the top-left origin. */}
-      <Stats parent={statsParentRef} />
+      {/* FPS counter — DEV-only perf readout (never ships to production) and
+          hidden on mobile so the in-game view stays clean. Mounted into
+          statsParentRef (the fixed div sibling above) so it appears below the
+          CameraDebugOverlay at top:104px left:8px rather than the top-left origin. */}
+      {import.meta.env.DEV && !isMobile && <Stats parent={statsParentRef} />}
     </Canvas>
     </>
   );

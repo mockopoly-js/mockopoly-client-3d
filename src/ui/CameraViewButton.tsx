@@ -28,21 +28,22 @@ export function CameraViewButton() {
 
   const style: React.CSSProperties = {
     position: 'fixed',
-    // Desktop: stacked above MuteButton on the right edge. Mobile in-game: middle
-    // chip of the horizontal corner cluster that clears the bottom action bars and
-    // sits below modals (z:35 < modal z:40).
-    bottom: isMobile ? 'calc(116px + env(safe-area-inset-bottom))' : 72,
-    right: isMobile ? 'calc(64px + env(safe-area-inset-right))' : 16,
+    // Desktop: stacked above MuteButton on the right edge (bottom:72). Mobile
+    // in-game: middle chip of the TOP-RIGHT round cluster (Mute is rightmost at
+    // right:8, this steps left to right:60), below modals (z:35 < modal z:40).
+    top: isMobile ? 'calc(8px + env(safe-area-inset-top))' : undefined,
+    bottom: isMobile ? 'auto' : 72,
+    right: isMobile ? 'calc(60px + env(safe-area-inset-right))' : 16,
     zIndex: isMobile ? 35 : 49,
     pointerEvents: 'auto',
     fontFamily: FONT,
     fontWeight: 800,
     fontSize: 20,
     lineHeight: 1,
-    borderRadius: 12,
-    padding: '10px 14px',
-    minWidth: isMobile ? 44 : undefined,
-    minHeight: isMobile ? 44 : undefined,
+    borderRadius: isMobile ? 999 : 12,
+    padding: isMobile ? 0 : '10px 14px',
+    width: isMobile ? 44 : undefined,
+    height: isMobile ? 44 : undefined,
     background: active ? '#1c1a12' : '#12121e',
     color: active ? '#f0d060' : '#e8e8f0',
     border: active ? '1px solid #d4af37' : '1px solid transparent',
