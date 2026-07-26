@@ -141,7 +141,7 @@ const HEMI_INTENSITY = 0.25;
  *  - MOBILE_DPR_MOVING — the cheap dpr held while the camera ORBITS / zooms /
  *    pans, so the interaction stays fast and smooth. Token walk, dice roll and
  *    character animation deliberately DO NOT change dpr — only camera movement.
- *  - MOBILE_DPR_STILL — the phone's NATIVE dpr, CAPPED AT 2. Under always-render
+ *  - MOBILE_DPR_STILL — the phone's NATIVE dpr, CAPPED AT 2.5. Under always-render
  *    the scene draws continuously, so a dpr of 3 would thermally throttle an
  *    iPhone (that was only sustainable under the old on-demand path where rest
  *    rendered 0 frames). min(devicePixelRatio, 2) (≈2 on iPhone 13 Pro) keeps a
@@ -156,7 +156,7 @@ const HEMI_INTENSITY = 0.25;
 const MOBILE_DPR_MOVING = 1.3;
 const MOBILE_DPR_STILL = Math.min(
   typeof window !== 'undefined' ? window.devicePixelRatio || 2 : 2,
-  3,
+  2.5,
 );
 const MOBILE_SETTLE_MS = 120;
 
