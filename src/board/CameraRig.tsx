@@ -264,13 +264,13 @@ export function CameraRig() {
       maxPolarAngle={1.55}
       minDistance={2.5}
       maxDistance={70}
-      // MOBILE on-demand: fires on EVERY camera change — orbit, zoom, pan, the
+      // MOBILE adaptive dpr: fires on EVERY camera change — orbit, zoom, pan, the
       // damping tail after release, AND the third-person follow lerp (which moves
-      // the camera via controls.update()). Marks motion (cheap dpr) + requests a
-      // render; when the camera stops changing it settles to a crisp frame. drei
-      // already invalidate()s on change, so this only ADDS the dpr/settle
-      // tracking. Desktop passes undefined → OrbitControls behaves exactly as
-      // before (byte-identical).
+      // the camera via controls.update()). Drops to the cheap MOVING dpr; when the
+      // camera stops changing the settle timer restores the crisp dpr (see
+      // mobileRender.ts). This is the ONLY per-frame dpr trigger — token walk /
+      // dice / character anim never touch dpr. Desktop passes undefined →
+      // OrbitControls behaves exactly as before (byte-identical).
       onChange={isMobile ? bumpMotion : undefined}
     />
   );

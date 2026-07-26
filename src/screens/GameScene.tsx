@@ -20,7 +20,6 @@ import { Dice3D } from '../board/Dice3D';
 import { CameraRig } from '../board/CameraRig';
 import { BoardClickTargets } from '../board/BoardClickTargets';
 import { MobileRenderController, type ComposerHandle } from '../board/MobileRenderController';
-import { pokeRender } from '../board/mobileRender';
 import { BOARD_ROTATION } from '../board/positions';
 import { useIsMobile } from '../ui/useIsMobile';
 
@@ -134,28 +133,29 @@ const HEMI_INTENSITY = 0.25;
 
 /**
  * ── MOBILE ADAPTIVE DPR (mobile only; desktop stays dpr={[1, 1.5]}) ───────────
- * On mobile the <Canvas> runs `frameloop="demand"` (see the Canvas below) and a
+ * The <Canvas> runs `frameloop="always"` on BOTH desktop and mobile (see below),
+ * so physics + every useFrame step run every frame identically. On mobile a
  * <MobileRenderController> swaps the device-pixel-ratio between two values based
- * on whether anything is moving (see mobileRender.ts):
- *  - MOBILE_DPR_MOVING — the cheap dpr held while ORBITING or while a token /
- *    dice / character animation runs, so motion (and the forest's per-fragment
- *    dither-discard overdraw, now restored on mobile) stays fast and smooth.
- *  - MOBILE_DPR_STILL — the phone's NATIVE dpr (capped at 3, e.g. iPhone 13 Pro).
- *    Once the scene SETTLES (no motion for MOBILE_SETTLE_MS) the controller bumps
- *    to this and renders ONE crisp frame. Because rendering is on-demand that
- *    native-dpr frame draws once then idles — a razor-sharp board (4096 texture +
- *    anisotropy/mipmaps + SMAA) with NO sustained GPU load, so no thermal
- *    throttle. It is also the initial `dpr` prop so the first paint is crisp.
- * MOBILE_SETTLE_MS is the no-motion debounce before that crisp frame is drawn.
- * Kept short (120ms) so the crisp frame lands quickly after the user stops
- * touching the screen — paired with a faster OrbitControls damping decay on
- * mobile (see CameraRig.tsx) so the drift tail no longer keeps re-arming this
+ * ONLY on whether the CAMERA is moving (see mobileRender.ts):
+ *  - MOBILE_DPR_MOVING — the cheap dpr held while the camera ORBITS / zooms /
+ *    pans, so the interaction stays fast and smooth. Token walk, dice roll and
+ *    character animation deliberately DO NOT change dpr — only camera movement.
+ *  - MOBILE_DPR_STILL — the phone's NATIVE dpr, CAPPED AT 2. Under always-render
+ *    the scene draws continuously, so a dpr of 3 would thermally throttle an
+ *    iPhone (that was only sustainable under the old on-demand path where rest
+ *    rendered 0 frames). min(devicePixelRatio, 2) (≈2 on iPhone 13 Pro) keeps a
+ *    razor-sharp board (4096 texture + anisotropy/mipmaps + SMAA) thermally
+ *    sustainable. It is also the initial `dpr` prop so the first paint is crisp.
+ * MOBILE_SETTLE_MS is the no-camera-motion debounce before the crisp dpr is
+ * restored. Kept short (120ms) so the crisp resolution lands quickly after the
+ * user stops moving the camera — paired with a faster OrbitControls damping decay
+ * on mobile (see CameraRig.tsx) so the drift tail no longer keeps re-arming this
  * debounce for ~1s after release.
  */
 const MOBILE_DPR_MOVING = 1.3;
 const MOBILE_DPR_STILL = Math.min(
   typeof window !== 'undefined' ? window.devicePixelRatio || 2 : 2,
-  3,
+  2,
 );
 const MOBILE_SETTLE_MS = 120;
 
@@ -186,12 +186,8 @@ function HdriSky() {
       scene.background = tex;
       scene.backgroundIntensity = BG_INTENSITY;
     }
-    // MOBILE on-demand: this sets scene.environment/background IMPERATIVELY in a
-    // passive effect, which does NOT self-invalidate (no R3F reconciliation), so
-    // the sky/IBL could otherwise wait for the next unrelated frame. Poke a burst
-    // so it paints the moment the HDRI loads. Hard no-op off mobile → desktop
-    // (frameloop="always") is unaffected.
-    pokeRender();
+    // Under frameloop="always" the imperatively-set scene.environment/background
+    // paints on the next frame automatically — no render poke needed.
     return () => {
       scene.environment = null;
       // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- SHOW_HDRI_BACKGROUND is a documented build-time toggle (see header)
@@ -387,14 +383,14 @@ export function GameScene() {
       // Shadows ON for desktop; OFF on mobile. Dropping the whole shadow render
       // pass is a big mobile win (see the KEY light + adaptive-dpr notes).
       shadows={!isMobile}
-      // MOBILE: on-demand rendering — NOTHING renders unless invalidate() is
-      // called. The <MobileRenderController> + every animation source wire the
-      // invalidations (see mobileRender.ts), giving a crisp still frame, a cheap
-      // moving render, and zero work when idle (no thermal throttle). DESKTOP is
-      // untouched: frameloop="always", dpr={[1, 1.5]}.
-      frameloop={isMobile ? 'demand' : 'always'}
-      // MOBILE starts at the crisp native dpr; the controller swaps to
-      // MOBILE_DPR_MOVING while moving and back on settle. Desktop unchanged.
+      // Always-render on BOTH desktop and mobile: every frame steps Rapier physics
+      // + all useFrame loops, so the dice roll (physics-driven) behaves identically
+      // to desktop. Mobile stays sustainable via adaptive dpr (below), not by
+      // gating frames.
+      frameloop="always"
+      // MOBILE starts at the crisp native dpr (capped at 2 for thermal headroom
+      // under always-render); the controller swaps to MOBILE_DPR_MOVING while the
+      // CAMERA moves and back on settle. Desktop unchanged: dpr={[1, 1.5]}.
       dpr={isMobile ? MOBILE_DPR_STILL : [1, 1.5]}
       performance={{ min: 0.5 }}
       gl={{ powerPreference: 'high-performance', antialias: false }}
@@ -415,10 +411,9 @@ export function GameScene() {
       {/* DEV-only culling audit — press "c" to log material side counts.
           Skipped on mobile (no keyboard; keeps the mobile scene graph lean). */}
       {!isMobile && <CullingAudit />}
-      {/* MOBILE-ONLY on-demand render + adaptive-dpr controller. Registers the
-          invalidate bus, wires the pointer/store safety nets, and drives the
-          moving↔still dpr swap. NEVER mounted on desktop, so the
-          frameloop="always" path stays byte-identical. */}
+      {/* MOBILE-ONLY adaptive-dpr controller. Registers the dpr bus and wires the
+          canvas pointer/wheel CAMERA-motion listeners that drive the moving↔still
+          dpr swap. NEVER mounted on desktop, so desktop stays byte-identical. */}
       {isMobile && (
         <MobileRenderController
           composerRef={composerRef}

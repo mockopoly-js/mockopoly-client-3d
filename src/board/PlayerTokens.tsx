@@ -8,7 +8,6 @@ import { stackOffset } from './hopPath';
 import { TOKEN_HEX } from '../constants/theme';
 import { CharacterToken, type CharacterTokenHandle } from './CharacterToken';
 import { resolveCharacter, DEFAULT_CHARACTER } from '../constants/characters';
-import { bumpMotion } from './mobileRender';
 import type { Player } from '../types/GameState';
 
 const BASE_Y = 0.15;
@@ -232,10 +231,6 @@ export function PlayerTokens() {
           chars.current[id]?.play(movingRef.current[id] ? 'Run' : 'Idle');
         },
       });
-      // On-demand (mobile): kick so the Victory clip paints (this runs from the
-      // store subscribe, outside the frame loop); CharacterToken's mixer loop
-      // then self-perpetuates until Victory finishes and returns to Idle.
-      bumpMotion();
     };
 
     const unsub = useGameStore.subscribe((store) => {
@@ -366,19 +361,12 @@ export function PlayerTokens() {
       if (!movingRef.current[d.playerId]) {
         setMoving((m) => ({ ...m, [d.playerId]: true }));
       }
-      // On-demand (mobile): kick the render loop so the walk starts painting —
-      // this event fires outside the frame loop, so nothing renders until asked.
-      // The walk useFrame below then self-perpetuates until the token arrives.
-      bumpMotion();
     },
   );
 
   // One-shot Victory for the winner on game over.
   useGameBusEvent('game-over', (d: { winnerId: string }) => {
     chars.current[d.winnerId]?.play('Victory', { loop: false });
-    // On-demand (mobile): kick so the Victory clip paints; CharacterToken's
-    // mixer loop then self-perpetuates until the clip returns to Idle.
-    bumpMotion();
   });
 
   // One-shot Defeat when a player goes bankrupt (played on the frame before the
@@ -386,24 +374,17 @@ export function PlayerTokens() {
   // the next state update, so the clip mostly flashes. Kept lightweight.)
   useGameBusEvent('player-bankrupt', (d: { playerId: string }) => {
     chars.current[d.playerId]?.play('Defeat', { loop: false });
-    bumpMotion(); // on-demand (mobile): kick so the Defeat clip paints
   });
 
   useFrame((_, delta) => {
     const dtMs = delta * 1000;
     const current = playersRef.current;
-    // On-demand (mobile): true while any token is walking OR still pivoting to its
-    // rest facing — drives one more render each such frame so the demand loop
-    // keeps going until every token has both arrived AND finished turning, then
-    // stops asking so the scene settles (see bumpMotion at the end of the loop).
-    let needsFrame = false;
     for (const p of current) {
       const group = groups.current[p.id];
       if (!group) continue;
 
       const anim = anims.current[p.id];
       if (anim && anim.seg < anim.pts.length - 1) {
-        needsFrame = true; // a walk is in flight → keep rendering
         // Advance through segments, carrying overshoot so a fast frame can cross
         // more than one tile without stalling (keeps constant ground speed).
         anim.segElapsed += dtMs;
@@ -532,9 +513,6 @@ export function PlayerTokens() {
           const next = stepYaw(cur, ty, frac);
           group.rotation.y = next;
           facing.current[p.id] = next;
-          // Still pivoting toward the rest facing (stepYaw snaps to target within
-          // YAW_SNAP_EPSILON, so this is false once settled) → keep rendering.
-          if (next !== ty) needsFrame = true;
         } else {
           // First frame before any walk: hold whatever seeded facing is on the group.
           group.rotation.y = facing.current[p.id] ?? group.rotation.y;
@@ -551,10 +529,6 @@ export function PlayerTokens() {
         }
       }
     }
-    // On-demand (mobile): request the next frame while any token is walking or
-    // still pivoting. When every token has arrived and settled, needsFrame is
-    // false and we stop asking → the demand loop drains to a crisp still frame.
-    if (needsFrame) bumpMotion();
   });
 
   return (

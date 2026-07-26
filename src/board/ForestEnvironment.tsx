@@ -238,10 +238,10 @@ export function ForestEnvironment(): React.JSX.Element {
         // the board-footprint clip are load-bearing for the look (without them
         // near trees block the view and terrain clips through the board). The
         // extra overdraw the per-fragment `discard` reintroduces (it defeats
-        // early-Z on the overlapping tree ring) is paid for by the mobile
-        // on-demand render loop + adaptive dpr in GameScene: it renders at the
-        // cheap MOVING dpr while the camera moves and NOT AT ALL when idle, so
-        // the overdraw never runs sustained and never causes thermal throttle.
+        // early-Z on the overlapping tree ring) is kept affordable by the mobile
+        // adaptive dpr in GameScene: it renders at the cheap MOVING dpr while the
+        // camera moves and at the capped STILL dpr (min(devicePixelRatio, 2)) at
+        // rest, so the sustained overdraw stays within thermal budget.
         const material: THREE.Material | THREE.Material[] = m.material;
         const mats: THREE.Material[] = Array.isArray(material) ? material : [material];
         for (const mat of mats) applyForestFade(mat);

@@ -1,17 +1,8 @@
 import { useRef, useMemo, useEffect, forwardRef, useImperativeHandle } from 'react';
 import { useGLTF, useAnimations } from '@react-three/drei';
-import { useFrame } from '@react-three/fiber';
 import * as THREE from 'three';
 import { clone as cloneSkeleton } from 'three/examples/jsm/utils/SkeletonUtils.js';
 import { pickSkinMaterialNames } from './skinMaterials';
-import { bumpMotion, isMobileRenderActive } from './mobileRender';
-
-/**
- * Extra ms after any clip switch during which the mobile on-demand loop keeps
- * rendering — long enough to cover the crossfade (0.18s) INTO Idle so the token
- * doesn't snap when a transient clip ends. Comfortably > the fade.
- */
-const CLIP_SETTLE_MS = 300;
 
 /**
  * A rigged, animated character usable as a player token (ported from the
@@ -231,9 +222,6 @@ export const CharacterToken = forwardRef<CharacterTokenHandle, CharacterTokenPro
     const rootRef = useRef<THREE.Group>(null);
     const { actions, mixer } = useAnimations(gltf.animations, rootRef);
     const current = useRef<CharacterClip | null>(null);
-    // Timestamp (ms) until which the mobile on-demand loop should keep rendering
-    // after the most recent clip switch — covers the crossfade into Idle.
-    const activeUntil = useRef(0);
 
     const play = useMemo(
       () =>
@@ -254,10 +242,6 @@ export const CharacterToken = forwardRef<CharacterTokenHandle, CharacterTokenPro
             next.fadeIn(fade).play();
           }
           current.current = clip;
-          // Mobile on-demand: hold the render loop through the crossfade so the
-          // switch (incl. the fade into Idle when a transient clip ends) animates.
-          activeUntil.current = performance.now() + CLIP_SETTLE_MS;
-          bumpMotion();
 
           // Wire up the onFinished callback for LoopOnce clips only. Subscribe to
           // the mixer's 'finished' event, verify this is the right action (guards
@@ -304,23 +288,9 @@ export const CharacterToken = forwardRef<CharacterTokenHandle, CharacterTokenPro
 
     useImperativeHandle(apiRef, () => ({ play }), [play]);
 
-    // mixer is used in the play closure above (addEventListener/removeEventListener)
-    // and also ticked by drei's useFrame internally. Referencing it here ensures
-    // the linter does not flag it as unused when the play memo is the sole consumer.
-
-    // MOBILE on-demand: keep the render loop alive while a TRANSIENT clip is
-    // playing (Run / Victory / Defeat / …) or during the crossfade window after
-    // any switch, so drei's mixer useFrame keeps advancing the animation. When
-    // the clip is the looping Idle (rest state) we STOP requesting frames — that
-    // is exactly the "crisp board, nothing rendered when idle" goal: the idle
-    // breathing loop is intentionally frozen at rest. Hard no-op off mobile
-    // (frameloop="always"), so desktop is unaffected.
-    useFrame(() => {
-      if (!isMobileRenderActive()) return;
-      const clip = current.current;
-      const transient = clip !== null && clip !== 'Idle';
-      if (transient || performance.now() < activeUntil.current) bumpMotion();
-    });
+    // Under frameloop="always" drei's useAnimations registers its own internal
+    // useFrame that ticks the mixer every frame, so all clips (Idle breathing,
+    // Run, one-shot Victory/Defeat) advance automatically — no render poking here.
 
     return (
       <group ref={rootRef} scale={scale} position-y={y}>

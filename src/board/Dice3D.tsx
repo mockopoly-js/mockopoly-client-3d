@@ -9,7 +9,6 @@ import {
 import * as THREE from 'three';
 import { useGameBusEvent } from '../state/useGameBus';
 import { FACE_NORMAL, resolveQuaternionNear } from './dice-orientation';
-import { bumpMotion, sustainRender, stopSustainRender } from './mobileRender';
 
 // ---- Geometry / placement constants -----------------------------------------
 const DIE_SIZE = 0.5;               // cube edge length
@@ -47,13 +46,6 @@ const REST_MIN_MS = 220;            // don't resolve before this even if "still"
 const DEADLINE_MS = 560;            // hard cap on the free tumble (see budget above)
 const SNAP_MS = 130;                // slerp from rest pose → server orientation
 const HOLD_MS = 1000;               // hold the result before hiding
-
-// Safety cap for the mobile SUSTAINED render loop kicked on each roll. Comfortably
-// longer than the worst-case roll (DEADLINE_MS 560 + SNAP_MS 130 + HOLD_MS 1000 ≈
-// 1.7s) so the loop always outlives a real roll, but bounded so that if the retire
-// path is ever missed the loop still self-terminates instead of spinning forever.
-// A normal roll stops it EARLY from the retire block in useFrame.
-const ROLL_RENDER_CAP_MS = 3500;
 
 // "At rest" velocity thresholds (world units / s and rad / s).
 const REST_LINVEL = 0.35;
@@ -272,18 +264,6 @@ export function Dice3D() {
     active.current = true;
     setRunning(true); // un-pause the physics world for this roll
     if (rootRef.current) rootRef.current.visible = true;
-    // On-demand (mobile): assert the cheap MOVING dpr for the first tumble frame.
-    bumpMotion();
-    // On-demand (mobile): the tumble is PHYSICS-driven — Rapier only steps the
-    // world when a frame actually renders. Relying on useFrame's per-frame
-    // self-bump to keep frames coming has a STARTUP RACE: if the first frames
-    // aren't sustained the physics never starts stepping and the dice freeze
-    // mid-spawn (stalling the whole scene on a stale frame). Instead drive a
-    // SUSTAINED rAF render loop for the full roll window: continuous frames →
-    // Rapier steps every frame → the dice tumble + settle reliably. The retire
-    // block in useFrame stops it as soon as the roll ends (safety cap otherwise).
-    // Hard no-op off mobile (desktop is frameloop="always").
-    sustainRender(ROLL_RENDER_CAP_MS);
   });
 
   useFrame((_, delta) => {
@@ -293,11 +273,8 @@ export function Dice3D() {
       root.visible = false;
       return;
     }
-    // On-demand (mobile): continuous frames during the roll are driven by the
-    // SUSTAINED rAF loop started on `dice-rolled` (see above) — NOT by a per-frame
-    // self-bump here (that had a startup race that froze the physics). This
-    // useFrame only advances the dice state; the cheap MOVING dpr is asserted
-    // below, but only WHILE the dice are actually in motion (tumbling/snapping).
+    // frameloop="always": Rapier is stepped every frame by R3F's render loop, so
+    // this useFrame simply advances the dice state machine each frame.
     const dtMs = delta * 1000;
 
     for (let i = 0; i < 2; i++) {
@@ -398,19 +375,6 @@ export function Dice3D() {
     const s0 = states.current[0];
     const s1 = states.current[1];
 
-    // On-demand (mobile) dpr: hold the cheap MOVING dpr WHILE any die is still
-    // tumbling or snapping (fast motion — don't pay for native dpr, and re-arm the
-    // settle debounce so it can't fire mid-tumble). Once BOTH dice reach the HOLD
-    // phase (settled result) we STOP bumping: the last-armed settle debounce then
-    // drops back to the native STILL dpr and the held result renders CRISP (the
-    // sustained loop keeps painting it) instead of staying blurred for the full
-    // hold. If a token walk starts during the hold, PlayerTokens re-asserts MOVING
-    // dpr itself (genuine motion) — this only governs the dice-only window.
-    const anyMoving =
-      s0.phase === 'tumbling' || s0.phase === 'snapping' ||
-      s1.phase === 'tumbling' || s1.phase === 'snapping';
-    if (anyMoving) bumpMotion();
-
     // Once BOTH dice have finished their hold, retire and hide.
     const done0 = s0.phase === 'idle' || (s0.phase === 'holding' && s0.holdElapsed >= HOLD_MS);
     const done1 = s1.phase === 'idle' || (s1.phase === 'holding' && s1.holdElapsed >= HOLD_MS);
@@ -420,10 +384,6 @@ export function Dice3D() {
       active.current = false;
       root.visible = false;
       setRunning(false); // fully pause the physics world until the next roll
-      // On-demand (mobile): the roll is over — stop the sustained render loop. The
-      // settle debounce then paints one final crisp frame and the demand loop
-      // idles (unless a token walk is still driving frames of its own).
-      stopSustainRender();
     }
   });
 
