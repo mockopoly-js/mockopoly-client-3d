@@ -131,6 +131,16 @@ const AMBIENT_INTENSITY = 0.15;
 const HEMI_INTENSITY = 0.25;
 
 /**
+ * Mobile-only devicePixelRatio ceiling. Desktop uses dpr={[1, 1.5]} (lowered
+ * previously for desktop perf and left untouched here). On 2–3x phone
+ * screens, capping at 1.5 upscales the render and reads blurry; phones have
+ * headroom in this GPU-light scene, so mobile gets a higher ceiling. Kept as
+ * a [1, N] range (not a flat N) so R3F's adaptive performance scaling can
+ * still drop resolution under load.
+ */
+const MOBILE_DPR_MAX = 2;
+
+/**
  * Manually applies an equirectangular sky texture as scene.environment
  * (and optionally scene.background) so Three.js actually picks it up.
  * drei's <Environment files=...> path resolves ambiguously for LDR webp and
@@ -343,7 +353,7 @@ export function GameScene() {
       // are HMR-inert; rotating the board content is reliable and frame-accurate.
       camera={{ position: [0, 8.5, 12], fov: 50 }}
       shadows
-      dpr={[1, 1.5]}
+      dpr={isMobile ? [1, MOBILE_DPR_MAX] : [1, 1.5]}
       performance={{ min: 0.5 }}
       gl={{ powerPreference: 'high-performance', antialias: false }}
     >

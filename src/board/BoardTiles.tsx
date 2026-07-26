@@ -60,6 +60,12 @@ export function BoardTiles() {
   useMemo(() => {
     texture.colorSpace = THREE.SRGBColorSpace;
     texture.anisotropy = maxAniso;
+    // Mipmaps + trilinear/anisotropic filtering sharpen the board artwork at
+    // the tilted camera's grazing angle (mobile blur fix #2). generateMipmaps
+    // must be set before needsUpdate so three.js builds the mip chain.
+    texture.generateMipmaps = true;
+    texture.minFilter = THREE.LinearMipmapLinearFilter;
+    texture.magFilter = THREE.LinearFilter;
     texture.flipY = TEX_FLIP_Y;
     // Rotate about the artwork center so the board doesn't drift off the face.
     texture.center.set(0.5, 0.5);
