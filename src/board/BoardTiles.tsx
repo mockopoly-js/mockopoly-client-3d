@@ -1,13 +1,26 @@
 import { useMemo } from 'react';
 import * as THREE from 'three';
-import { useTexture } from '@react-three/drei';
+import { useTexture, useKTX2 } from '@react-three/drei';
 import { useThree } from '@react-three/fiber';
 import { BOARD_WORLD_SIZE } from './positions';
+import { useIsMobile } from '../ui/useIsMobile';
 
 /**
  * The real 2D Monopoly board (board.webp, the printed square that fills the
  * whole image edge-to-edge) extruded into a 3D slab. The top face carries the
  * board artwork; the sides + bottom are a solid toy-board edge color.
+ *
+ * DESKTOP vs MOBILE TEXTURE SOURCE
+ * --------------------------------
+ * Desktop loads `board.webp` (useTexture) exactly as before. Mobile loads a
+ * GPU-compressed `board.mobile.ktx2` (UASTC, useKTX2) so the 4096² board stays
+ * compressed in VRAM (~21 MB vs ~85 MB for decompressed RGBA8) and costs less
+ * sampling bandwidth. To keep the rules-of-hooks stable across viewport-size
+ * changes (isMobile can flip on resize/rotate), the two loaders live in
+ * SEPARATE sibling components (BoardTilesWebGL / BoardTilesKTX2) chosen by
+ * isMobile at the PARENT — each hook is therefore called unconditionally within
+ * its own component. Both feed the identical BoardSlab so the board looks the
+ * same (aside from UASTC block compression, which preserves the fine text).
  *
  * ALIGNMENT CONTRACT (must match positions.ts ring math):
  * Tokens/buildings are placed via tileToWorld(i), which maps a tile's
@@ -53,34 +66,12 @@ const EDGE_COLOR = '#c9a06a';
  */
 const BOARD_SATURATION = 1.6;
 
-export function BoardTiles() {
-  const texture = useTexture('/images/board.webp');
-  const maxAniso = useThree((s) => s.gl.capabilities.getMaxAnisotropy());
-
-  useMemo(() => {
-    texture.colorSpace = THREE.SRGBColorSpace;
-    texture.anisotropy = maxAniso;
-    // Mipmaps + trilinear/anisotropic filtering sharpen the board artwork at
-    // the tilted camera's grazing angle (mobile blur fix #2). generateMipmaps
-    // must be set before needsUpdate so three.js builds the mip chain.
-    texture.generateMipmaps = true;
-    texture.minFilter = THREE.LinearMipmapLinearFilter;
-    texture.magFilter = THREE.LinearFilter;
-    texture.flipY = TEX_FLIP_Y;
-    // Rotate about the artwork center so the board doesn't drift off the face.
-    texture.center.set(0.5, 0.5);
-    texture.rotation = TEX_ROTATION;
-    // Mirror horizontally via a negative repeat when requested. TEX_FLIP_X is a
-    // deliberate build-time tuning knob (see header) — keep the branch so it can
-    // be flipped to `true` without further edits, even though it is false today.
-    // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- TEX_FLIP_X is a documented tuning constant meant to be toggled; the branch is intentional
-    texture.repeat.set(TEX_FLIP_X ? -1 : 1, 1);
-    texture.wrapS = THREE.ClampToEdgeWrapping;
-    texture.wrapT = THREE.ClampToEdgeWrapping;
-    texture.needsUpdate = true;
-    return texture;
-  }, [texture, maxAniso]);
-
+/**
+ * Shared slab renderer. Takes a fully-configured board `texture` (webp on
+ * desktop, KTX2 on mobile) and builds the 6-material box + saturation patch.
+ * Identical for both paths so the board renders the same regardless of source.
+ */
+function BoardSlab({ texture }: { texture: THREE.Texture }) {
   // 6-material array; BoxGeometry face order = [px, nx, py, ny, pz, nz].
   // Index 2 (py = top) gets the board artwork; the rest get the edge color.
   const materials = useMemo(() => {
@@ -125,3 +116,98 @@ export function BoardTiles() {
   );
 }
 
+/**
+ * DESKTOP path — unchanged from the original single-source component. Loads the
+ * uncompressed board.webp and configures colorSpace / anisotropy / mipmaps /
+ * flipY / rotation / wrap exactly as before (byte-identical desktop behavior).
+ */
+function BoardTilesWebGL() {
+  const texture = useTexture('/images/board.webp');
+  const maxAniso = useThree((s) => s.gl.capabilities.getMaxAnisotropy());
+
+  useMemo(() => {
+    texture.colorSpace = THREE.SRGBColorSpace;
+    texture.anisotropy = maxAniso;
+    // Mipmaps + trilinear/anisotropic filtering sharpen the board artwork at
+    // the tilted camera's grazing angle (mobile blur fix #2). generateMipmaps
+    // must be set before needsUpdate so three.js builds the mip chain.
+    texture.generateMipmaps = true;
+    texture.minFilter = THREE.LinearMipmapLinearFilter;
+    texture.magFilter = THREE.LinearFilter;
+    texture.flipY = TEX_FLIP_Y;
+    // Rotate about the artwork center so the board doesn't drift off the face.
+    texture.center.set(0.5, 0.5);
+    texture.rotation = TEX_ROTATION;
+    // Mirror horizontally via a negative repeat when requested. TEX_FLIP_X is a
+    // deliberate build-time tuning knob (see header) — keep the branch so it can
+    // be flipped to `true` without further edits, even though it is false today.
+    // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- TEX_FLIP_X is a documented tuning constant meant to be toggled; the branch is intentional
+    texture.repeat.set(TEX_FLIP_X ? -1 : 1, 1);
+    texture.wrapS = THREE.ClampToEdgeWrapping;
+    texture.wrapT = THREE.ClampToEdgeWrapping;
+    texture.needsUpdate = true;
+    return texture;
+  }, [texture, maxAniso]);
+
+  return <BoardSlab texture={texture} />;
+}
+
+/**
+ * MOBILE path — loads the GPU-compressed board.mobile.ktx2 (UASTC) via drei
+ * useKTX2, transcoded by the SELF-HOSTED basis transcoder in /public/basis/
+ * (KTX2Loader.setTranscoderPath('/basis/') + detectSupport(gl), both wired by
+ * useKTX2). Never touches an external CDN.
+ *
+ * PRESERVED board settings (must match the webp path so the board looks the
+ * same): SRGBColorSpace, max anisotropy, ClampToEdge wrap, center-based
+ * rotation, and the SAME saturation patch (via the shared BoardSlab).
+ *
+ * MIPMAPS: the .ktx2 carries its OWN full mip chain (13 levels, --genmipmap),
+ * which KTX2Loader loads into texture.mipmaps and pairs with a mipmap minFilter.
+ * We must NOT set generateMipmaps=true — WebGL cannot runtime-generate mipmaps
+ * for a compressed texture, and doing so would blow away the carried chain.
+ *
+ * flipY: this is a CompressedTexture. WebGL cannot apply UNPACK_FLIP_Y to
+ * compressed uploads, so texture.flipY is inert here. The desktop path gets its
+ * vertical orientation from flipY=TEX_FLIP_Y; to reproduce that EXACT sampling
+ * we instead fold the vertical flip into the UV transform (repeat.y = -1 about
+ * center 0.5 mirrors v -> 1-v, identical to flipY=true). This keeps the
+ * GO-corner alignment contract intact on mobile.
+ */
+function BoardTilesKTX2() {
+  const texture = useKTX2('/images/board.mobile.ktx2', '/basis/');
+  const maxAniso = useThree((s) => s.gl.capabilities.getMaxAnisotropy());
+
+  useMemo(() => {
+    texture.colorSpace = THREE.SRGBColorSpace;
+    texture.anisotropy = maxAniso;
+    // Do NOT set generateMipmaps — the KTX2 already carries its own mip chain
+    // and compressed textures cannot regenerate mipmaps at runtime. KTX2Loader
+    // already set a mipmap-aware minFilter to match the carried chain.
+    texture.magFilter = THREE.LinearFilter;
+    // flipY is inert for compressed textures (see header) — emulate TEX_FLIP_Y
+    // and TEX_FLIP_X purely in UV space so sampling matches the desktop path.
+    texture.center.set(0.5, 0.5);
+    texture.rotation = TEX_ROTATION;
+    // TEX_FLIP_X/TEX_FLIP_Y are documented build-time tuning constants meant to be
+    // toggled; the branches are intentional even though their current values are fixed.
+    // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- intentional tuning-constant branches (see header)
+    texture.repeat.set(TEX_FLIP_X ? -1 : 1, TEX_FLIP_Y ? -1 : 1);
+    texture.wrapS = THREE.ClampToEdgeWrapping;
+    texture.wrapT = THREE.ClampToEdgeWrapping;
+    texture.needsUpdate = true;
+    return texture;
+  }, [texture, maxAniso]);
+
+  return <BoardSlab texture={texture} />;
+}
+
+/**
+ * Parent selector. Renders exactly ONE of the two sibling loaders based on
+ * isMobile so each loader hook is called unconditionally within its component
+ * (rules-of-hooks safe across resize/orientation changes).
+ */
+export function BoardTiles() {
+  const isMobile = useIsMobile();
+  return isMobile ? <BoardTilesKTX2 /> : <BoardTilesWebGL />;
+}
