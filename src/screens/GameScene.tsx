@@ -394,7 +394,7 @@ export function GameScene() {
       // CAMERA moves and back on settle. Desktop unchanged: dpr={[1, 1.5]}.
       dpr={isMobile ? MOBILE_DPR_STILL : [1, 1.5]}
       performance={{ min: 0.5 }}
-      gl={{ powerPreference: 'high-performance', antialias: false }}
+      gl={{ powerPreference: 'high-performance', antialias: false, alpha: false }}
     >
       {/*
         Flat sky fallback — only used when the HDRI sky is NOT shown as the
@@ -449,21 +449,27 @@ export function GameScene() {
         <orthographicCamera attach="shadow-camera" args={[-8, 8, 8, -8, 0.1, 30]} />
       </directionalLight>
       {/* FILL: cool, low, opposite-ish angle — softens the shadow side without
-          flattening the form. No shadow (perf + avoids double shadows). */}
-      <directionalLight
-        color={FILL_COLOR}
-        position={FILL_POSITION}
-        intensity={FILL_INTENSITY}
-        castShadow={false}
-      />
+          flattening the form. No shadow (perf + avoids double shadows). Dropped on
+          mobile to reduce per-fragment light loops. */}
+      {!isMobile && (
+        <directionalLight
+          color={FILL_COLOR}
+          position={FILL_POSITION}
+          intensity={FILL_INTENSITY}
+          castShadow={false}
+        />
+      )}
       {/* RIM / BACK: cool-bright, high and behind — edge-lights the tops of
-          trees/buildings/tokens for separation from the sky. No shadow. */}
-      <directionalLight
-        color={RIM_COLOR}
-        position={RIM_POSITION}
-        intensity={RIM_INTENSITY}
-        castShadow={false}
-      />
+          trees/buildings/tokens for separation from the sky. No shadow. Dropped on
+          mobile to reduce per-fragment light loops. */}
+      {!isMobile && (
+        <directionalLight
+          color={RIM_COLOR}
+          position={RIM_POSITION}
+          intensity={RIM_INTENSITY}
+          castShadow={false}
+        />
+      )}
       {/*
         HDRI sky — HdriSky uses useTexture (suspends while loading) to load
         /images/sky.webp, sets EquirectangularReflectionMapping + SRGBColorSpace,
