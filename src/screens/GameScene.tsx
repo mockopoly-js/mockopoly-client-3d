@@ -339,7 +339,7 @@ export function GameScene() {
       style={{
         position: 'fixed',
         top: 'max(8px, env(safe-area-inset-top))',
-        left: 8,
+        left: 'max(8px, env(safe-area-inset-left) + 8px)',
         zIndex: 60,
         pointerEvents: 'none',
       }}
