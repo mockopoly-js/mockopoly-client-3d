@@ -72,44 +72,6 @@ export function isForestGroundMesh(name: string): boolean {
   return FOREST_GROUND_NAME_RE.test(name);
 }
 
-/**
- * HORIZONTAL (ground-plane, XZ-only) nearest distance from a point to a world-space
- * AABB — the vertical (Y) extent of the box is deliberately ignored.
- *
- * This is the metric the mobile render-distance cull uses, and ignoring Y is the
- * whole fix for a UNIFORM draw-distance ring with no mid-field holes:
- *
- *   A chunk's world AABB is instanced-aware and correct, but its Y extent varies
- *   HUGELY by prop type over the SAME ground cell — a flat ground tile spans a few
- *   tenths of a unit in Y, the trees standing on it span several units, a moss
- *   mountain spans tens of units. The camera orbits a few units ABOVE the ground,
- *   so a full 3-D nearest-point test (`Box3.clampPoint`) folds that per-type Y
- *   extent into the distance: a tall chunk whose box rises toward the camera's
- *   height reports a SMALLER nearest distance than the flat ground box directly
- *   under it. At the ring boundary the two therefore cross FOREST_RENDER_DISTANCE
- *   at DIFFERENT camera distances → the ground culls while the trees/mountain on
- *   it stay (or the reverse): a hole in the middle of the visible terrain, and a
- *   ragged (type-dependent) ring rather than a clean one.
- *
- *   Measuring only the horizontal (XZ) distance removes Y from the comparison
- *   entirely, so every chunk covering a given ground patch — ground, foliage,
- *   rock, mountain — reports the SAME distance and crosses the ring TOGETHER. The
- *   result is a clean Minecraft-style ground-plane ring (Minecraft's render
- *   distance is likewise a horizontal chunk distance), and because the horizontal
- *   distance is always ≤ the 3-D distance the test is strictly MORE inclusive than
- *   the old one — anything that rendered before still renders, so close chunks can
- *   never be culled and holes can only ever fall BEYOND the ring.
- *
- * Returns the true nearest horizontal distance (0 when the point's XZ is inside
- * the box footprint). Pure scalar math — no allocation, safe to call per chunk per
- * frame.
- */
-export function horizontalNearestDistanceToBox(box: THREE.Box3, x: number, z: number): number {
-  const dx = x < box.min.x ? box.min.x - x : x > box.max.x ? x - box.max.x : 0;
-  const dz = z < box.min.z ? box.min.z - z : z > box.max.z ? z - box.max.z : 0;
-  return Math.sqrt(dx * dx + dz * dz);
-}
-
 export interface ForestChunkParams {
   /** The cloned forest scene whose InstancedMeshes will be replaced in place. */
   scene: THREE.Object3D;

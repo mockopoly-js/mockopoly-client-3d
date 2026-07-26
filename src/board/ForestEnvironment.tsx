@@ -3,11 +3,7 @@ import * as THREE from 'three';
 import { useGLTF } from '@react-three/drei';
 import { useFrame } from '@react-three/fiber';
 import { BOARD_WORLD_SIZE } from './positions';
-import {
-  rebuildForestAsChunks,
-  isForestGroundMesh,
-  horizontalNearestDistanceToBox,
-} from './forestChunking';
+import { rebuildForestAsChunks, isForestGroundMesh } from './forestChunking';
 
 /**
  * The low-poly FOREST environment (`public/models/forest.glb`, ~1.7 MB,
@@ -137,50 +133,6 @@ const FOREST_OPAQUE_EXIT = FOREST_FADE_FAR + 1.0;   // 5.5: revert to fade well 
 const FOREST_SWAP_INTERVAL = 0.05;                   // s: throttle the per-chunk distance recheck (~20x/s)
 
 /**
- * ── MOBILE-ONLY: MINECRAFT-STYLE RENDER DISTANCE (distance-from-CAMERA cull) ──
- * The forest.glb spans a ~92-unit island, so even with per-chunk frustum culling a
- * chunk that is FAR from the camera but still IN VIEW (the far map edge — distant
- * trees, rocks, mountains, and the ground/terrain tiles out there) keeps drawing
- * for no visible benefit. On TOP of frustum culling we add a dynamic
- * distance-from-CAMERA cull: any forest chunk whose TRUE nearest point sits beyond
- * FOREST_RENDER_DISTANCE from the camera is not rendered at all
- * (`InstancedMesh.visible = false` → three skips it entirely: no draw call, no
- * geometry submit, no fill). As the camera moves closer, chunks inside the radius
- * render (Minecraft-style POP-IN at the edge — intended; no fog is added to hide
- * it, per the no-extra-cost constraint).
- *
- * CONSISTENCY (why it is a CLEAN ring, not ragged): the distance is the HORIZONTAL
- * (ground-plane, XZ-only) nearest distance from the camera to each chunk's INSTANCED
- * world AABB (covers ALL of the chunk's instances) — see
- * {@link horizontalNearestDistanceToBox}. The AABB is correct and instanced-aware,
- * but a full 3-D nearest-point test (`Box3.clampPoint`) folds each chunk's VERTICAL
- * extent into the distance, and that extent varies hugely by prop type over the SAME
- * ground cell (a flat ground tile spans tenths of a unit in Y; the trees on it span
- * several; a moss mountain spans tens). With the camera orbiting a few units above the
- * ground, a tall chunk's box rises toward the camera height and reports a SMALLER 3-D
- * nearest distance than the flat ground box under it, so the two crossed the 32u ring
- * at DIFFERENT camera distances → the ground culled while the trees/mountain on it
- * stayed (a hole in the middle of the visible terrain) and the ring read as ragged.
- * Dropping Y makes every chunk over a ground patch — ground, foliage, rock, mountain —
- * measure the SAME distance and cross the ring TOGETHER (uniform ring, adjacent chunks
- * cull together, no mid-field holes). Because the horizontal distance is always ≤ the
- * 3-D distance, the test is strictly MORE inclusive than before: a chunk with ANY
- * instance within the radius always renders (no close-culling), and holes can only
- * ever fall BEYOND the ring.
- *
- * The check runs in the SAME throttled loop as the opaque/fade swap and reuses a
- * module-level scratch vector for the clamp → no new loop, no per-frame allocation.
- *
- * Applies to ALL mobile forest chunks INCLUDING the ground/terrain tiles and the
- * edge mountains (culling the far terrain is the whole point). It NEVER touches the
- * board/tokens/city (those are not forest chunks). The camera sits ~7u from the
- * board center and the island extends to ~46u; 32u keeps the near/mid forest that
- * rings the board rendered (no bald ring around the board) while the far island
- * edge/mountains cull. Tunable (world units).
- */
-const FOREST_RENDER_DISTANCE = 32;
-
-/**
  * ── MOBILE-ONLY FOREST CHUNKING + DISTANCE THINNING (revertable experiment) ──
  * See `forestChunking.ts` for the mechanism. These are the live tunables; ALL of
  * this is gated on `isMobile` — when !isMobile the forest is byte-identical to
@@ -238,8 +190,8 @@ const FOREST_RENDER_DISTANCE = 32;
 const FOREST_CHUNK_GRID = 10;
 const FOREST_MIN_CHUNK_INSTANCES = 4;
 const FOREST_MERGE_CELL_MIN = 1;
-const FOREST_THIN_DISTANCE = 18;
-const FOREST_THIN_KEEP = 0.25;
+const FOREST_THIN_DISTANCE = 30;
+const FOREST_THIN_KEEP = 0.5;
 
 /**
  * ── BOARD-FOOTPRINT CLIP (poke-through removal) ───────────────────────────────
@@ -410,22 +362,13 @@ function buildMobileForestOpaqueMaterial(base: THREE.Material): THREE.Material {
   return mat;
 }
 
-/** Per-chunk cache for the mobile render-distance cull + opaque/fade swap (built once). */
+/** Per-chunk cache for the mobile opaque/fade material swap (built once). */
 interface ForestChunkMeta {
   mesh: THREE.InstancedMesh;
   /** World-space center of the chunk's INSTANCED bounding sphere (static after mount). */
   worldCenter: THREE.Vector3;
   /** World-space radius of that sphere (static after mount). */
   worldRadius: number;
-  /**
-   * World-space AABB covering ALL of the chunk's instances (static after mount).
-   * Used by the render-distance cull, which measures the HORIZONTAL (XZ-only)
-   * nearest distance from the camera to this box (see
-   * {@link horizontalNearestDistanceToBox}). Only the box's XZ footprint is read;
-   * its Y extent is intentionally ignored so chunks of every prop type over the
-   * same ground cell cull at the same distance → a clean, uniform ring.
-   */
-  worldBox: THREE.Box3;
   /**
    * True if the chunk's world sphere overlaps the board's ±BOARD_CLIP_HALF XZ
    * footprint. Such chunks MUST keep the poke-through clip no matter where the
@@ -437,27 +380,23 @@ interface ForestChunkMeta {
 }
 
 /**
- * Build the static per-chunk metadata for the mobile render-distance cull + swap.
+ * Build the static per-chunk metadata for the mobile opaque/fade material swap.
  *
  * Each chunk is an InstancedMesh; its bound MUST cover ALL of its instances, not
  * the single-instance geometry bound. `InstancedMesh.computeBoundingSphere()` /
  * `computeBoundingBox()` are instanced-aware (they iterate every instance transform
  * and union), so we call them here explicitly — the meta then never depends on when
  * `emitChunk` ran, on a stale/null cached bound, or on which geometry (full vs LOD)
- * the chunk ended up with. Both bounds are LOCAL to the chunk; the outer group
+ * the chunk ended up with. The bound is LOCAL to the chunk; the outer group
  * transform is fixed for the session, so we resolve `matrixWorld` (updateWorldMatrix)
- * and bake each into WORLD space once here:
- *   • worldCenter/worldRadius — sphere center transformed by matrixWorld, radius
- *     scaled by the max world-scale axis (conservative). Kept for the opaque/fade
- *     swap exactly as before.
- *   • worldBox — the instanced AABB transformed to world (`Box3.applyMatrix4`
- *     re-bounds all 8 corners, so it is correct under the group scale/rotation).
- *     Used by the render-distance cull, which reads only its XZ footprint (the
- *     HORIZONTAL nearest distance — see {@link horizontalNearestDistanceToBox}).
+ * and bake the sphere into WORLD space once here: worldCenter/worldRadius — sphere
+ * center transformed by matrixWorld, radius scaled by the max world-scale axis
+ * (conservative) — drive the opaque/fade swap. The bounding box is computed only as
+ * the readiness signal (an empty box means instances/matrixWorld are not settled).
  *
  * Returns `null` if any chunk's world matrix is not ready yet (degenerate/empty
  * bound) so the caller can retry on a later frame rather than cache a wrong meta.
- * No per-frame allocation: the built vectors/box are reused in-place by `useFrame`.
+ * No per-frame allocation: the built vectors are reused in-place by `useFrame`.
  */
 function buildForestChunkMetas(chunks: THREE.InstancedMesh[]): ForestChunkMeta[] | null {
   const scale = new THREE.Vector3(); // reused across chunks during this one-time build
@@ -472,13 +411,10 @@ function buildForestChunkMetas(chunks: THREE.InstancedMesh[]): ForestChunkMeta[]
     // Not ready this frame (matrixWorld/instances not settled) → retry next frame.
     if (!bs || !bb || bb.isEmpty()) return null;
 
-    // Sphere → world (kept for the opaque/fade swap, unchanged behavior).
+    // Sphere → world (drives the opaque/fade swap, unchanged behavior).
     const worldCenter = new THREE.Vector3().copy(bs.center).applyMatrix4(mesh.matrixWorld);
     scale.setFromMatrixScale(mesh.matrixWorld);
     const worldRadius = bs.radius * Math.max(scale.x, scale.y, scale.z);
-
-    // AABB → world (used for the render-distance TRUE nearest-point test).
-    const worldBox = new THREE.Box3().copy(bb).applyMatrix4(mesh.matrixWorld);
 
     // Conservative (box-of-sphere) overlap with the board's ±HALF world footprint.
     // Over-marking is safe (the chunk simply keeps the clip); under-marking would
@@ -486,7 +422,7 @@ function buildForestChunkMetas(chunks: THREE.InstancedMesh[]): ForestChunkMeta[]
     const needsBoardClip =
       Math.abs(worldCenter.x) - worldRadius < BOARD_CLIP_HALF &&
       Math.abs(worldCenter.z) - worldRadius < BOARD_CLIP_HALF;
-    metas.push({ mesh, worldCenter, worldRadius, worldBox, needsBoardClip, isOpaque: false });
+    metas.push({ mesh, worldCenter, worldRadius, needsBoardClip, isOpaque: false });
   }
   return metas;
 }
@@ -673,16 +609,15 @@ export function ForestEnvironment({ isMobile = false }: { isMobile?: boolean }):
     return { object: scene, groupScale, mobileChunks, forestFadeMat, forestOpaqueMat };
   }, [gltf, isMobile]);
 
-  // ── MOBILE-ONLY per-frame render-distance cull + opaque/fade chunk swap ───────
-  // Throttled (~20x/s) camera-distance pass that (1) hides chunks whose TRUE nearest
-  // point is beyond FOREST_RENDER_DISTANCE (Minecraft-style render distance —
-  // visible=false, no draw) and (2) for the still-visible far chunks, flips each
-  // non-board chunk to the discard-free opaque material and back. Desktop
-  // early-returns (no chunks). Chunk world bounds are static, so they are cached on
-  // the first valid frame; the loop does only a clampPoint + distanceTo + compares
-  // (no allocation — the clamp target is the module-level scratch). See the notes on
-  // FOREST_RENDER_DISTANCE (why the AABB clamp yields a clean, uniform ring) and the
-  // swap thresholds.
+  // ── MOBILE-ONLY per-frame opaque/fade chunk material swap ─────────────────────
+  // Throttled (~20x/s) camera-distance pass that flips each non-board chunk to the
+  // discard-free opaque material once its nearest fragment is beyond the fade range
+  // (early-Z can then cull it) and back to the fade material when it re-enters.
+  // Off-screen chunks are handled by three's frustum culling (frustumCulled=true on
+  // every chunk); there is no render-distance cull, so no chunk is ever hidden here.
+  // Desktop early-returns (no chunks). Chunk world bounds are static, so they are
+  // cached on the first valid frame; the loop does only a distanceTo + compares (no
+  // allocation). See the swap threshold notes above.
   const chunkMetaRef = useRef<{ chunks: THREE.InstancedMesh[]; metas: ForestChunkMeta[] } | null>(
     null,
   );
@@ -706,26 +641,6 @@ export function ForestEnvironment({ isMobile = false }: { isMobile?: boolean }):
     const camPos = state.camera.position;
     const metas = store.metas;
     for (const meta of metas) {
-      // ── MINECRAFT-STYLE RENDER DISTANCE (HORIZONTAL nearest-distance cull) ────
-      // Horizontal (XZ-only) nearest distance from the camera to the chunk's
-      // INSTANCED world AABB footprint: any instance whose ground-plane distance is
-      // within FOREST_RENDER_DISTANCE keeps the chunk visible; once the whole
-      // footprint is beyond it the chunk is skipped entirely (visible=false → no
-      // draw call/geometry/fill). Ignoring the box's Y extent is what makes the ring
-      // UNIFORM: chunks of every prop type over the same ground cell (flat ground,
-      // the trees on it, a tall mountain) measure the SAME distance and cross the
-      // ring TOGETHER — no ground culling out from under trees, no ragged
-      // type-dependent cut (see FOREST_RENDER_DISTANCE / horizontalNearestDistanceToBox).
-      // The horizontal distance is always ≤ the 3-D distance, so the test is strictly
-      // MORE inclusive: a chunk with ANY instance within the radius always renders (no
-      // close-culling). Near-board chunks overlap the board footprint → distance ≈ 0 →
-      // they never hide. Runs BEFORE the swap so a hidden chunk skips the swap work
-      // this frame. Only reassign .visible on an actual change to avoid churn.
-      const boxNearest = horizontalNearestDistanceToBox(meta.worldBox, camPos.x, camPos.z);
-      const shouldRender = boxNearest <= FOREST_RENDER_DISTANCE;
-      if (meta.mesh.visible !== shouldRender) meta.mesh.visible = shouldRender;
-      if (!shouldRender) continue;
-
       if (meta.needsBoardClip) continue; // near-board chunks stay on fade+clip forever
       // Opaque/fade swap — UNCHANGED: distance to the chunk's nearest possible
       // fragment via the bounding sphere (kept so the swap boundary/look is exactly
