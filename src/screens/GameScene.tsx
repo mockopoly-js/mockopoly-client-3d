@@ -132,13 +132,14 @@ const HEMI_INTENSITY = 0.25;
 
 /**
  * Mobile-only devicePixelRatio ceiling. Desktop uses dpr={[1, 1.5]} (lowered
- * previously for desktop perf and left untouched here). On 2–3x phone
- * screens, capping at 1.5 upscales the render and reads blurry; phones have
- * headroom in this GPU-light scene, so mobile gets a higher ceiling. Kept as
- * a [1, N] range (not a flat N) so R3F's adaptive performance scaling can
- * still drop resolution under load.
+ * previously for desktop perf and left untouched here). Many phones are 3x
+ * displays; capping mobile dpr at a fixed 2 still upscales the render below
+ * the device's native pixel ratio and reads soft/blurry across the whole
+ * scene (board + city). Mobile now targets the device's actual
+ * devicePixelRatio (capped at 3, since >3x buys no visible sharpness and
+ * costs fill-rate) so the render resolution matches the physical screen.
  */
-const MOBILE_DPR_MAX = 2;
+const MOBILE_DPR_MAX = 3;
 
 /**
  * Manually applies an equirectangular sky texture as scene.environment
@@ -353,7 +354,14 @@ export function GameScene() {
       // are HMR-inert; rotating the board content is reliable and frame-accurate.
       camera={{ position: [0, 8.5, 12], fov: 50 }}
       shadows
-      dpr={isMobile ? [1, MOBILE_DPR_MAX] : [1, 1.5]}
+      dpr={
+        isMobile
+          ? Math.min(
+              typeof window !== 'undefined' ? window.devicePixelRatio || 2 : 2,
+              MOBILE_DPR_MAX,
+            )
+          : [1, 1.5]
+      }
       performance={{ min: 0.5 }}
       gl={{ powerPreference: 'high-performance', antialias: false }}
     >
