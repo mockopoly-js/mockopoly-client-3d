@@ -214,6 +214,85 @@ describe('rebuildForestAsChunks', () => {
     expect(countInstances(scene)).toBe(spread.length); // all 9 preserved
   });
 
+  it('(g) FAR relief chunks use the *_LOD geometry while NEAR chunks keep full geometry', () => {
+    // A near cluster (within thinDistance, at the center cell) and a far cluster
+    // (beyond thinDistance, at a corner cell) of the SAME relief type. With a
+    // lodGeometry entry for that type, the near chunk must keep the source
+    // (full) geometry and the far chunk must swap to the decimated LOD geometry.
+    const near: [number, number][] = [[0, 0], [1, 0], [0, 1], [1, 1]]; // dist ~0-1.4 (< 5)
+    const far: [number, number][] = [[-10, -10], [-9, -9], [-10, -9], [-9, -10]]; // dist ~13 (> 5)
+    const tree = makeMesh('PP_Tree_10', [...near, ...far]);
+    const fullGeom = tree.geometry;
+    const lodGeom = new THREE.BoxGeometry(2, 2, 2); // distinct geometry reference
+    const scene = makeScene(tree);
+    rebuildForestAsChunks(
+      params({
+        scene,
+        thinDistance: 5,
+        keepFraction: 1, // no thinning → all 8 survive; isolate the LOD-geometry choice
+        lodGeometry: new Map([['PP_Tree_10', lodGeom]]),
+      }),
+    );
+
+    const chunks = allInstanced(scene);
+    expect(chunks.length).toBeGreaterThan(1); // near + far land in different cells
+    expect(countInstances(scene)).toBe(8); // nothing lost
+
+    const m = new THREE.Matrix4();
+    const p = new THREE.Vector3();
+    let sawNearFull = false;
+    let sawFarLod = false;
+    for (const c of chunks) {
+      c.getMatrixAt(0, m);
+      p.setFromMatrixPosition(m);
+      const isFar = p.x * p.x + p.z * p.z > 25; // thinDistance^2 = 25
+      if (isFar) {
+        expect(c.geometry).toBe(lodGeom); // FAR → decimated LOD geometry
+        sawFarLod = true;
+      } else {
+        expect(c.geometry).toBe(fullGeom); // NEAR → full geometry
+        sawNearFull = true;
+      }
+    }
+    expect(sawNearFull).toBe(true);
+    expect(sawFarLod).toBe(true);
+  });
+
+  it('(g2) a type with NO *_LOD entry (e.g. decimated ground) uses full geometry even when far', () => {
+    // Ground is decimated to a single geometry in forest.mobile.glb and has no
+    // LOD sibling → its far chunks must fall back to the source geometry, never
+    // a missing/other LOD. Also re-confirms ground is never thinned.
+    const spread: [number, number][] = [];
+    for (let x = -10; x <= 10; x += 4) for (let z = -10; z <= 10; z += 4) spread.push([x, z]);
+    const ground = makeMesh('PP_Meadow_08', spread);
+    const fullGeom = ground.geometry;
+    const lodGeom = new THREE.BoxGeometry(2, 2, 2);
+    const scene = makeScene(ground);
+    rebuildForestAsChunks(
+      params({
+        scene,
+        thinDistance: 3,
+        keepFraction: 0.1,
+        // Map has an entry for a DIFFERENT type; ground ("PP_Meadow_08") is absent.
+        lodGeometry: new Map([['PP_Tree_10', lodGeom]]),
+      }),
+    );
+
+    const chunks = allInstanced(scene);
+    expect(countInstances(scene)).toBe(spread.length); // ground never thinned
+    for (const c of chunks) {
+      expect(c.geometry).toBe(fullGeom); // no LOD entry → source geometry everywhere
+    }
+  });
+
+  it('(g3) with NO lodGeometry map, every chunk uses full geometry (pre-LOD parity)', () => {
+    const tree = makeMesh('PP_Tree_02', DENSE_CLUSTERS);
+    const fullGeom = tree.geometry;
+    const scene = makeScene(tree);
+    rebuildForestAsChunks(params({ scene })); // no lodGeometry provided
+    for (const c of allInstanced(scene)) expect(c.geometry).toBe(fullGeom);
+  });
+
   it('(f2) the underlying "no cell clears the threshold" fallback still works with an explicit high mergeCellMin', () => {
     // Regression coverage for the fallback branch itself, independent of the
     // shipped default (1): with mergeCellMin explicitly raised back to the old

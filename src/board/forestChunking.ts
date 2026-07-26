@@ -101,6 +101,18 @@ export interface ForestChunkParams {
    * it, the whole type is emitted as ONE local-bounded, cullable chunk.
    */
   mergeCellMin: number;
+  /**
+   * OPTIONAL far-chunk LOD geometry, keyed by source InstancedMesh name (== the
+   * full mesh name). A chunk of a type present in this map uses the decimated
+   * `_LOD` geometry when it is FAR (every instance it holds lies beyond
+   * `thinDistance` from the board center) and the full geometry otherwise. Types
+   * absent from the map (e.g. the already-decimated ground/flat tiles) always
+   * use their single full geometry. The decision is STATIC (build-time, from the
+   * fixed instance positions), so nothing pops as the camera orbits. Omit to
+   * disable LOD swapping entirely (every chunk uses full geometry — the
+   * pre-LOD behavior, byte-identical for the existing tests).
+   */
+  lodGeometry?: Map<string, THREE.BufferGeometry>;
 }
 
 /**
@@ -108,7 +120,10 @@ export interface ForestChunkParams {
  * frustum-cullable `InstancedMesh` chunks. Dense types split into a per-cell grid;
  * low-count / too-sparse types become ONE local-bounded cullable chunk (never left
  * island-wide). NON-ground types have their far ring statically thinned; GROUND/FLOOR
- * types (see {@link isForestGroundMesh}) are chunked but NEVER thinned. Mutates the
+ * types (see {@link isForestGroundMesh}) are chunked but NEVER thinned. When a
+ * `lodGeometry` map is supplied, FAR chunks of relief types (every instance beyond
+ * `thinDistance`) render the decimated `_LOD` geometry while near chunks keep full
+ * detail — a static, non-popping LOD that stacks with the far-thinning. Mutates the
  * scene graph; reuses geometry + material.
  */
 export function rebuildForestAsChunks(params: ForestChunkParams): void {
@@ -123,6 +138,7 @@ export function rebuildForestAsChunks(params: ForestChunkParams): void {
     keepFraction,
     minChunkInstances,
     mergeCellMin,
+    lodGeometry,
   } = params;
 
   // keep 1 of every `keepEvery` far instances; keepFraction>=1 disables thinning.
@@ -165,7 +181,32 @@ export function rebuildForestAsChunks(params: ForestChunkParams): void {
   const emitChunk = (indices: number[], im: THREE.InstancedMesh, name: string): void => {
     const parent = im.parent;
     if (!parent) return;
-    const chunk = new THREE.InstancedMesh(im.geometry, im.material, indices.length);
+
+    // FAR-CHUNK LOD SELECTION. A chunk uses the type's decimated `_LOD` geometry
+    // ONLY when EVERY instance it holds sits beyond `thinDistance` from the board
+    // center — so any chunk that reaches into the near ring keeps FULL detail and
+    // the near view is visually unchanged. The far view is near-identical (a ~50%
+    // decimation of already-distant props). Ground/flat types have no `_LOD`
+    // entry and fall back to their single (already-decimated) geometry. The test
+    // is on the SAME world-unit distance the far-thinning uses, computed from the
+    // fixed instance positions → a static decision with no mid-motion popping.
+    let geometry = im.geometry;
+    const lod = lodGeometry?.get(im.name);
+    if (lod) {
+      let minDistSq = Infinity;
+      for (const idx of indices) {
+        im.getMatrixAt(idx, m4);
+        worldM.multiplyMatrices(im.matrixWorld, m4);
+        pos.setFromMatrixPosition(worldM);
+        const wdx = (pos.x - center.x) * groupScale;
+        const wdz = (pos.z - center.z) * groupScale;
+        const dsq = wdx * wdx + wdz * wdz;
+        if (dsq < minDistSq) minDistSq = dsq;
+      }
+      if (minDistSq > thinDistSq) geometry = lod;
+    }
+
+    const chunk = new THREE.InstancedMesh(geometry, im.material, indices.length);
     chunk.name = name;
     chunk.receiveShadow = im.receiveShadow;
     chunk.castShadow = im.castShadow;

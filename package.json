@@ -23,6 +23,7 @@
     "models:buildings": "/Applications/Blender.app/Contents/MacOS/Blender --background --python scripts/blender/gen_buildings.py",
     "models:city-props": "/Applications/Blender.app/Contents/MacOS/Blender --background --python scripts/blender/gen_city.py",
     "models:forest": "node scripts/gen-forest.mjs",
+    "models:forest:mobile": "node scripts/gen-forest-mobile.mjs",
     "models:city": "node scripts/gen-city.mjs",
     "models:city:mobile": "node scripts/gen-city-mobile.mjs",
     "models:characters": "node scripts/gen-characters.mjs",

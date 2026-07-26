@@ -280,15 +280,53 @@ function applyForestFade(material: THREE.Material): void {
 const FOREST_URL = '/models/forest.glb';
 
 /**
+ * MOBILE-ONLY variant of the forest (`scripts/gen-forest-mobile.mjs`): the same
+ * diorama with (A) EXT_meshopt_compression (smaller download, zero visual change;
+ * the decoder is bundled in three-stdlib and auto-installed by drei's useGLTF, so
+ * NO draco/decoder wiring is needed here), (B) the flat ground tiles decimated
+ * ~90%, and (C) a decimated `<name>_LOD` sibling mesh for every relief type that
+ * the chunker points FAR chunks at. Desktop keeps `forest.glb` byte-identical.
+ */
+const FOREST_URL_MOBILE = '/models/forest.mobile.glb';
+
+/** Suffix marking the decimated far-LOD sibling meshes inside forest.mobile.glb. */
+const LOD_SUFFIX = '_LOD';
+
+/**
  * @param isMobile When true, the forest is rebuilt into frustum-cullable spatial
- *   chunks and the far ring is statically thinned (see forestChunking.ts). When
+ *   chunks, the far ring is statically thinned, and FAR chunks of relief types
+ *   use their decimated `_LOD` geometry (see forestChunking.ts). When
  *   false/absent, the forest is byte-identical to the pre-experiment behavior.
  */
 export function ForestEnvironment({ isMobile = false }: { isMobile?: boolean }): React.JSX.Element {
-  const gltf = useGLTF(FOREST_URL);
+  // Mobile loads the meshopt-compressed + decimated variant (decoder is auto-
+  // installed by useGLTF); desktop loads the plain forest.glb. drei caches per
+  // url, so the two never collide.
+  const url = isMobile ? FOREST_URL_MOBILE : FOREST_URL;
+  const gltf = useGLTF(url);
 
   const { object, groupScale } = useMemo(() => {
     const scene = gltf.scene.clone(true);
+
+    // MOBILE-ONLY: harvest the decimated `_LOD` sibling meshes into a lookup
+    // keyed by their base (full) mesh name, then REMOVE them from the scene graph
+    // so they never render. They exist in forest.mobile.glb solely to supply
+    // far-chunk LOD geometry to rebuildForestAsChunks (below). Done before the
+    // Box3/anchor computation so the (origin-placed) LOD meshes never skew bounds.
+    const lodGeometry = new Map<string, THREE.BufferGeometry>();
+    if (isMobile) {
+      const lodObjects: THREE.Object3D[] = [];
+      scene.traverse((o) => {
+        if (o.name.endsWith(LOD_SUFFIX)) lodObjects.push(o);
+      });
+      for (const o of lodObjects) {
+        const mesh = o as THREE.Mesh;
+        // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- runtime narrowing: only actual meshes carry geometry
+        if (mesh.geometry) lodGeometry.set(o.name.slice(0, -LOD_SUFFIX.length), mesh.geometry);
+        o.removeFromParent();
+      }
+    }
+
     scene.traverse((o) => {
       const m = o as THREE.Mesh;
       // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- runtime narrowing: o is Object3D; only actual meshes have isMesh===true
@@ -377,6 +415,7 @@ export function ForestEnvironment({ isMobile = false }: { isMobile?: boolean }):
         keepFraction: FOREST_THIN_KEEP,
         minChunkInstances: FOREST_MIN_CHUNK_INSTANCES,
         mergeCellMin: FOREST_MERGE_CELL_MIN,
+        lodGeometry,
       });
     }
 
@@ -403,4 +442,13 @@ export function ForestEnvironment({ isMobile = false }: { isMobile?: boolean }):
   );
 }
 
-useGLTF.preload(FOREST_URL);
+// Preload the SAME variant the component will actually load. useIsMobile keys off
+// `(max-width: 768px), (max-height: 600px)`; mirror that synchronously here (this
+// runs at module import, before any component renders) so mobile preloads the
+// meshopt variant and desktop preloads the plain glb. Guard for SSR/jsdom where
+// matchMedia is absent (defaults to the desktop path).
+const preloadMobileForest =
+  typeof window !== 'undefined' &&
+  typeof window.matchMedia === 'function' &&
+  window.matchMedia('(max-width: 768px), (max-height: 600px)').matches;
+useGLTF.preload(preloadMobileForest ? FOREST_URL_MOBILE : FOREST_URL);
