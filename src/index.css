@@ -49,8 +49,29 @@ canvas { touch-action: none; }
    Remove tap highlight flash on all elements (iOS Safari blue flash).
    Give interactive controls manipulation so double-tap-zoom doesn't trigger.
 */
+html { -webkit-tap-highlight-color: transparent; }
 * { -webkit-tap-highlight-color: transparent; }
 button, a, input, select, textarea, label { touch-action: manipulation; }
+
+/* --- Mobile text selection hardening ---
+   On mobile (max-width:768px or max-height:600px), disable text selection and
+   the long-press callout menu that pops up on iOS/Android when holding a touch.
+   Text inputs (name entry, etc.) are exempted so they remain selectable.
+   Desktop behavior unchanged — users can still copy room codes.
+*/
+@media (max-width: 768px), (max-height: 600px) {
+  * {
+    -webkit-user-select: none;
+    user-select: none;
+    -webkit-touch-callout: none;
+  }
+  /* keep text inputs usable (name entry, etc.) */
+  input,
+  textarea {
+    -webkit-user-select: text;
+    user-select: text;
+  }
+}
 
 /* --- Button :active pressed feedback ---
    Subtle scale-down + brightness reduction on press, matching mobile conventions.
