@@ -54,6 +54,11 @@ let applyDprFn: ApplyDprFn | null = null;
 let readDprFn: ReadDprFn | null = null;
 let config: MobileRenderConfig = { dprMoving: 1.3, dprStill: 2, settleMs: 250 };
 let settleTimer: ReturnType<typeof setTimeout> | null = null;
+// Sustained-render loop state (see sustainRender below). A single rAF handle +
+// a deadline: while the handle is live, invalidate() is called every animation
+// frame until performance.now() passes the deadline (or stopSustainRender()).
+let sustainRaf: number | null = null;
+let sustainDeadline = 0;
 
 /**
  * Mount-time registration from <MobileRenderController> (mobile only). Wires the
@@ -89,6 +94,7 @@ export function registerMobileRender(
       clearTimeout(settleTimer);
       settleTimer = null;
     }
+    stopSustainRender();
   };
 }
 
@@ -132,4 +138,45 @@ export function bumpMotion(): void {
 export function pokeRender(frames = 3): void {
   if (!active || !invalidateFn) return;
   invalidateFn(frames);
+}
+
+/**
+ * Start (or extend) a SUSTAINED render loop: an independent requestAnimationFrame
+ * loop that calls invalidate() EVERY frame until `durationMs` elapses (or
+ * stopSustainRender() is called). Use this for animations that MUST render
+ * continuously and cannot rely on the per-frame self-perpetuation pattern
+ * (bumpMotion() from inside a useFrame requesting the next frame): the dice roll
+ * is PHYSICS-driven — Rapier only steps the world when a frame renders — and the
+ * self-bump has a startup race where the first frames aren't sustained, so the
+ * physics never starts stepping and the dice freeze mid-spawn. Driving frames
+ * from this deadline-bounded rAF loop guarantees Rapier steps every frame for the
+ * whole roll, independent of any useFrame timing. Calling it again while a loop
+ * is live just extends the deadline. Hard no-op off mobile. NOTE: this loop only
+ * requests renders (invalidate) — it does NOT touch dpr; the animation source
+ * still uses bumpMotion()/the settle debounce to control moving↔still dpr.
+ */
+export function sustainRender(durationMs: number): void {
+  if (!active || !invalidateFn) return;
+  sustainDeadline = Math.max(sustainDeadline, performance.now() + durationMs);
+  if (sustainRaf !== null) return; // loop already running — deadline just extended
+  const tick = (): void => {
+    if (!active || !invalidateFn || performance.now() >= sustainDeadline) {
+      sustainRaf = null;
+      sustainDeadline = 0;
+      return;
+    }
+    invalidateFn();
+    sustainRaf = requestAnimationFrame(tick);
+  };
+  sustainRaf = requestAnimationFrame(tick);
+}
+
+/** Stop the sustained render loop early (before its deadline). Safe to call when
+ *  no loop is running. The settle debounce then paints the final crisp frame. */
+export function stopSustainRender(): void {
+  if (sustainRaf !== null) {
+    cancelAnimationFrame(sustainRaf);
+    sustainRaf = null;
+  }
+  sustainDeadline = 0;
 }

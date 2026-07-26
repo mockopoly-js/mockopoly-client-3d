@@ -147,13 +147,17 @@ const HEMI_INTENSITY = 0.25;
  *    anisotropy/mipmaps + SMAA) with NO sustained GPU load, so no thermal
  *    throttle. It is also the initial `dpr` prop so the first paint is crisp.
  * MOBILE_SETTLE_MS is the no-motion debounce before that crisp frame is drawn.
+ * Kept short (120ms) so the crisp frame lands quickly after the user stops
+ * touching the screen — paired with a faster OrbitControls damping decay on
+ * mobile (see CameraRig.tsx) so the drift tail no longer keeps re-arming this
+ * debounce for ~1s after release.
  */
 const MOBILE_DPR_MOVING = 1.3;
 const MOBILE_DPR_STILL = Math.min(
   typeof window !== 'undefined' ? window.devicePixelRatio || 2 : 2,
   3,
 );
-const MOBILE_SETTLE_MS = 250;
+const MOBILE_SETTLE_MS = 120;
 
 /**
  * Manually applies an equirectangular sky texture as scene.environment

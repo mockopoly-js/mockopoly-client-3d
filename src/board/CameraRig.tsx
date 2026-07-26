@@ -14,6 +14,15 @@ import { bumpMotion } from './mobileRender';
 // alpha = 1 - exp(-RATE * delta) → ease-out, no snapping, stable at any FPS.
 const FOLLOW_LERP_RATE = 6;
 
+// OrbitControls damping factor: how fast the inertial drift after a
+// release decays (higher = faster stop). Desktop keeps the original feel;
+// mobile uses a much faster decay so the drift tail (which keeps calling
+// bumpMotion via onChange) clears in ~150-250ms instead of ~1s, letting the
+// short MOBILE_SETTLE_MS debounce (see GameScene.tsx) land right as the
+// camera actually stops instead of firing mid-drift.
+const DESKTOP_DAMPING_FACTOR = 0.08;
+const MOBILE_DAMPING_FACTOR = 0.25;
+
 /**
  * CameraRig: free Blender-style viewport navigation with a fixed initial framing.
  *
@@ -250,7 +259,7 @@ export function CameraRig() {
       enablePan
       screenSpacePanning
       enableDamping
-      dampingFactor={0.08}
+      dampingFactor={isMobile ? MOBILE_DAMPING_FACTOR : DESKTOP_DAMPING_FACTOR}
       minPolarAngle={0.05}
       maxPolarAngle={1.55}
       minDistance={2.5}
