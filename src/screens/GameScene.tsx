@@ -142,7 +142,7 @@ const HEMI_INTENSITY = 0.25;
  * (anisotropy + mipmaps) and SMAA, board text reads razor-sharp. If fps still
  * falls short, dial this back toward ~2.5 before touching the scene again.
  */
-const MOBILE_DPR_MAX = 3;
+const MOBILE_DPR_MAX = 2;
 
 /**
  * Manually applies an equirectangular sky texture as scene.environment
