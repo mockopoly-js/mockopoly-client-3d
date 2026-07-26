@@ -20,6 +20,7 @@ import { Dice3D } from '../board/Dice3D';
 import { CameraRig } from '../board/CameraRig';
 import { BoardClickTargets } from '../board/BoardClickTargets';
 import { MobileRenderController, type ComposerHandle } from '../board/MobileRenderController';
+import { RenderStatsReadout } from '../board/RenderStatsReadout';
 import { BOARD_ROTATION } from '../board/positions';
 import { useIsMobile } from '../ui/useIsMobile';
 
@@ -422,6 +423,10 @@ export function GameScene() {
           settleMs={MOBILE_SETTLE_MS}
         />
       )}
+      {/* DEV-only draw-call/triangle readout (mobile only) — shows live WebGL stats
+          to verify frustum culling. Rotate camera to watch counts drop as off-screen
+          chunks are culled. Tree-shaken from production. */}
+      {import.meta.env.DEV && isMobile && <RenderStatsReadout />}
       {/* Sky/ground hemisphere fill — tints unlit sides; trimmed 0.35 → 0.25 so
           AO + the rig shape the scene instead of a flat wash. */}
       <hemisphereLight args={['#cbe8f5', '#8a9a5b', HEMI_INTENSITY]} />

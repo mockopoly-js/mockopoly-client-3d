@@ -101,3 +101,18 @@ button:active:not(:disabled) {
   right: auto !important;
   z-index: 60 !important;
 }
+
+/* --- Render stats readout (dev, mobile only) —
+   Shows live WebGL draw calls and triangle count. Positioned just below the
+   FPS stats panel for frustum-culling verification. Tree-shaken from production. */
+.render-stats {
+  position: fixed !important;
+  left: max(8px, env(safe-area-inset-left)) !important;
+  top: calc(max(8px, env(safe-area-inset-top)) + 44px) !important;
+  z-index: 10000 !important;
+  font: 11px/1.4 monospace;
+  color: #0f0;
+  background: rgba(0, 0, 0, 0.6);
+  padding: 2px 5px;
+  pointer-events: none;
+}
