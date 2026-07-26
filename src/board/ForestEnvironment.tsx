@@ -115,13 +115,14 @@ const FOREST_FADE_FAR = 4.5;  // world units: fully solid (unchanged) at/beyond 
  *       chunks' bounding spheres literally CONTAINED the camera and intersected
  *       every possible frustum, drawing from ANY orientation (an empty-screen
  *       view still rendered ~250K tris — frustum culling ran but did nothing).
- *       8 → ~11.5-unit cells, and combined with the lower min-chunk floor + the
- *       disabled cell-defrag below, lands at median chunk radius ~5u across
- *       ~264 total chunks and an EMPTY-VIEW render of ~23K tris (-91%). More
- *       total chunks than before is EXPECTED and correct here: culling now keeps
- *       the per-frame DRAWN count low, and draw-call cost is only paid for
- *       chunks actually rendered — do not re-cap the chunk count, that is
- *       exactly what defeated culling previously.
+ *       10 → ~9.2-unit cells, and combined with the lower min-chunk floor + the
+ *       disabled cell-defrag below, lands at ~322 total chunks and an
+ *       EMPTY-VIEW render of ~5.1K tris (-98%) — the tightest practical culling
+ *       ("only what's on screen"). More total chunks than before is EXPECTED
+ *       and correct here: culling now keeps the per-frame DRAWN count low, and
+ *       draw-call cost is only paid for chunks actually rendered — do not
+ *       re-cap the chunk count, that is exactly what defeated culling
+ *       previously.
  *   FOREST_MIN_CHUNK_INSTANCES — a type with FEWER total instances than this is
  *       NOT spatially partitioned but is still emitted as ONE local-bounded,
  *       cullable chunk (partitioning a low-count type wastes draw calls; making
@@ -148,7 +149,7 @@ const FOREST_FADE_FAR = 4.5;  // world units: fully solid (unchanged) at/beyond 
  *       keep it conservative. Set to 1.0 to DISABLE thinning entirely (chunking
  *       still applies) — one line: keepEvery collapses to 1.
  */
-const FOREST_CHUNK_GRID = 8;
+const FOREST_CHUNK_GRID = 10;
 const FOREST_MIN_CHUNK_INSTANCES = 4;
 const FOREST_MERGE_CELL_MIN = 1;
 const FOREST_THIN_DISTANCE = 30;
