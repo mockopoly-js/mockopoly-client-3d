@@ -500,7 +500,7 @@ export function GameScene() {
         {/* ForestEnvironment (forest.glb) surrounds the board — the diorama
             ground/treeline. Kept OUTSIDE the rotation group so the forest
             stays fixed as the board turns within its clearing. */}
-        <ForestEnvironment />
+        <ForestEnvironment isMobile={isMobile} />
       </Suspense>
       {isMobile ? (
         /*

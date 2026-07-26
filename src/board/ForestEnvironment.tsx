@@ -2,6 +2,7 @@ import { useMemo } from 'react';
 import * as THREE from 'three';
 import { useGLTF } from '@react-three/drei';
 import { BOARD_WORLD_SIZE } from './positions';
+import { rebuildForestAsChunks, isForestGroundMesh } from './forestChunking';
 
 /**
  * The low-poly FOREST environment (`public/models/forest.glb`, ~1.7 MB,
@@ -92,6 +93,51 @@ const FOREST_PAN_Z = 0;     // world units; slide terrain N/S under the board
  */
 const FOREST_FADE_NEAR = 0.5; // world units: fully faded (dissolved) at/below this camera distance
 const FOREST_FADE_FAR = 4.5;  // world units: fully solid (unchanged) at/beyond this camera distance
+
+/**
+ * ── MOBILE-ONLY FOREST CHUNKING + DISTANCE THINNING (revertable experiment) ──
+ * See `forestChunking.ts` for the mechanism. These are the live tunables; ALL of
+ * this is gated on `isMobile` — when !isMobile the forest is byte-identical to
+ * before (one island-wide InstancedMesh per type, frustumCulled=false, no
+ * thinning — ground AND trees alike).
+ *
+ * The forest DENSELY fills the ~92-unit box (23 prop types / ~1162 instances) and
+ * the "floor" is itself instanced ground patches (Meadow, Grass, Meadow_Path,
+ * Lake_Ground). GROUND/FLOOR types are left completely untouched on mobile (never
+ * chunked, never thinned — identical to desktop); only trees/foliage/rocks are
+ * chunked + thinned. See forestChunking.ts guards for why.
+ *
+ *   FOREST_CHUNK_GRID    — grid resolution per horizontal axis (N×N cells over
+ *       the ~92-unit scene box). 4 → ~23-unit cells (~2 board widths). Combined
+ *       with the min-chunk floor + cell-defrag below, the mobile forest lands at
+ *       ~2.5× the ~23-type baseline (~59 InstancedMeshes) instead of the ~6-7×
+ *       a naive per-cell split of every type produced — well under the culling
+ *       savings, since a 50° FOV looking across the board leaves roughly half the
+ *       dense ring behind/beside the camera for three to cull. Bump to 5–6 for
+ *       finer culling at the cost of thinner (more fragmented) chunks.
+ *   FOREST_MIN_CHUNK_INSTANCES — a tree/foliage type with FEWER total instances
+ *       than this is left as ONE island-wide mesh (chunking a low-count type
+ *       wastes draw calls for no culling benefit).
+ *   FOREST_MERGE_CELL_MIN — a grid cell with FEWER surviving instances than this
+ *       is folded into its nearest populated cell instead of becoming its own
+ *       near-empty chunk (defrag). 3 keeps the total at ~2.5× baseline while
+ *       preserving real spatial partitioning of the dense types; 2 leaves it at
+ *       ~3.2×. If no cell of a type clears it, that type stays island-wide.
+ *   FOREST_THIN_DISTANCE — world-unit radius from board center; only TREE/FOLIAGE
+ *       instances BEYOND this are thinned (ground is never thinned). 30 leaves the
+ *       near/mid forest around the board completely untouched.
+ *   FOREST_THIN_KEEP     — fraction of FAR-ring TREE/FOLIAGE instances to keep
+ *       (0<f≤1); ground is excluded entirely so the far terrain floor is never
+ *       holed. The near-camera dither-fade is NEAR-ONLY (far trees stay solid),
+ *       so 0.5 statically drops every other far tree with no fade masking it —
+ *       keep it conservative. Set to 1.0 to DISABLE thinning entirely (chunking
+ *       still applies) — one line: keepEvery collapses to 1.
+ */
+const FOREST_CHUNK_GRID = 4;
+const FOREST_MIN_CHUNK_INSTANCES = 8;
+const FOREST_MERGE_CELL_MIN = 3;
+const FOREST_THIN_DISTANCE = 30;
+const FOREST_THIN_KEEP = 0.5;
 
 /**
  * ── BOARD-FOOTPRINT CLIP (poke-through removal) ───────────────────────────────
@@ -217,7 +263,12 @@ function applyForestFade(material: THREE.Material): void {
 
 const FOREST_URL = '/models/forest.glb';
 
-export function ForestEnvironment(): React.JSX.Element {
+/**
+ * @param isMobile When true, the forest is rebuilt into frustum-cullable spatial
+ *   chunks and the far ring is statically thinned (see forestChunking.ts). When
+ *   false/absent, the forest is byte-identical to the pre-experiment behavior.
+ */
+export function ForestEnvironment({ isMobile = false }: { isMobile?: boolean }): React.JSX.Element {
   const gltf = useGLTF(FOREST_URL);
 
   const { object, groupScale } = useMemo(() => {
@@ -272,7 +323,7 @@ export function ForestEnvironment(): React.JSX.Element {
       const im = o as THREE.InstancedMesh;
       // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- runtime narrowing: o is Object3D; only actual InstancedMeshes have isInstancedMesh===true
       if (!im.isInstancedMesh) return;
-      if (!/meadow|grass|path|lake/i.test(im.name)) return;
+      if (!isForestGroundMesh(im.name)) return; // same ground classifier as the chunker
       im.geometry.computeBoundingBox();
       const gbMaxY = im.geometry.boundingBox?.max.y ?? 0;
       for (let i = 0; i < im.count; i++) {
@@ -293,6 +344,26 @@ export function ForestEnvironment(): React.JSX.Element {
       centerSurfaceY = groundTops[groundTops.length >> 1]; // median
     }
 
+    // MOBILE-ONLY: rebuild each island-wide InstancedMesh into a frustum-cullable
+    // spatial grid of chunks (local bounds) and statically thin the far ring.
+    // Runs BEFORE scene.position.set so each InstancedMesh.matrixWorld still
+    // reflects only the glb's internal hierarchy (the frame `box`/`center` use).
+    // Desktop skips this entirely → byte-identical to the pre-experiment forest.
+    if (isMobile) {
+      rebuildForestAsChunks({
+        scene,
+        boxMin: box.min,
+        size,
+        center,
+        groupScale,
+        gridN: FOREST_CHUNK_GRID,
+        thinDistance: FOREST_THIN_DISTANCE,
+        keepFraction: FOREST_THIN_KEEP,
+        minChunkInstances: FOREST_MIN_CHUNK_INSTANCES,
+        mergeCellMin: FOREST_MERGE_CELL_MIN,
+      });
+    }
+
     // Recenter x/z at origin (+ optional pan) and place the CENTER surface at
     // local 0 so the outer group drops it precisely onto FOREST_Y.
     scene.position.set(
@@ -302,7 +373,7 @@ export function ForestEnvironment(): React.JSX.Element {
     );
 
     return { object: scene, groupScale };
-  }, [gltf]);
+  }, [gltf, isMobile]);
 
   return (
     <group
