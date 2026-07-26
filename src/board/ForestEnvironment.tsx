@@ -1,6 +1,7 @@
-import { useMemo } from 'react';
+import { useMemo, useRef } from 'react';
 import * as THREE from 'three';
 import { useGLTF } from '@react-three/drei';
+import { useFrame } from '@react-three/fiber';
 import { BOARD_WORLD_SIZE } from './positions';
 import { rebuildForestAsChunks, isForestGroundMesh } from './forestChunking';
 
@@ -93,6 +94,32 @@ const FOREST_PAN_Z = 0;     // world units; slide terrain N/S under the board
  */
 const FOREST_FADE_NEAR = 0.5; // world units: fully faded (dissolved) at/below this camera distance
 const FOREST_FADE_FAR = 4.5;  // world units: fully solid (unchanged) at/beyond this camera distance
+
+/**
+ * ── MOBILE-ONLY: OPAQUE-vs-FADE PER-CHUNK MATERIAL SWAP (overdraw kill) ───────
+ * The near-camera fade is a per-fragment `discard`, and the mere PRESENCE of
+ * `discard` in a shader disables the GPU's early-Z, so EVERY forest fragment
+ * overdraws — even far trees whose fade math provably resolves to "keep" every
+ * time (smoothstep clamps to 1 at/beyond FOREST_FADE_FAR, and the Bayer max is
+ * 0.969 < 1). Fix (mobile only): chunks whose bounding sphere is entirely beyond
+ * FOREST_FADE_FAR from the CAMERA are swapped to a discard-free OPAQUE material
+ * so early-Z culls their hidden fragments; chunks within the fade range keep the
+ * fade material. Since a tree at the boundary is already fully opaque under the
+ * fade, the swap is a VISUAL NO-OP (desktop parity preserved) — it only removes
+ * the fill cost. The swap thresholds sit strictly BEYOND FOREST_FADE_FAR so a
+ * chunk is opaque in BOTH materials at the boundary → no pop; the ENTER/EXIT gap
+ * is hysteresis to stop boundary flip-flop as the camera orbits/pans.
+ *
+ * The test uses (cameraDist to chunk sphere center − sphere radius) = distance to
+ * the chunk's NEAREST possible fragment, so a chunk only goes opaque once EVERY
+ * one of its trees is provably past the fade range (never opaque while any tree
+ * could still be fading). Near-board chunks whose sphere overlaps the board's
+ * footprint are excluded from the swap entirely (they must keep the poke-through
+ * clip regardless of camera distance) — see buildForestChunkMetas.
+ */
+const FOREST_OPAQUE_ENTER = FOREST_FADE_FAR + 1.0;  // 5.5: go opaque once the nearest fragment is beyond this
+const FOREST_OPAQUE_EXIT = FOREST_FADE_FAR + 0.25;  // 4.75: revert to fade below this (still > FADE_FAR → no pop)
+const FOREST_SWAP_INTERVAL = 0.15;                   // s: throttle the per-chunk distance recheck (~7x/s)
 
 /**
  * ── MOBILE-ONLY FOREST CHUNKING + DISTANCE THINNING (revertable experiment) ──
@@ -277,6 +304,99 @@ function applyForestFade(material: THREE.Material): void {
   mat.needsUpdate = true;
 }
 
+/**
+ * MOBILE-ONLY: prepend a FRAGMENT-only `precision mediump float;` override.
+ * three prepends `precision highp float;` to the fragment prefix; redeclaring the
+ * default float precision at the top of the material's own fragment source drops
+ * the (per-fragment, overdrawn) fade/lighting fill math to mediump — cheaper fill,
+ * visually identical on the low-poly forest. VERTEX precision is left at highp so
+ * world-space positions (used for the board-clip compare, up to ~92 units) never
+ * jitter. Both mobile variants get the SAME mediump treatment so their shading is
+ * identical at the opaque↔fade swap boundary (no pop). Desktop is never touched.
+ */
+function injectMobileMediump(material: THREE.Material): void {
+  const prev = material.onBeforeCompile.bind(material);
+  material.onBeforeCompile = (shader, renderer) => {
+    prev(shader, renderer);
+    shader.fragmentShader = `precision mediump float;\n${shader.fragmentShader}`;
+  };
+}
+
+/**
+ * MOBILE-ONLY fade material: the EXACT desktop fade+clip program (built by the
+ * shared {@link applyForestFade}, so the near-tree see-through look is identical)
+ * plus the mobile mediump fragment override. Cloned from the shared base material
+ * so all textures/uniforms are shared — only the compiled program differs.
+ */
+function buildMobileForestFadeMaterial(base: THREE.Material): THREE.Material {
+  const mat = base.clone();
+  applyForestFade(mat); // same fade + board-clip discard program as desktop
+  injectMobileMediump(mat);
+  mat.needsUpdate = true;
+  return mat;
+}
+
+/**
+ * MOBILE-ONLY opaque material: NO discard at all (no fade, no board clip) so the
+ * GPU's early-Z culls the chunk's hidden fragments. Only ever assigned to chunks
+ * proven beyond the fade range AND outside the board footprint, where both
+ * discards are dead code — so it is pixel-identical to the fade material there.
+ * Same mediump fragment precision as the fade variant (shading-identical → no pop
+ * at the swap). Cloned from the base so textures/uniforms are shared.
+ */
+function buildMobileForestOpaqueMaterial(base: THREE.Material): THREE.Material {
+  const mat = base.clone();
+  injectMobileMediump(mat);
+  mat.needsUpdate = true;
+  return mat;
+}
+
+/** Per-chunk cache for the mobile opaque/fade swap (built once, on the first frame). */
+interface ForestChunkMeta {
+  mesh: THREE.InstancedMesh;
+  /** World-space center of the chunk's local bounding sphere (static after mount). */
+  worldCenter: THREE.Vector3;
+  /** World-space radius of that sphere (static after mount). */
+  worldRadius: number;
+  /**
+   * True if the chunk's world sphere overlaps the board's ±BOARD_CLIP_HALF XZ
+   * footprint. Such chunks MUST keep the poke-through clip no matter where the
+   * camera is, so they are pinned to the fade material and never swapped.
+   */
+  needsBoardClip: boolean;
+  /** Current material state (which variant `mesh.material` points at). */
+  isOpaque: boolean;
+}
+
+/**
+ * Build the static per-chunk metadata for the mobile swap. Chunk bounding spheres
+ * are LOCAL; the outer group transform is fixed for the session, so each chunk's
+ * WORLD center/radius is static after mount and computed once here (on the first
+ * frame, when `matrixWorld` is valid). No per-frame allocation: the returned
+ * `worldCenter` vectors are reused in-place by the `useFrame` distance test.
+ */
+function buildForestChunkMetas(chunks: THREE.InstancedMesh[]): ForestChunkMeta[] {
+  const scale = new THREE.Vector3(); // reused across chunks during this one-time build
+  return chunks.map((mesh) => {
+    mesh.updateWorldMatrix(true, false); // resolve the full group→chunk transform
+    const bs = mesh.boundingSphere;
+    const worldCenter = new THREE.Vector3();
+    let worldRadius = 0;
+    if (bs) {
+      worldCenter.copy(bs.center).applyMatrix4(mesh.matrixWorld);
+      scale.setFromMatrixScale(mesh.matrixWorld);
+      worldRadius = bs.radius * Math.max(scale.x, scale.y, scale.z);
+    }
+    // Conservative (box-of-sphere) overlap with the board's ±HALF world footprint.
+    // Over-marking is safe (the chunk simply keeps the clip); under-marking would
+    // let terrain poke through the board, so bias inclusive.
+    const needsBoardClip =
+      Math.abs(worldCenter.x) - worldRadius < BOARD_CLIP_HALF &&
+      Math.abs(worldCenter.z) - worldRadius < BOARD_CLIP_HALF;
+    return { mesh, worldCenter, worldRadius, needsBoardClip, isOpaque: false };
+  });
+}
+
 const FOREST_URL = '/models/forest.glb';
 
 /**
@@ -305,7 +425,7 @@ export function ForestEnvironment({ isMobile = false }: { isMobile?: boolean }):
   const url = isMobile ? FOREST_URL_MOBILE : FOREST_URL;
   const gltf = useGLTF(url);
 
-  const { object, groupScale } = useMemo(() => {
+  const { object, groupScale, mobileChunks, forestFadeMat, forestOpaqueMat } = useMemo(() => {
     const scene = gltf.scene.clone(true);
 
     // MOBILE-ONLY: harvest the decimated `_LOD` sibling meshes into a lookup
@@ -347,9 +467,17 @@ export function ForestEnvironment({ isMobile = false }: { isMobile?: boolean }):
         // adaptive dpr in GameScene: it renders at the cheap MOVING dpr while the
         // camera moves and at the capped STILL dpr (min(devicePixelRatio, 2)) at
         // rest, so the sustained overdraw stays within thermal budget.
-        const material: THREE.Material | THREE.Material[] = m.material;
-        const mats: THREE.Material[] = Array.isArray(material) ? material : [material];
-        for (const mat of mats) applyForestFade(mat);
+        //
+        // DESKTOP: patch the single shared material IN PLACE (byte-identical to
+        // before). MOBILE: leave the base material UNPATCHED here — the chunker
+        // (below) reassigns every chunk to one of two purpose-built clones of it
+        // (fade+clip, or discard-free opaque), so the base is never rendered and
+        // must stay pristine to clone from.
+        if (!isMobile) {
+          const material: THREE.Material | THREE.Material[] = m.material;
+          const mats: THREE.Material[] = Array.isArray(material) ? material : [material];
+          for (const mat of mats) applyForestFade(mat);
+        }
       }
     });
     scene.updateMatrixWorld(true);
@@ -403,6 +531,9 @@ export function ForestEnvironment({ isMobile = false }: { isMobile?: boolean }):
     // Runs BEFORE scene.position.set so each InstancedMesh.matrixWorld still
     // reflects only the glb's internal hierarchy (the frame `box`/`center` use).
     // Desktop skips this entirely → byte-identical to the pre-experiment forest.
+    let mobileChunks: THREE.InstancedMesh[] | null = null;
+    let forestFadeMat: THREE.Material | null = null;
+    let forestOpaqueMat: THREE.Material | null = null;
     if (isMobile) {
       rebuildForestAsChunks({
         scene,
@@ -417,6 +548,24 @@ export function ForestEnvironment({ isMobile = false }: { isMobile?: boolean }):
         mergeCellMin: FOREST_MERGE_CELL_MIN,
         lodGeometry,
       });
+
+      // Collect the freshly-built chunk InstancedMeshes and build the two swap
+      // materials once (cloned from the single shared base every chunk points at).
+      // Start EVERY chunk on the fade+clip material (today's exact look, board-wide);
+      // the per-frame check (useFrame below) flips FAR non-board chunks to opaque.
+      const chunks: THREE.InstancedMesh[] = [];
+      scene.traverse((o) => {
+        const im = o as THREE.InstancedMesh;
+        // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- runtime narrowing: only actual InstancedMeshes have isInstancedMesh===true
+        if (im.isInstancedMesh) chunks.push(im);
+      });
+      const base = chunks.length > 0 ? chunks[0].material : null;
+      if (base && !Array.isArray(base)) {
+        forestFadeMat = buildMobileForestFadeMaterial(base);
+        forestOpaqueMat = buildMobileForestOpaqueMaterial(base);
+        for (const c of chunks) c.material = forestFadeMat;
+        mobileChunks = chunks;
+      }
     }
 
     // Recenter x/z at origin (+ optional pan) and place the CENTER surface at
@@ -427,8 +576,49 @@ export function ForestEnvironment({ isMobile = false }: { isMobile?: boolean }):
       -center.z + FOREST_PAN_Z / groupScale,
     );
 
-    return { object: scene, groupScale };
+    return { object: scene, groupScale, mobileChunks, forestFadeMat, forestOpaqueMat };
   }, [gltf, isMobile]);
+
+  // ── MOBILE-ONLY per-frame opaque/fade chunk swap ──────────────────────────────
+  // Throttled (~7x/s) camera-distance check that flips each far, non-board chunk to
+  // the discard-free opaque material and back. Desktop early-returns (no chunks).
+  // Chunk world bounds are static, so they are cached on the first frame; the loop
+  // does only a distanceTo + compares (no allocation). See the swap-threshold notes.
+  const chunkMetaRef = useRef<{ chunks: THREE.InstancedMesh[]; metas: ForestChunkMeta[] } | null>(
+    null,
+  );
+  const swapAccumRef = useRef(0);
+  useFrame((state, delta) => {
+    if (!isMobile || !mobileChunks || !forestFadeMat || !forestOpaqueMat) return;
+
+    let store = chunkMetaRef.current;
+    // eslint-disable-next-line @typescript-eslint/prefer-optional-chain -- explicit null check narrows `store` to non-null for the reassign + later use
+    if (!store || store.chunks !== mobileChunks) {
+      store = { chunks: mobileChunks, metas: buildForestChunkMetas(mobileChunks) };
+      chunkMetaRef.current = store;
+    }
+
+    swapAccumRef.current += delta;
+    if (swapAccumRef.current < FOREST_SWAP_INTERVAL) return;
+    swapAccumRef.current = 0;
+
+    const camPos = state.camera.position;
+    const metas = store.metas;
+    for (const meta of metas) {
+      if (meta.needsBoardClip) continue; // near-board chunks stay on fade+clip forever
+      // Distance from the camera to the chunk's NEAREST possible fragment.
+      const nearest = camPos.distanceTo(meta.worldCenter) - meta.worldRadius;
+      if (!meta.isOpaque) {
+        if (nearest > FOREST_OPAQUE_ENTER) {
+          meta.mesh.material = forestOpaqueMat;
+          meta.isOpaque = true;
+        }
+      } else if (nearest < FOREST_OPAQUE_EXIT) {
+        meta.mesh.material = forestFadeMat;
+        meta.isOpaque = false;
+      }
+    }
+  });
 
   return (
     <group
