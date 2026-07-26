@@ -110,6 +110,17 @@ const FOREST_FADE_FAR = 4.5;  // world units: fully solid (unchanged) at/beyond 
  * chunk is opaque in BOTH materials at the boundary → no pop; the ENTER/EXIT gap
  * is hysteresis to stop boundary flip-flop as the camera orbits/pans.
  *
+ * FAST-ZOOM POP HARDENING: the revert (opaque→fade) is only rechecked every
+ * FOREST_SWAP_INTERVAL, so a fast pinch-zoom can travel far between checks — if
+ * EXIT sat just above FADE_FAR (e.g. +0.25), a re-entering chunk could stay opaque
+ * for one interval AFTER its trees re-enter the fade band, giving a brief "too
+ * solid" pop. Two mitigations: (1) recheck ~20x/s (0.05s) — the loop is only a
+ * distanceTo + compares per ~322 chunks, cheap; and (2) widen the revert margin so
+ * EXIT (FADE_FAR+1.0) sits well above FADE_FAR. Even at fast zoom a chunk reverts
+ * to fade a full unit before its nearest tree could begin fading, while ENTER
+ * (FADE_FAR+2.0) keeps switch-TO-opaque strictly beyond the fade range and
+ * preserves the 1.0 hysteresis gap.
+ *
  * The test uses (cameraDist to chunk sphere center − sphere radius) = distance to
  * the chunk's NEAREST possible fragment, so a chunk only goes opaque once EVERY
  * one of its trees is provably past the fade range (never opaque while any tree
@@ -117,9 +128,9 @@ const FOREST_FADE_FAR = 4.5;  // world units: fully solid (unchanged) at/beyond 
  * footprint are excluded from the swap entirely (they must keep the poke-through
  * clip regardless of camera distance) — see buildForestChunkMetas.
  */
-const FOREST_OPAQUE_ENTER = FOREST_FADE_FAR + 1.0;  // 5.5: go opaque once the nearest fragment is beyond this
-const FOREST_OPAQUE_EXIT = FOREST_FADE_FAR + 0.25;  // 4.75: revert to fade below this (still > FADE_FAR → no pop)
-const FOREST_SWAP_INTERVAL = 0.15;                   // s: throttle the per-chunk distance recheck (~7x/s)
+const FOREST_OPAQUE_ENTER = FOREST_FADE_FAR + 2.0;  // 6.5: go opaque once the nearest fragment is beyond this
+const FOREST_OPAQUE_EXIT = FOREST_FADE_FAR + 1.0;   // 5.5: revert to fade well ABOVE FADE_FAR (fast-zoom margin → no pop)
+const FOREST_SWAP_INTERVAL = 0.05;                   // s: throttle the per-chunk distance recheck (~20x/s)
 
 /**
  * ── MOBILE-ONLY FOREST CHUNKING + DISTANCE THINNING (revertable experiment) ──
@@ -580,7 +591,7 @@ export function ForestEnvironment({ isMobile = false }: { isMobile?: boolean }):
   }, [gltf, isMobile]);
 
   // ── MOBILE-ONLY per-frame opaque/fade chunk swap ──────────────────────────────
-  // Throttled (~7x/s) camera-distance check that flips each far, non-board chunk to
+  // Throttled (~20x/s) camera-distance check that flips each far, non-board chunk to
   // the discard-free opaque material and back. Desktop early-returns (no chunks).
   // Chunk world bounds are static, so they are cached on the first frame; the loop
   // does only a distanceTo + compares (no allocation). See the swap-threshold notes.

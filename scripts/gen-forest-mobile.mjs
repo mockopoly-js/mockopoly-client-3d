@@ -24,9 +24,12 @@
  *       transform in the original FLOAT space (verified byte-identical instance
  *       T/S), so all downstream position math is unchanged.
  *
- *   (B) TRUE far-chunk LOD: every 3D-relief type (trees, flowers, mushrooms,
- *       grass, rocks, mountains) keeps its FULL geometry AND gains a decimated
- *       `<name>_LOD` sibling mesh (kept ~50%). The chunker (mobile only) points
+ *   (B) TRUE far-chunk LOD: every SMALL-PROP relief type (trees, flowers,
+ *       mushrooms, grass, rocks) keeps its FULL geometry AND gains a decimated
+ *       `<name>_LOD` sibling mesh (kept ~50%). MOUNTAINS are EXCLUDED — they are
+ *       large relief surfaces like the ground and their decimation tore the ridge
+ *       on device, so they keep full geometry with NO `_LOD` (see below). The
+ *       chunker (mobile only) points
  *       FAR chunks — those whose every instance sits beyond FOREST_THIN_DISTANCE
  *       from the board — at the `_LOD` geometry while NEAR chunks keep full
  *       detail. Static distance-from-board (the camera stays near the board), so
@@ -34,16 +37,18 @@
  *       non-instanced nodes at the origin; ForestEnvironment harvests their
  *       geometry into a lookup and removes them before they can render.
  *
- * FLAT-GROUND DECIMATION — REMOVED. Earlier builds decimated the flat ground
- * tiles (Meadow / Meadow_Path / Lake_Ground) ~90% in place on the assumption
- * they were near-planar. They are NOT: the tiles carry ~12-15% Y-relief, so the
- * position-weld + simplify + attribute-rebuild mangled their surface, UVs and
- * normals — producing a torn/jagged ground on device. Ground now keeps its
- * ORIGINAL geometry and gets NO `_LOD` sibling, so the runtime chunker falls back
- * to the full geometry for it. Ground is still chunked + frustum-culled at
- * runtime, so there is no perf regression. Grass is NOT ground here — the
- * geometry scan showed PP_Grass_* to be 3D relief tufts, so it stays a relief
- * type with an `_LOD`.
+ * LARGE-RELIEF DECIMATION (GROUND + MOUNTAINS) — REMOVED. Earlier builds
+ * decimated the flat ground tiles (Meadow / Meadow_Path / Lake_Ground) ~90% in
+ * place on the assumption they were near-planar. They are NOT: the tiles carry
+ * ~12-15% Y-relief, so the position-weld + simplify + attribute-rebuild mangled
+ * their surface, UVs and normals — producing a torn/jagged ground on device. The
+ * MOUNTAINS (Forest_Mountain_Moss_*) hit the SAME failure: they are large relief
+ * surfaces, and their `_LOD` decimation tore the peaks/ridge (a visible gash/seam)
+ * on device. BOTH now keep their ORIGINAL geometry and get NO `_LOD` sibling, so
+ * the runtime chunker falls back to the full geometry for them. Both are still
+ * chunked + frustum-culled at runtime, so there is no perf regression. Grass is
+ * NOT ground here — the geometry scan showed PP_Grass_* to be small 3D relief
+ * tufts, so it stays a relief type with an `_LOD`.
  *
  * meshoptimizer's simplifier collapses edges in the INDEX topology. The source
  * props are hard-edged low-poly "triangle soup": corner positions are bitwise
@@ -83,6 +88,19 @@ const OUT = resolve(PROJECT_ROOT, 'public/models/forest.mobile.glb');
  * gets an `_LOD` instead (below).
  */
 const FLAT_RE = /meadow|path|lake/i;
+
+/**
+ * MOUNTAIN types — Forest_Mountain_Moss_*. Like the flat ground, these are LARGE
+ * RELIEF SURFACES, not small props: the position-weld + simplify pass tore the
+ * ridge/peaks on device (the exact same gash/seam failure the ground had). They
+ * now KEEP their ORIGINAL geometry and get NO `_LOD` sibling, so the runtime
+ * chunker falls back to their full geometry (`lodGeometry.get()` misses →
+ * full-res, identical to the ground path). Mountains are still chunked +
+ * frustum-culled at runtime (edge-ringing mountains are often fully off-screen),
+ * so there is no perf regression. Every OTHER relief type (trees, flowers,
+ * mushrooms, grass, rocks) still gets an `_LOD` — those decimate cleanly.
+ */
+const MOUNTAIN_RE = /mountain/i;
 
 // Relief LOD: keep ~50% of triangles, tight error bound so silhouettes hold up.
 const LOD_RATIO = 0.5;
@@ -200,19 +218,21 @@ async function main() {
   let reliefFullTris = 0;
   let reliefLodTris = 0;
 
-  console.log('[gen-forest-mobile] keeping ground at full geometry + adding relief *_LOD meshes ...');
+  console.log('[gen-forest-mobile] keeping ground + mountains at full geometry + adding relief *_LOD meshes ...');
   for (const mesh of [...root.listMeshes()]) {
     const name = mesh.getName();
     const prim = mesh.listPrimitives()[0];
     if (!prim) continue;
 
-    if (FLAT_RE.test(name)) {
-      // Flat ground — DECIMATION REMOVED (see banner). Keep the ORIGINAL geometry
-      // untouched and add NO `_LOD` sibling, so the runtime chunker falls back to
-      // this full geometry. Ground is still chunked + frustum-culled at runtime.
+    if (FLAT_RE.test(name) || MOUNTAIN_RE.test(name)) {
+      // Flat ground AND mountains — DECIMATION EXCLUDED (see banner). Both are
+      // large relief surfaces whose simplify pass tore the surface/ridge on
+      // device. Keep the ORIGINAL geometry untouched and add NO `_LOD` sibling,
+      // so the runtime chunker falls back to this full geometry. Both are still
+      // chunked + frustum-culled at runtime.
       const tris = triOf(prim);
       groundBefore += tris;
-      groundAfter += tris; // unchanged — ground is no longer decimated
+      groundAfter += tris; // unchanged — not decimated
     } else {
       // (B) Relief — keep full geometry, add a decimated `<name>_LOD` sibling.
       reliefFullTris += triOf(prim);
@@ -260,7 +280,7 @@ async function main() {
   console.log('\n[gen-forest-mobile] DONE');
   console.log(`  out:               ${OUT}`);
   console.log(`  size:              ${MB(statSync(IN).size)} -> ${MB(outSize)} (${outSize} bytes)`);
-  console.log(`  flat-ground tris:  ${groundBefore} -> ${groundAfter} (full-res, decimation removed)`);
+  console.log(`  full-res tris:     ${groundBefore} -> ${groundAfter} (ground + mountains, no _LOD)`);
   console.log(`  relief LOD tiers:  ${lodMeshes} added (full ${reliefFullTris} -> LOD ${reliefLodTris} tris)`);
   console.log(`  instanced nodes:   ${instancedNodes} (placements: ${instPlacements})`);
   console.log(`  _LOD meshes:       ${lodOut}`);
