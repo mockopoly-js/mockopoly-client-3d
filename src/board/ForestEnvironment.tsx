@@ -190,8 +190,8 @@ const FOREST_SWAP_INTERVAL = 0.05;                   // s: throttle the per-chun
 const FOREST_CHUNK_GRID = 10;
 const FOREST_MIN_CHUNK_INSTANCES = 4;
 const FOREST_MERGE_CELL_MIN = 1;
-const FOREST_THIN_DISTANCE = 30;
-const FOREST_THIN_KEEP = 0.5;
+const FOREST_THIN_DISTANCE = 18;
+const FOREST_THIN_KEEP = 0.25;
 
 /**
  * ── BOARD-FOOTPRINT CLIP (poke-through removal) ───────────────────────────────

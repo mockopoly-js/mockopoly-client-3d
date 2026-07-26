@@ -63,7 +63,7 @@ function params(over: Partial<Parameters<typeof rebuildForestAsChunks>[0]>) {
     center: CENTER,
     groupScale: 1,
     gridN: 4,
-    thinDistance: 30,
+    thinDistance: 18,
     keepFraction: 1,
     minChunkInstances: MIN_CHUNK,
     mergeCellMin: MERGE_MIN,
