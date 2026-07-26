@@ -12,37 +12,40 @@ import * as THREE from 'three';
  * culled — trees behind and beside the camera are still processed and (with the
  * per-fragment fade `discard`) pay full overdraw.
  *
- * This helper REBUILDS the TREE/FOLIAGE island-wide meshes into a spatial GRID of
- * smaller `InstancedMesh` chunks — each chunk holding only the instances whose
- * position falls in its cell, with a LOCAL bounding sphere (via
- * `computeBoundingSphere`) covering just that cell. Chunks keep `frustumCulled`
- * at its default `true`, so three culls the off-screen cells. Same geometry, same
- * shared (already fade-patched) material, same per-instance transforms → with the
- * whole scene in view the render is pixel-identical; ONLY the draw organization
- * changes.
+ * This helper REBUILDS every island-wide mesh into a spatial GRID of smaller
+ * `InstancedMesh` chunks — each chunk holding only the instances whose position
+ * falls in its cell, with a LOCAL bounding sphere (via `computeBoundingSphere`)
+ * covering just that cell. Chunks keep `frustumCulled` at its default `true`, so
+ * three culls the off-screen cells. Same geometry, same shared (already
+ * fade-patched) material, same per-instance transforms → with the whole scene in
+ * view the render is pixel-identical; ONLY the draw organization changes.
  *
- * THREE GUARDS keep the draw-call count a LOW multiple of the ~23 baseline instead
- * of exploding it (a naive per-cell split over every type produced ~6-7×):
+ * EVERY forest type ends up with LOCAL bounds + `frustumCulled=true` — the pass
+ * NEVER leaves a type island-wide with culling off. Three rules keep the draw-call
+ * count a LOW multiple of the ~23 baseline instead of exploding it (a naive
+ * per-cell split over every type produced ~6-7×):
  *
- *   1. GROUND/FLOOR types are left ENTIRELY UNTOUCHED — never chunked, never
- *      thinned — so they stay exactly the single island-wide `InstancedMesh` the
- *      desktop path uses (see {@link isForestGroundMesh}). They are flat, cheap
- *      and low-overdraw: culling saves little, chunking them inflates draw calls,
- *      and thinning them punches visible HOLES in the far terrain. Only
- *      trees/foliage/rocks are eligible for chunking + thinning.
- *   2. MIN-CHUNK FLOOR (`minChunkInstances`): a tree type whose TOTAL instance
- *      count is below the floor is left as ONE island-wide mesh — chunking a
- *      low-count type wastes draw calls for negligible culling benefit.
- *   3. CELL DEFRAG (`mergeCellMin`): within a chunked type, a grid cell holding
+ *   1. GROUND/FLOOR types are CHUNKED (for local, cullable bounds) but NEVER
+ *      THINNED — so the far forest floor is never holed while the island-wide
+ *      floor becomes cullable (see {@link isForestGroundMesh}). Only
+ *      trees/foliage/rocks are eligible for thinning.
+ *   2. MIN-CHUNK FLOOR (`minChunkInstances`): a type whose TOTAL instance count is
+ *      below the floor is NOT spatially partitioned — but it is still emitted as
+ *      ONE local-bounded, cullable chunk of all its instances (chunking a
+ *      low-count type into many cells wastes draw calls; one cullable mesh does
+ *      not, and it costs the same one draw call the island-wide original did).
+ *   3. CELL DEFRAG (`mergeCellMin`): within a partitioned type, a grid cell holding
  *      fewer than `mergeCellMin` surviving instances is FOLDED into its nearest
  *      populated cell instead of becoming its own near-empty chunk. If NO cell
- *      clears the threshold the whole type is too sparse to chunk usefully and is
- *      left as one island-wide mesh.
+ *      clears the threshold the whole type is too sparse to partition usefully and
+ *      is emitted as ONE local-bounded, cullable chunk of all its instances
+ *      (still cullable — edge-ringing mountains are often fully off-screen).
  *
- * It ALSO statically thins the outer ring of the CHUNKED (tree/foliage) types
+ * It ALSO statically thins the outer ring of the NON-GROUND (tree/foliage) types
  * ONLY: instances beyond `thinDistance` from the board center are kept at
  * `keepEvery`-stride (1 of every K). Static (not per-frame / per-camera) so
- * nothing pops as the camera orbits. Ground is never thinned (guard 1). Set
+ * nothing pops as the camera orbits. Ground is never thinned (rule 1), and the
+ * single-mesh fallbacks (rules 2 & 3) keep ALL instances unthinned. Set
  * `keepFraction >= 1` to disable thinning entirely (chunking still applies).
  *
  * Coordinate frame: `boxMin`, `size`, `center` and every instance position are
@@ -59,9 +62,8 @@ import * as THREE from 'three';
  * Terrain/FLOOR prop-type classifier — the SINGLE SOURCE OF TRUTH shared with
  * `ForestEnvironment`'s surface-height sampler. Matches the instanced ground
  * patches (Meadow, Grass, Meadow_Path, Lake_Ground) by name. Ground/floor types
- * are excluded from mobile chunking + thinning (see guard 1 above): they stay the
- * same single island-wide `InstancedMesh` as desktop, so the far forest floor is
- * never holed by thinning and no draw calls are spent chunking flat terrain.
+ * are CHUNKED like everything else (for local, cullable bounds) but are excluded
+ * from THINNING (see rule 1 above), so the far forest floor is never holed.
  */
 export const FOREST_GROUND_NAME_RE = /meadow|grass|path|lake/i;
 
@@ -88,25 +90,26 @@ export interface ForestChunkParams {
   /** Fraction of FAR-ring instances to keep (0<f≤1; 1 = keep all / no thinning). */
   keepFraction: number;
   /**
-   * Min TOTAL instances for a (non-ground) type to be chunked at all. A type
-   * below this stays one island-wide mesh (chunking it wastes draw calls).
+   * Min TOTAL instances for a type to be SPATIALLY partitioned. A type below this
+   * is emitted as ONE local-bounded, cullable chunk instead of many cells
+   * (partitioning a low-count type wastes draw calls; it is still made cullable).
    */
   minChunkInstances: number;
   /**
    * Min surviving instances for a grid cell to become its own chunk. Cells below
    * this are folded into the nearest populated cell (defrag); if no cell clears
-   * it, the whole type stays one island-wide mesh.
+   * it, the whole type is emitted as ONE local-bounded, cullable chunk.
    */
   mergeCellMin: number;
 }
 
 /**
- * Replace every TREE/FOLIAGE island-wide forest `InstancedMesh` under `scene`
- * with a grid of per-cell `InstancedMesh` chunks (local bounds, frustum-cullable)
- * and statically thin their far ring. GROUND/FLOOR types (see
- * {@link isForestGroundMesh}) and sub-floor / too-sparse types are left as their
- * original single island-wide mesh. Mutates the scene graph; reuses geometry +
- * material.
+ * Replace every island-wide forest `InstancedMesh` under `scene` with local-bounded,
+ * frustum-cullable `InstancedMesh` chunks. Dense types split into a per-cell grid;
+ * low-count / too-sparse types become ONE local-bounded cullable chunk (never left
+ * island-wide). NON-ground types have their far ring statically thinned; GROUND/FLOOR
+ * types (see {@link isForestGroundMesh}) are chunked but NEVER thinned. Mutates the
+ * scene graph; reuses geometry + material.
  */
 export function rebuildForestAsChunks(params: ForestChunkParams): void {
   const {
@@ -125,15 +128,16 @@ export function rebuildForestAsChunks(params: ForestChunkParams): void {
   // keep 1 of every `keepEvery` far instances; keepFraction>=1 disables thinning.
   const keepEvery = keepFraction >= 1 ? 1 : Math.max(1, Math.round(1 / keepFraction));
 
-  // Collect CHUNKABLE sources first — do NOT mutate the graph mid-traverse.
-  // GROUND/FLOOR types are skipped here → left as their single island-wide mesh
-  // (untouched, identical to desktop: not chunked, not thinned).
+  // Collect ALL forest InstancedMesh sources — do NOT mutate the graph
+  // mid-traverse. GROUND/FLOOR types are chunked too now (for LOCAL bounds so the
+  // island-wide floor becomes cullable), but they are NEVER thinned (thinning
+  // punched visible holes in the far floor); see the per-type `typeKeepEvery`
+  // below. Only trees/foliage/rocks are eligible for far-ring thinning.
   const sources: THREE.InstancedMesh[] = [];
   scene.traverse((o) => {
     const im = o as THREE.InstancedMesh;
     // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- runtime narrowing: o is Object3D; only actual InstancedMeshes have isInstancedMesh===true
     if (!im.isInstancedMesh) return;
-    if (isForestGroundMesh(im.name)) return; // ground/floor stays island-wide
     sources.push(im);
   });
 
@@ -150,16 +154,62 @@ export function rebuildForestAsChunks(params: ForestChunkParams): void {
   const cellCenterX = (key: number): number => boxMin.x + (Math.floor(key / gridN) + 0.5) * cellSizeX;
   const cellCenterZ = (key: number): number => boxMin.z + ((key % gridN) + 0.5) * cellSizeZ;
 
+  // Emit ONE local-bounded, frustum-cullable InstancedMesh holding the given
+  // instance indices of `im` (reusing geometry+material). The LOCAL
+  // `computeBoundingSphere` over just these instances is what lets three's
+  // frustum culler drop it when it leaves the view — the whole point of this
+  // pass. This is also the single-mesh fallback for types too small/sparse to
+  // partition: a local bound over ALL of one type's instances still culls when
+  // that whole type is off-screen (e.g. edge-ringing mountains looking at sky),
+  // so we NEVER leave a forest type island-wide with frustumCulled=false.
+  const emitChunk = (indices: number[], im: THREE.InstancedMesh, name: string): void => {
+    const parent = im.parent;
+    if (!parent) return;
+    const chunk = new THREE.InstancedMesh(im.geometry, im.material, indices.length);
+    chunk.name = name;
+    chunk.receiveShadow = im.receiveShadow;
+    chunk.castShadow = im.castShadow;
+    // frustumCulled=true (three's default) — with a LOCAL bound, off-screen
+    // chunks now cull. (The island-wide originals had it forced false.)
+    chunk.frustumCulled = true;
+    for (let k = 0; k < indices.length; k++) {
+      im.getMatrixAt(indices[k], m4);
+      chunk.setMatrixAt(k, m4);
+      if (im.instanceColor) {
+        im.getColorAt(indices[k], color);
+        chunk.setColorAt(k, color);
+      }
+    }
+    chunk.instanceMatrix.needsUpdate = true;
+    if (chunk.instanceColor) chunk.instanceColor.needsUpdate = true;
+    chunk.computeBoundingSphere(); // LOCAL bound → frustum-cullable
+    parent.add(chunk);
+  };
+
+  // [0..n) — the full, UNTHINNED index list for the single-mesh fallbacks.
+  const allIndices = (n: number): number[] => Array.from({ length: n }, (_, i) => i);
+
   for (const im of sources) {
     const parent = im.parent;
     if (!parent) continue;
 
-    // MIN-CHUNK FLOOR: a low-count type isn't worth chunking → leave the original
-    // single island-wide mesh in place (untouched: not chunked, not thinned).
-    if (im.count < minChunkInstances) continue;
+    // GROUND/FLOOR is chunked for local bounds too, but is NEVER thinned
+    // (thinning punched holes in the far floor). keepEvery=1 for ground disables
+    // the far-ring stride; non-ground keeps the configured thinning.
+    const isGround = isForestGroundMesh(im.name);
+    const typeKeepEvery = isGround ? 1 : keepEvery;
+
+    // MIN-CHUNK FLOOR: a low-count type isn't worth SPATIALLY partitioning, but it
+    // must still become CULLABLE → emit ONE local-bounded chunk of ALL its
+    // instances (unthinned) instead of leaving the island-wide, un-culled original.
+    if (im.count < minChunkInstances) {
+      emitChunk(allIndices(im.count), im, `${im.name}-chunk0`);
+      parent.remove(im);
+      continue;
+    }
 
     // Bucket surviving instance indices by grid cell (cx * gridN + cz), thinning
-    // the far ring as we go.
+    // the far ring as we go (ground: typeKeepEvery=1 → nothing thinned).
     const buckets = new Map<number, number[]>();
     let farKept = 0; // per-type running index of FAR instances (drives keepEvery stride)
 
@@ -172,7 +222,7 @@ export function rebuildForestAsChunks(params: ForestChunkParams): void {
       const wdx = (pos.x - center.x) * groupScale;
       const wdz = (pos.z - center.z) * groupScale;
       if (wdx * wdx + wdz * wdz > thinDistSq) {
-        const keep = farKept % keepEvery === 0;
+        const keep = farKept % typeKeepEvery === 0;
         farKept += 1;
         if (!keep) continue;
       }
@@ -187,11 +237,17 @@ export function rebuildForestAsChunks(params: ForestChunkParams): void {
 
     // CELL DEFRAG: keep only cells that clear `mergeCellMin` as their own chunk;
     // fold every smaller cell into the nearest kept cell (by cell-center XZ). If
-    // no cell clears the threshold the type is too sparse to chunk usefully →
-    // leave the original single island-wide mesh in place.
+    // NO cell clears the threshold the type is too sparse to partition usefully →
+    // still emit ONE local-bounded cullable chunk of ALL its instances (unthinned)
+    // rather than leave the island-wide, un-culled original (edge-ringing
+    // mountains are often fully off-screen, so a single local bound already culls).
     const entries = [...buckets.entries()];
     const bigBuckets = entries.filter(([, v]) => v.length >= mergeCellMin);
-    if (bigBuckets.length === 0) continue; // too sparse → keep original single mesh
+    if (bigBuckets.length === 0) {
+      emitChunk(allIndices(im.count), im, `${im.name}-chunk0`);
+      parent.remove(im);
+      continue;
+    }
 
     const finalBuckets = new Map<number, number[]>(bigBuckets.map(([k, v]) => [k, v.slice()]));
     for (const [key, v] of entries) {
@@ -216,30 +272,8 @@ export function rebuildForestAsChunks(params: ForestChunkParams): void {
     // Emit one chunk InstancedMesh per final (kept) cell, reusing geometry+material.
     let chunkIdx = 0;
     for (const indices of finalBuckets.values()) {
-      const chunk = new THREE.InstancedMesh(im.geometry, im.material, indices.length);
-      chunk.name = `${im.name}-chunk${chunkIdx}`;
+      emitChunk(indices, im, `${im.name}-chunk${chunkIdx}`);
       chunkIdx += 1;
-      chunk.receiveShadow = im.receiveShadow;
-      chunk.castShadow = im.castShadow;
-      // frustumCulled stays at its default (true) — THIS is the point: with a
-      // local per-cell bound, off-screen chunks now cull.
-      chunk.frustumCulled = true;
-
-      for (let k = 0; k < indices.length; k++) {
-        im.getMatrixAt(indices[k], m4);
-        chunk.setMatrixAt(k, m4);
-        if (im.instanceColor) {
-          im.getColorAt(indices[k], color);
-          chunk.setColorAt(k, color);
-        }
-      }
-      chunk.instanceMatrix.needsUpdate = true;
-      if (chunk.instanceColor) chunk.instanceColor.needsUpdate = true;
-
-      // Local bound covering ONLY this chunk's instances → frustum-cullable.
-      chunk.computeBoundingSphere();
-
-      parent.add(chunk);
     }
 
     // Drop the original island-wide InstancedMesh (geometry + material are shared

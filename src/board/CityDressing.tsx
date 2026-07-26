@@ -61,7 +61,13 @@ const CITY_ROT = 0;           // radians; nudge to aim streets toward the camera
 
 const CITY_URL = '/models/city.glb';
 
-export function CityDressing(): React.JSX.Element {
+/**
+ * @param isMobile When true, city meshes are frustum-cullable (their instanced
+ *   bounds are LOCAL and compact in the board center, so three culls them when
+ *   they leave the view — e.g. looking at empty sky). When false/absent the
+ *   desktop path is byte-identical to before (frustumCulled stays false).
+ */
+export function CityDressing({ isMobile = false }: { isMobile?: boolean }): React.JSX.Element {
   const gltf = useGLTF(CITY_URL);
 
   // Clone the cached scene so recenter/scale never mutates drei's shared cache.
@@ -78,7 +84,11 @@ export function CityDressing(): React.JSX.Element {
         // receiveShadow stays on so the board/token shadows still fall on the city.
         m.castShadow = false;
         m.receiveShadow = true;
-        m.frustumCulled = false;
+        // MOBILE-ONLY frustum culling. The city's instanced-mesh bounds are LOCAL
+        // and compact (it fits the board's inner square in the center), so an
+        // off-screen view — e.g. the camera pitched up at empty sky — culls the
+        // whole city (~263K tris). Desktop stays false → byte-identical.
+        m.frustumCulled = isMobile;
 
         // All 69 city materials are authored with alphaMode BLEND (even though
         // their baseColor alpha is 1.0). BLEND disables depth-write, causing
@@ -122,7 +132,7 @@ export function CityDressing(): React.JSX.Element {
     const scaleY = scaleX;
 
     return { object: scene, groupScale: [scaleX, scaleY, scaleZ] };
-  }, [gltf]);
+  }, [gltf, isMobile]);
 
   return (
     <group

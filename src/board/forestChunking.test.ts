@@ -91,7 +91,7 @@ describe('isForestGroundMesh', () => {
 });
 
 describe('rebuildForestAsChunks', () => {
-  it('(a) leaves GROUND/FLOOR types untouched: not chunked, not thinned', () => {
+  it('(a) chunks GROUND/FLOOR types for local cullable bounds but NEVER thins them', () => {
     // Every ground-named type: a dense spread with FAR instances + aggressive thinning.
     for (const name of ['PP_Meadow_08', 'PP_Grass_11', 'PP_Meadow_Path_05', 'PP_Lake_Ground_04']) {
       const spread: [number, number][] = [];
@@ -101,26 +101,30 @@ describe('rebuildForestAsChunks', () => {
       rebuildForestAsChunks(params({ scene, keepFraction: 0.25, thinDistance: 3 }));
 
       const meshes = allInstanced(scene);
-      expect(meshes).toHaveLength(1); // NOT split into chunks
-      expect(meshes[0]).toBe(ground); // same object, left in place
-      expect(ground.parent).not.toBeNull();
-      expect(ground.count).toBe(spread.length); // NOT thinned
-      expect(meshes[0].name).not.toMatch(/-chunk/); // no chunk was emitted
+      expect(ground.parent).toBeNull(); // original island-wide mesh replaced by chunks
+      expect(countInstances(scene)).toBe(spread.length); // NEVER thinned (keepFraction ignored for ground)
+      for (const c of meshes) {
+        expect(c.name).toMatch(/-chunk\d+$/); // emitted as chunk(s)
+        expect(c.frustumCulled).toBe(true); // local bound → cullable
+        expect(c.boundingSphere).not.toBeNull();
+      }
     }
   });
 
-  it('(b) leaves a tree type below MIN_CHUNK_INSTANCES as a single island-wide mesh', () => {
+  it('(b) emits a NON-ground type below MIN_CHUNK_INSTANCES as a single local-bounded cullable chunk', () => {
     const tree = makeMesh('PP_Tree_10', [
       [-9, -9], [9, 9], [-9, 9], [9, -9], [0, 0], // 5 < MIN_CHUNK(8)
     ]);
     const scene = makeScene(tree);
     rebuildForestAsChunks(params({ scene }));
 
+    expect(tree.parent).toBeNull(); // original island-wide mesh replaced
     const meshes = allInstanced(scene);
-    expect(meshes).toHaveLength(1);
-    expect(meshes[0]).toBe(tree); // untouched original
-    expect(tree.parent).not.toBeNull();
-    expect(countInstances(scene)).toBe(5);
+    expect(meshes).toHaveLength(1); // single chunk, not spatially partitioned
+    expect(meshes[0].name).toMatch(/-chunk\d+$/);
+    expect(meshes[0].frustumCulled).toBe(true); // cullable local bound
+    expect(meshes[0].boundingSphere).not.toBeNull();
+    expect(countInstances(scene)).toBe(5); // no instances lost, not thinned
   });
 
   it('(c) splits a dense tree type into >1 frustum-cullable chunk with LOCAL bounds', () => {
@@ -170,10 +174,33 @@ describe('rebuildForestAsChunks', () => {
 
     rebuildForestAsChunks(params({ scene, keepFraction: 0.1, thinDistance: 1 }));
 
-    // Ground fully preserved (never thinned), still one un-chunked mesh.
+    // Ground fully preserved (never thinned), now emitted as local-bounded cullable chunk(s).
     expect(countMatching(scene, /Grass/)).toBe(groundSpread.length);
+    expect(ground.parent).toBeNull(); // original replaced by chunk(s)
     const groundMeshes = allInstanced(scene).filter((im) => im.name.includes('Grass'));
-    expect(groundMeshes).toHaveLength(1);
-    expect(groundMeshes[0]).toBe(ground);
+    expect(groundMeshes.length).toBeGreaterThanOrEqual(1);
+    for (const g of groundMeshes) {
+      expect(g.name).toMatch(/-chunk\d+$/);
+      expect(g.frustumCulled).toBe(true); // cullable
+    }
+  });
+
+  it('(f) emits a sparse NON-ground type (mountains) as one unthinned local-bounded cullable chunk', () => {
+    // 9 instances, one per distinct grid cell → no cell clears mergeCellMin(3),
+    // but count ≥ MIN_CHUNK(8), so this exercises the too-sparse fallback (FIX C).
+    const spread: [number, number][] = [];
+    for (const x of [-9, -3, 3]) for (const z of [-9, -3, 3]) spread.push([x, z]);
+    const mountain = makeMesh('Forest_Mountain_Moss_01', spread);
+    const scene = makeScene(mountain);
+    // Aggressive thinning must NOT reach the fallback chunk (mountains never thinned).
+    rebuildForestAsChunks(params({ scene, thinDistance: 1, keepFraction: 0.25 }));
+
+    expect(mountain.parent).toBeNull(); // never left island-wide
+    const meshes = allInstanced(scene);
+    expect(meshes).toHaveLength(1); // single fallback chunk (not partitioned)
+    expect(meshes[0].name).toMatch(/-chunk\d+$/);
+    expect(meshes[0].frustumCulled).toBe(true); // local bound → cullable when off-screen
+    expect(meshes[0].boundingSphere).not.toBeNull();
+    expect(countInstances(scene)).toBe(spread.length); // all 9 preserved — NOT thinned
   });
 });

@@ -103,26 +103,31 @@ const FOREST_FADE_FAR = 4.5;  // world units: fully solid (unchanged) at/beyond 
  *
  * The forest DENSELY fills the ~92-unit box (23 prop types / ~1162 instances) and
  * the "floor" is itself instanced ground patches (Meadow, Grass, Meadow_Path,
- * Lake_Ground). GROUND/FLOOR types are left completely untouched on mobile (never
- * chunked, never thinned — identical to desktop); only trees/foliage/rocks are
- * chunked + thinned. See forestChunking.ts guards for why.
+ * Lake_Ground). On mobile EVERY type is rebuilt into local-bounded, frustum-cullable
+ * chunks (so the island-wide floor + edge mountains cull when off-screen); GROUND
+ * types are chunked but NEVER thinned (thinning holes the far floor), only
+ * trees/foliage/rocks are thinned. See forestChunking.ts rules for why.
  *
  *   FOREST_CHUNK_GRID    — grid resolution per horizontal axis (N×N cells over
  *       the ~92-unit scene box). 4 → ~23-unit cells (~2 board widths). Combined
  *       with the min-chunk floor + cell-defrag below, the mobile forest lands at
- *       ~2.5× the ~23-type baseline (~59 InstancedMeshes) instead of the ~6-7×
- *       a naive per-cell split of every type produced — well under the culling
- *       savings, since a 50° FOV looking across the board leaves roughly half the
- *       dense ring behind/beside the camera for three to cull. Bump to 5–6 for
- *       finer culling at the cost of thinner (more fragmented) chunks.
- *   FOREST_MIN_CHUNK_INSTANCES — a tree/foliage type with FEWER total instances
- *       than this is left as ONE island-wide mesh (chunking a low-count type
- *       wastes draw calls for no culling benefit).
+ *       roughly ~90 InstancedMeshes (~59 for trees/foliage + ~30 now that the
+ *       GROUND floor is chunked too) instead of the ~6-7× a naive per-cell split
+ *       of every type produced — well under the culling savings, since a 50° FOV
+ *       looking across the board (or up at empty sky) leaves most of the dense
+ *       ring + all the floor behind/beside/below the camera for three to cull.
+ *       Bump to 5–6 for finer culling at the cost of thinner (more fragmented)
+ *       chunks.
+ *   FOREST_MIN_CHUNK_INSTANCES — a type with FEWER total instances than this is
+ *       NOT spatially partitioned but is still emitted as ONE local-bounded,
+ *       cullable chunk (partitioning a low-count type wastes draw calls; making
+ *       it cullable costs the same one draw call it already had).
  *   FOREST_MERGE_CELL_MIN — a grid cell with FEWER surviving instances than this
  *       is folded into its nearest populated cell instead of becoming its own
  *       near-empty chunk (defrag). 3 keeps the total at ~2.5× baseline while
  *       preserving real spatial partitioning of the dense types; 2 leaves it at
- *       ~3.2×. If no cell of a type clears it, that type stays island-wide.
+ *       ~3.2×. If no cell of a type clears it, that type becomes ONE local-bounded,
+ *       cullable chunk (never left island-wide with culling off).
  *   FOREST_THIN_DISTANCE — world-unit radius from board center; only TREE/FOLIAGE
  *       instances BEYOND this are thinned (ground is never thinned). 30 leaves the
  *       near/mid forest around the board completely untouched.

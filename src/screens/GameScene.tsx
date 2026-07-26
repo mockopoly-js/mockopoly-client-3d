@@ -498,7 +498,7 @@ export function GameScene() {
           <PlayerTokens />
           <Buildings />
           {/* CityDressing (city.glb) is the low-poly city in the board center. */}
-          <CityDressing />
+          <CityDressing isMobile={isMobile} />
         </Suspense>
       </group>
       <Suspense fallback={null}>
