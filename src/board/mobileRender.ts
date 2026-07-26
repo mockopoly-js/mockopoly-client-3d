@@ -9,16 +9,22 @@
  *
  * It is a resolution knob, NOT a render trigger. A single <MobileRenderController>
  * (mounted only on mobile, inside the Canvas) REGISTERS a dpr applier + a live-dpr
- * reader here; camera-driven code then calls the plain function below WITHOUT
+ * reader here; camera-driven code then calls the plain functions below WITHOUT
  * needing Canvas context of its own:
  *
- *   • bumpMotion() — "the CAMERA is moving this frame": drop to the cheap MOVING
- *     dpr and (re)arm the settle timer. Called ONLY from camera paths — the
- *     OrbitControls onChange (CameraRig) and the canvas pointer/touch/wheel
- *     handlers (MobileRenderController). SETTLE_MS after the LAST call the settle
- *     timer fires and bumps dpr back to the crisp native value. Token walk, dice
- *     roll and character animation deliberately DO NOT call this — dpr changes on
- *     camera movement and nothing else. Hard no-op off mobile.
+ *   • beginCameraMotion() — "the user STARTED a camera gesture": drop to the cheap
+ *     MOVING dpr and CANCEL any pending settle timer. Called ONLY from the
+ *     OrbitControls 'start' interaction event (CameraRig) — i.e. a real user
+ *     drag / pinch / wheel.
+ *   • endCameraMotion() — "the user ENDED a camera gesture": arm the settle timer
+ *     so the crisp STILL dpr is restored SETTLE_MS after the gesture ends. Called
+ *     ONLY from the OrbitControls 'end' interaction event (CameraRig).
+ *
+ * These fire on GENUINE user camera gestures only. OrbitControls' 'start'/'end'
+ * events do NOT fire for programmatic controls.update(), so the third-person
+ * follow-lerp, token walk, dice roll and character animation deliberately never
+ * touch dpr — dpr changes on real user camera movement and nothing else. Hard
+ * no-op off mobile.
  *
  * Because rendering is always-on, a dpr change applies on the very next frame
  * automatically — nothing here needs (or calls) R3F's invalidate().
@@ -55,13 +61,13 @@ let settleTimer: ReturnType<typeof setTimeout> | null = null;
  * Mount-time registration from <MobileRenderController> (mobile only). Wires the
  * dpr applier + a live-dpr reader and seeds the STILL (crisp) dpr. Returns an
  * unregister cleanup that disarms everything so OFF mobile (or on unmount)
- * bumpMotion() hard no-ops.
+ * begin/endCameraMotion() hard no-op.
  *
  * The dpr target is decided by comparing against `readDpr()` (R3F's LIVE dpr)
  * rather than a local cache: R3F's Canvas reconfigure re-applies the `dpr` PROP on
  * every Canvas re-render, which can reset the live dpr back to STILL mid-motion.
- * Reading the live value means bumpMotion re-asserts MOVING on the very next
- * frame, self-healing that reset instead of desyncing.
+ * Reading the live value means beginCameraMotion re-asserts MOVING on the very
+ * next gesture, self-healing that reset instead of desyncing.
  */
 export function registerMobileRender(
   applyDpr: ApplyDprFn,
@@ -93,15 +99,30 @@ function settle(): void {
 }
 
 /**
- * Mark CAMERA motion THIS frame. Ensures the cheap MOVING dpr (resizing the
- * composer only when the LIVE dpr isn't already MOVING — so it also self-heals a
- * reconfigure reset) and (re)arms the settle debounce so the crisp dpr is
- * restored SETTLE_MS after the camera stops. Called ONLY from camera paths
- * (OrbitControls onChange + canvas pointer/touch/wheel). Hard no-op off mobile.
+ * User STARTED a camera gesture (OrbitControls 'start': drag / pinch / wheel).
+ * Immediately drops to the cheap MOVING dpr (resizing the composer only when the
+ * LIVE dpr isn't already MOVING — so it also self-heals a reconfigure reset) and
+ * CANCELS any pending settle timer so the crisp dpr cannot restore mid-gesture.
+ * Fires ONLY on genuine user camera movement — never on programmatic
+ * controls.update() (the third-person follow-lerp). Hard no-op off mobile.
  */
-export function bumpMotion(): void {
+export function beginCameraMotion(): void {
   if (!active || !applyDprFn || !readDprFn) return;
+  if (settleTimer) {
+    clearTimeout(settleTimer);
+    settleTimer = null;
+  }
   if (readDprFn() !== config.dprMoving) applyDprFn(config.dprMoving);
+}
+
+/**
+ * User ENDED a camera gesture (OrbitControls 'end': release / pinch-end / wheel
+ * settle). Arms the settle debounce so the crisp STILL dpr is restored SETTLE_MS
+ * after the gesture ends. Fires ONLY on genuine user camera movement. Hard no-op
+ * off mobile.
+ */
+export function endCameraMotion(): void {
+  if (!active || !applyDprFn || !readDprFn) return;
   if (settleTimer) clearTimeout(settleTimer);
   settleTimer = setTimeout(settle, config.settleMs);
 }

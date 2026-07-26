@@ -8,7 +8,7 @@ import type { CameraReadout } from '../state/gameStore';
 import { thirdPersonPose } from './positions';
 import { INITIAL_CAM_TARGET, INITIAL_CAM_OFFSET, MOBILE_INITIAL_CAM_OFFSET } from './cameraConstants';
 import { useIsMobile } from '../ui/useIsMobile';
-import { bumpMotion } from './mobileRender';
+import { beginCameraMotion, endCameraMotion } from './mobileRender';
 
 // Frame-rate-aware smoothing rate for the follow lerp. Higher = snappier.
 // alpha = 1 - exp(-RATE * delta) → ease-out, no snapping, stable at any FPS.
@@ -16,10 +16,11 @@ const FOLLOW_LERP_RATE = 6;
 
 // OrbitControls damping factor: how fast the inertial drift after a
 // release decays (higher = faster stop). Desktop keeps the original feel;
-// mobile uses a much faster decay so the drift tail (which keeps calling
-// bumpMotion via onChange) clears in ~150-250ms instead of ~1s, letting the
-// short MOBILE_SETTLE_MS debounce (see GameScene.tsx) land right as the
-// camera actually stops instead of firing mid-drift.
+// mobile uses a much faster decay so the inertial drift tail after a release
+// clears in ~150-250ms instead of ~1s. Adaptive dpr is now driven by the
+// 'start'/'end' gesture events (see onStart/onEnd below), so the settle timer
+// is armed on gesture end — the faster mobile decay keeps the post-release
+// drift short so the crisp dpr restores promptly after the camera stops.
 const DESKTOP_DAMPING_FACTOR = 0.08;
 const MOBILE_DAMPING_FACTOR = 0.25;
 
@@ -264,14 +265,16 @@ export function CameraRig() {
       maxPolarAngle={1.55}
       minDistance={2.5}
       maxDistance={70}
-      // MOBILE adaptive dpr: fires on EVERY camera change — orbit, zoom, pan, the
-      // damping tail after release, AND the third-person follow lerp (which moves
-      // the camera via controls.update()). Drops to the cheap MOVING dpr; when the
-      // camera stops changing the settle timer restores the crisp dpr (see
-      // mobileRender.ts). This is the ONLY per-frame dpr trigger — token walk /
-      // dice / character anim never touch dpr. Desktop passes undefined →
-      // OrbitControls behaves exactly as before (byte-identical).
-      onChange={isMobile ? bumpMotion : undefined}
+      // MOBILE adaptive dpr: driven ONLY by genuine user camera gestures. The
+      // 'start' event (real drag / pinch / wheel) drops to the cheap MOVING dpr;
+      // the 'end' event arms the settle timer that restores the crisp dpr once the
+      // gesture finishes (see mobileRender.ts). Crucially, these interaction events
+      // do NOT fire for programmatic controls.update() — so the third-person
+      // follow-lerp (which moves the camera via controls.update() while a token
+      // walks), token walk, dice and character anim never touch dpr. Desktop passes
+      // undefined → OrbitControls behaves exactly as before (byte-identical).
+      onStart={isMobile ? beginCameraMotion : undefined}
+      onEnd={isMobile ? endCameraMotion : undefined}
     />
   );
 }

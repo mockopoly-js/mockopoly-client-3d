@@ -1,6 +1,6 @@
 import { useEffect } from 'react';
 import { useThree } from '@react-three/fiber';
-import { registerMobileRender, bumpMotion } from './mobileRender';
+import { registerMobileRender } from './mobileRender';
 
 /**
  * Minimal view of the postprocessing EffectComposer instance drei forwards via
@@ -29,13 +29,16 @@ interface MobileRenderControllerProps {
  *
  *  1. Registers an `applyDpr` (setDpr THEN composer.setSize) + a live-dpr reader
  *     with the shared bus so camera-driven code can poke it context-free.
- *  2. Wires canvas pointer/touch/wheel listeners as CAMERA-motion signals: a
- *     drag / pinch / wheel drops to the cheap MOVING dpr; on settle the crisp dpr
- *     is restored. (OrbitControls onChange in CameraRig is the other camera
- *     signal.) Nothing here gates rendering — the Canvas is frameloop="always".
  *
- * Renders nothing. Unregisters + detaches everything on unmount so desktop /
- * post-unmount is a hard no-op.
+ * The adaptive-dpr TRIGGERS live entirely in CameraRig: the OrbitControls
+ * 'start'/'end' gesture events call beginCameraMotion/endCameraMotion on the bus.
+ * Those fire ONLY on genuine user drag/pinch/wheel — never on programmatic
+ * controls.update() — so this controller no longer wires raw pointer/touch/wheel
+ * listeners (hover and clamped-zoom used to drop dpr with no camera movement).
+ * Nothing here gates rendering — the Canvas is frameloop="always".
+ *
+ * Renders nothing. Unregisters everything on unmount so desktop / post-unmount is
+ * a hard no-op.
  */
 export function MobileRenderController({
   composerRef,
@@ -44,7 +47,6 @@ export function MobileRenderController({
   settleMs,
 }: MobileRenderControllerProps): null {
   const setDpr = useThree((s) => s.setDpr);
-  const gl = useThree((s) => s.gl);
   // Lazy R3F state reader so applyDpr always sees the CURRENT css size without
   // re-registering the bus on every resize.
   const getR3F = useThree((s) => s.get);
@@ -70,22 +72,6 @@ export function MobileRenderController({
       settleMs,
     });
   }, [setDpr, getR3F, composerRef, dprMoving, dprStill, settleMs]);
-
-  // Camera-motion signal: drag / pinch / wheel on the canvas moves the camera →
-  // drop to the cheap MOVING dpr; the settle timer restores the crisp dpr once
-  // motion stops. (This is a resolution knob, not a render trigger.)
-  useEffect(() => {
-    const el = gl.domElement;
-    const onMove = (): void => bumpMotion();
-    el.addEventListener('pointermove', onMove, { passive: true });
-    el.addEventListener('touchmove', onMove, { passive: true });
-    el.addEventListener('wheel', onMove, { passive: true });
-    return () => {
-      el.removeEventListener('pointermove', onMove);
-      el.removeEventListener('touchmove', onMove);
-      el.removeEventListener('wheel', onMove);
-    };
-  }, [gl]);
 
   return null;
 }
