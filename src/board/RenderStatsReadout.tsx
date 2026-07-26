@@ -17,6 +17,15 @@ export function RenderStatsReadout() {
   const lastCallsRef = useRef(-1);
   const lastTrianglesRef = useRef(-1);
 
+  // Disable gl.info.autoReset so counts accumulate across the frame (scene + all effect passes).
+  // We'll reset manually once per frame ourselves in useFrame.
+  useEffect(() => {
+    gl.info.autoReset = false;
+    return () => {
+      gl.info.autoReset = true;
+    };
+  }, [gl]);
+
   // Create and mount the DOM element on mount; clean up on unmount.
   useEffect(() => {
     const div = document.createElement('div');
@@ -33,10 +42,13 @@ export function RenderStatsReadout() {
   }, []);
 
   // Read gl.info.render every frame; update DOM only if values changed or throttle time passed.
+  // Runs at priority 0 (before EffectComposer at priority 1), so we read the accumulated
+  // total from the scene + all effect passes, then reset for the next frame.
   useFrame(() => {
-    const now = Date.now();
     const calls = gl.info.render.calls;
     const triangles = gl.info.render.triangles;
+
+    const now = Date.now();
 
     // Throttle: only update if 250ms has passed OR values have changed.
     if (
@@ -44,6 +56,7 @@ export function RenderStatsReadout() {
       calls === lastCallsRef.current &&
       triangles === lastTrianglesRef.current
     ) {
+      gl.info.reset();
       return;
     }
 
@@ -54,6 +67,8 @@ export function RenderStatsReadout() {
     if (domRef.current) {
       domRef.current.textContent = `calls: ${calls}  tris: ${triangles}`;
     }
+
+    gl.info.reset();
   });
 
   return null;
