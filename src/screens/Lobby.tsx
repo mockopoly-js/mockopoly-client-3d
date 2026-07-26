@@ -8,6 +8,7 @@ import { TOKEN_HEX, GOLD } from '../constants/theme';
 import type { Player } from '../types/GameState';
 import { FONT_FAMILY } from '../constants/fonts';
 import { useIsMobile } from '../ui/useIsMobile';
+import { useIsLandscape } from '../ui/useIsLandscape';
 import { GameButton } from '../ui/GameButton';
 
 export function Lobby() {
@@ -56,6 +57,7 @@ export function Lobby() {
   // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- state.config may be absent on early/partial snapshots
   const maxPlayers = state?.config?.maxPlayers ?? 4;
   const isMobile = useIsMobile();
+  const isLandscape = useIsLandscape();
 
   const playerSlots = Array.from({ length: maxPlayers }).map((_, i) => {
     const p = players[i];
@@ -77,6 +79,48 @@ export function Lobby() {
       </div>
     );
   });
+
+  // ── Mobile LANDSCAPE (wide + short): room-code chip on top, player slots in a
+  // 2-column grid, action buttons in a row — fits the short height. Behaviour is
+  // shared with the portrait/desktop branches; only the arrangement differs. ──
+  if (isMobile && isLandscape) {
+    return (
+      <div style={wrapLandscape}>
+        <div style={panelLandscape}>
+          <button onClick={copyCode} style={codeChipMobile}>Room {roomCode ?? '----'}</button>
+          <div style={slotsGridLandscape}>
+            {playerSlots}
+          </div>
+          {isHost && status !== 'starting' && (
+            <label style={soloToggleMobile}>
+              <input
+                type="checkbox"
+                checked={soloPlay}
+                onChange={() => socketManager.emit(EVENTS.DEV_SET_HACK, { hack: 'soloPlay', enabled: !soloPlay })}
+                style={{ marginRight: 8, cursor: 'pointer', width: 18, height: 18 }}
+              />
+              <span style={{ fontSize: 14, fontWeight: 700 }}>Solo play (1 player)</span>
+            </label>
+          )}
+          {countdown !== null && status === 'starting'
+            ? <div style={{ fontWeight: 800, fontSize: 20, color: '#e07d0a' }}>Starting in {countdown}...</div>
+            : (
+              <div style={actionsRowLandscape}>
+                <GameButton variant={me?.isReady ? 'success' : 'primary'} onClick={toggleReady} disabled={locked} fullWidth>
+                  {me?.isReady ? <><span>Ready</span><Check size={16} aria-hidden style={{ marginLeft: 4 }} /></> : 'Ready'}
+                </GameButton>
+                {isHost && (
+                  <GameButton variant="primary" onClick={start} disabled={locked || players.length < (soloPlay ? 1 : 2)} fullWidth>
+                    Start Game
+                  </GameButton>
+                )}
+                <GameButton variant="tertiary" onClick={leave} disabled={locked} fullWidth>Back</GameButton>
+              </div>
+            )}
+        </div>
+      </div>
+    );
+  }
 
   if (isMobile) {
     return (
@@ -240,6 +284,45 @@ const codeChipMobile: React.CSSProperties = {
   fontFamily: FONT, fontWeight: 800, border: `1px solid ${GOLD}`, background: '#fbf6ec',
   borderRadius: 999, padding: '12px 20px', cursor: 'pointer', fontSize: 16, minHeight: 44,
   touchAction: 'manipulation',
+};
+
+// ── Mobile LANDSCAPE (wide + short) ──
+const wrapLandscape: React.CSSProperties = {
+  ...backdropBase,
+  backgroundPosition: 'center center',
+  overflowY: 'auto',
+  WebkitOverflowScrolling: 'touch',
+  padding:
+    'max(8px, env(safe-area-inset-top)) max(12px, env(safe-area-inset-right)) max(8px, env(safe-area-inset-bottom)) max(20px, env(safe-area-inset-left))',
+};
+const panelLandscape: React.CSSProperties = {
+  display: 'flex',
+  flexDirection: 'column',
+  gap: 'clamp(8px, 1.8vh, 12px)',
+  alignItems: 'center',
+  width: 'min(720px, 94vw)',
+  maxWidth: 'min(720px, 94vw)',
+  boxSizing: 'border-box',
+  margin: 'auto',
+  padding: 'clamp(12px, 2.4vh, 18px) clamp(16px, 3vw, 22px)',
+  borderRadius: 20,
+  background: 'rgba(255, 251, 240, 0.92)',
+  border: `3px solid ${GOLD}`,
+  boxShadow: '0 12px 36px rgba(0,0,0,0.4), inset 0 0 0 1px rgba(255,255,255,0.6)',
+  backdropFilter: 'blur(2px)',
+  WebkitBackdropFilter: 'blur(2px)',
+};
+// Player slots two-up so four seats occupy two short rows instead of four tall ones.
+const slotsGridLandscape: React.CSSProperties = {
+  display: 'grid',
+  gridTemplateColumns: '1fr 1fr',
+  gap: 10,
+  width: '100%',
+};
+const actionsRowLandscape: React.CSSProperties = {
+  display: 'flex',
+  gap: 10,
+  width: '100%',
 };
 const slotMobile: React.CSSProperties = { display: 'flex', alignItems: 'center', gap: 10, background: '#fbf6ec', borderRadius: 14, padding: '13px 14px' };
 const emptySlotMobile: React.CSSProperties = { ...slotMobile, justifyContent: 'center', color: '#9a8f7c', fontWeight: 700 };

@@ -4,6 +4,7 @@ import { BOARD_SPACES } from '../constants/board';
 import { COLOR_GROUP_HEX, TOKEN_HEX } from '../constants/theme';
 import { formatMoney } from '../utils/format';
 import { useIsMobile } from './useIsMobile';
+import { useIsLandscape } from './useIsLandscape';
 import { FONT_FAMILY } from '../constants/fonts';
 import { DeedCard } from './DeedCard';
 
@@ -30,6 +31,8 @@ export function PropertyCardModal() {
   const properties = useGameStore((s) => s.state?.properties);
   const players = useGameStore((s) => s.state?.players);
   const isMobile = useIsMobile();
+  const isLandscape = useIsLandscape();
+  const landscape = isMobile && isLandscape;
 
   if (deedCardIndex === null) return null;
 
@@ -45,7 +48,7 @@ export function PropertyCardModal() {
   const accent = space.colorGroup ? COLOR_GROUP_HEX[space.colorGroup] : '#d4af37';
   const cardFrame = space.cardFrame;
   const mortgaged = !!propState?.isMortgaged;
-  const deedW = isMobile ? 128 : 150;
+  const deedW = landscape ? 112 : isMobile ? 128 : 150;
 
   const houseCount = propState?.houses ?? 0;
   const hasHotel = propState?.hasHotel ?? false;
@@ -57,23 +60,10 @@ export function PropertyCardModal() {
     return null;
   })();
 
-  const inner = (
+  // Textual details (name / price / owner / state / close) — shared by the
+  // portrait/desktop stacked layout and the landscape side-by-side layout.
+  const details = (
     <>
-      {/* Color-group accent strip */}
-      <div style={{ height: 10, borderRadius: 6, background: accent, marginBottom: 12 }} />
-
-      {/* Deed sprite */}
-      {cardFrame != null && (
-        <div style={{ display: 'grid', placeItems: 'center', marginBottom: 14 }}>
-          <DeedCard
-            cardFrame={cardFrame}
-            mortgaged={mortgaged}
-            width={deedW}
-            aria-label={`${space.name} deed`}
-          />
-        </div>
-      )}
-
       {/* Name */}
       <div style={{ fontWeight: 800, fontSize: 20 }}>{space.name}</div>
 
@@ -134,6 +124,46 @@ export function PropertyCardModal() {
       </div>
     </>
   );
+
+  const inner = (
+    <>
+      {/* Color-group accent strip */}
+      <div style={{ height: 10, borderRadius: 6, background: accent, marginBottom: 12 }} />
+
+      {/* Deed sprite */}
+      {cardFrame != null && (
+        <div style={{ display: 'grid', placeItems: 'center', marginBottom: 14 }}>
+          <DeedCard
+            cardFrame={cardFrame}
+            mortgaged={mortgaged}
+            width={deedW}
+            aria-label={`${space.name} deed`}
+          />
+        </div>
+      )}
+
+      {details}
+    </>
+  );
+
+  // ── Mobile LANDSCAPE (wide + short): deed on the left, details on the right. ──
+  if (landscape) {
+    return (
+      <div style={wrapLandscape} onClick={closeDeedCard}>
+        <div style={cardLandscape} onClick={(e) => e.stopPropagation()}>
+          <div style={rowLandscape}>
+            {cardFrame != null && (
+              <DeedCard cardFrame={cardFrame} mortgaged={mortgaged} width={deedW} aria-label={`${space.name} deed`} />
+            )}
+            <div style={infoColLandscape}>
+              <div style={{ height: 8, borderRadius: 6, background: accent, marginBottom: 8 }} />
+              {details}
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   if (isMobile) {
     return (
@@ -217,3 +247,18 @@ const sheetMobile: React.CSSProperties = {
   paddingRight: 'calc(22px + env(safe-area-inset-right))',
   boxSizing: 'border-box',
 };
+
+// ── Mobile LANDSCAPE styles (wide + short) ──────────────────────────────────
+const wrapLandscape: React.CSSProperties = {
+  position: 'fixed', inset: 0, fontFamily: FONT, zIndex: 50, display: 'flex',
+  background: 'rgba(0,0,0,0.5)', boxSizing: 'border-box',
+  padding:
+    'max(8px, env(safe-area-inset-top)) max(10px, env(safe-area-inset-right)) max(8px, env(safe-area-inset-bottom)) max(20px, env(safe-area-inset-left))',
+};
+const cardLandscape: React.CSSProperties = {
+  background: '#fbf6ec', color: '#3b3224', borderRadius: 18, padding: 18,
+  width: 'min(560px, 100%)', maxHeight: '100%', overflowY: 'auto', margin: 'auto',
+  boxShadow: '0 24px 60px -20px rgba(0,0,0,.6)', boxSizing: 'border-box',
+};
+const rowLandscape: React.CSSProperties = { display: 'flex', flexDirection: 'row', gap: 16, alignItems: 'center' };
+const infoColLandscape: React.CSSProperties = { flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column' };

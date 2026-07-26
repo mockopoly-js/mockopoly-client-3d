@@ -9,6 +9,7 @@ import type { TokenType } from '../types/GameState';
 import type { S_RoomCreated, S_RoomJoined, S_RoomRejected } from '../types/SocketEvents';
 import { FONT_FAMILY } from '../constants/fonts';
 import { useIsMobile } from '../ui/useIsMobile';
+import { useIsLandscape } from '../ui/useIsLandscape';
 import { GameButton } from '../ui/GameButton';
 import { resolveCharacter } from '../constants/characters';
 
@@ -19,6 +20,7 @@ export function MainMenu() {
   const [code, setCode] = useState('');
   const [error, setError] = useState<string | null>(null);
   const isMobile = useIsMobile();
+  const isLandscape = useIsLandscape();
   const navigate = useNavigate();
   const selectedCharacter = useGameStore((s) => s.selectedCharacter);
   const selectedCharacterColor = useGameStore((s) => s.selectedCharacterColor);
@@ -145,6 +147,69 @@ export function MainMenu() {
     </>
   );
 
+  // ── Mobile LANDSCAPE (wide + short): two columns so the whole card fits the
+  // short height with no vertical overflow. Left = name + character; right =
+  // token grid + Create Room + the Join row. State/handlers are shared with the
+  // portrait/desktop branches; only the arrangement differs. ──
+  if (isMobile && isLandscape) {
+    return (
+      <div style={heroLandscape}>
+        <div style={panelLandscape}>
+          <div style={colLandscape}>
+            <input
+              className="mm-input"
+              placeholder="Enter your name..."
+              maxLength={16}
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              style={inputMobile}
+            />
+            <button
+              className="mm-char-btn"
+              onClick={() => navigate('/character-select')}
+              style={charBtnMobile}
+              aria-label="Choose character"
+            >
+              <span style={charBtnIcon}>&#128100;</span>
+              <span style={charBtnLabel}>{charDef.name}</span>
+              <span style={charBtnArrow}>›</span>
+            </button>
+          </div>
+          <div style={colLandscape}>
+            <div style={swatchGridLandscape}>
+              {TOKENS.map((t) => (
+                <button
+                  key={t}
+                  className="mm-swatch"
+                  aria-label={t}
+                  onClick={() => setToken(t)}
+                  style={swatchLandscape(token === t, TOKEN_HEX[t])}
+                />
+              ))}
+            </div>
+            <GameButton variant="primary" fullWidth onClick={create} disabled={!canCreate}>
+              Create Room
+            </GameButton>
+            <div style={joinRowMobile}>
+              <input
+                className="mm-input"
+                placeholder="ABCDEF"
+                maxLength={6}
+                value={code}
+                onChange={(e) => setCode(e.target.value.toUpperCase())}
+                style={{ ...inputMobile, flex: 1, minWidth: 0, textTransform: 'uppercase', letterSpacing: '0.2em', textAlign: 'center' }}
+              />
+              <GameButton variant="secondary" onClick={join} disabled={!canJoin} style={{ flexShrink: 0 }}>
+                Join
+              </GameButton>
+            </div>
+            {error && <div role="alert" style={errorText}>{error}</div>}
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   if (isMobile) {
     return (
       <div style={heroMobile}>
@@ -205,6 +270,18 @@ const heroMobile: React.CSSProperties = {
   backgroundPosition: 'top center',
 };
 
+// Mobile LANDSCAPE: center-or-scroll wrapper (safety net) with the panel
+// centered; bg centered so the card sits mid-frame on a short viewport. Extra
+// LEFT padding for the landscape notch.
+const heroLandscape: React.CSSProperties = {
+  ...heroBase,
+  backgroundPosition: 'center center',
+  overflowY: 'auto',
+  WebkitOverflowScrolling: 'touch',
+  padding:
+    'max(8px, env(safe-area-inset-top)) max(12px, env(safe-area-inset-right)) max(8px, env(safe-area-inset-bottom)) max(20px, env(safe-area-inset-left))',
+};
+
 // ── Desktop control panel (restored from `main`) — floats in the sandy plaza
 // (~52–60% vertical), nudged up 9vh from the very bottom ──
 const panel: React.CSSProperties = {
@@ -249,6 +326,56 @@ const panelMobile: React.CSSProperties = {
   maxWidth: 440,
   borderRadius: 22,
   boxShadow: '0 -6px 32px rgba(0,0,0,0.4), 0 12px 36px rgba(0,0,0,0.35)',
+};
+
+// ── Mobile LANDSCAPE control panel — wider, two-column, compact vertical
+// rhythm so it fits a ~360–430px-tall viewport with no vertical overflow. ──
+const panelLandscape: React.CSSProperties = {
+  ...panelBase,
+  flexDirection: 'row',
+  alignItems: 'stretch',
+  gap: 'clamp(12px, 3vw, 22px)',
+  width: 'min(760px, 94vw)',
+  maxWidth: 'min(760px, 94vw)',
+  borderRadius: 20,
+  padding: 'clamp(12px, 2.4vh, 18px) clamp(14px, 3vw, 22px)',
+  boxShadow: '0 12px 36px rgba(0,0,0,0.4), inset 0 0 0 1px rgba(255,255,255,0.6)',
+};
+// Each landscape column fills half the width; content vertically centered so the
+// shorter (2-item) left column aligns with the taller right column.
+const colLandscape: React.CSSProperties = {
+  display: 'flex',
+  flexDirection: 'column',
+  gap: 'clamp(8px, 1.8vh, 12px)',
+  flex: 1,
+  minWidth: 0,
+  justifyContent: 'center',
+};
+// Token swatches as a fixed 2-row × 4-col grid (all 8 tokens visible, no wrap).
+const swatchGridLandscape: React.CSSProperties = {
+  display: 'grid',
+  gridTemplateColumns: 'repeat(4, 1fr)',
+  gap: 'clamp(6px, 1.4vh, 10px)',
+  justifyItems: 'center',
+  width: '100%',
+};
+const swatchLandscape = (selected: boolean, hex: string): React.CSSProperties => {
+  const size = 'clamp(40px, 6vh, 44px)';
+  return {
+    width: size,
+    height: size,
+    borderRadius: '50%',
+    cursor: 'pointer',
+    padding: 0,
+    background: hex,
+    border: selected ? `3px solid ${GOLD}` : '3px solid rgba(255,255,255,0.85)',
+    boxShadow: selected
+      ? `0 0 0 2px rgba(212,175,55,0.4), 0 2px 6px rgba(0,0,0,0.35)`
+      : '0 2px 5px rgba(0,0,0,0.3)',
+    transform: selected ? 'scale(1.12)' : 'scale(1)',
+    transition: 'transform 0.12s ease, box-shadow 0.12s ease',
+    touchAction: 'manipulation',
+  };
 };
 
 // ── Inputs ──

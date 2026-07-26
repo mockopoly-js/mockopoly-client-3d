@@ -5,6 +5,7 @@ import { socketManager } from '../network/SocketManager';
 import { EVENTS } from '../types/SocketEvents';
 import { COLOR_GROUPS } from '../constants/board';
 import { useIsMobile } from './useIsMobile';
+import { useIsLandscape } from './useIsLandscape';
 import type { Player, PropertyState, Partnership, PartnershipProposal, PartnershipDissolutionRequest, ColorGroup } from '../types/GameState';
 import { FONT_FAMILY } from '../constants/fonts';
 
@@ -25,6 +26,8 @@ export function PartnershipPanel() {
   const [group, setGroup] = useState<string | null>(null);
   const [equity, setEquity] = useState<Record<string, number>>({});
   const isMobile = useIsMobile();
+  const isLandscape = useIsLandscape();
+  const landscape = isMobile && isLandscape;
 
   // Derived (non-hook) values — computed after hooks, before early return
   const proposalForMe = !!proposal && proposal.proposedEquity.some((e) => e.playerId === myId);
@@ -82,17 +85,14 @@ export function PartnershipPanel() {
     close(false);
   };
 
-  const outerWrap = isMobile ? wrapMobile : wrap;
-  const innerCard = isMobile ? sheetMobile : card;
+  const outerWrap = landscape ? wrapLandscape : isMobile ? wrapMobile : wrap;
+  const innerCard = landscape ? cardLandscape : isMobile ? sheetMobile : card;
 
-  return (
-    <div style={outerWrap}>
-      <div style={innerCard}>
-        <div style={hdr}>
-          <span style={{ flex: 1, fontWeight: 800, fontSize: 18 }}>Partnerships</span>
-          <button aria-label="Close" onClick={() => close(false)} style={x}><X size={18} aria-hidden /></button>
-        </div>
-
+  // The section collection: rendered bare (stacked) for portrait/desktop — the
+  // fragment is transparent, so DOM is identical — or wrapped in a wrap-flex row
+  // in landscape so sections sit side-by-side (wide + short).
+  const sections = (
+    <>
         {/* Active partnerships */}
         {partnerships.map((pt) => (
           <div key={pt.partnershipId} style={sect}>
@@ -194,6 +194,17 @@ export function PartnershipPanel() {
             )}
           </div>
         )}
+    </>
+  );
+
+  return (
+    <div style={outerWrap}>
+      <div style={innerCard}>
+        <div style={hdr}>
+          <span style={{ flex: 1, fontWeight: 800, fontSize: 18 }}>Partnerships</span>
+          <button aria-label="Close" onClick={() => close(false)} style={x}><X size={18} aria-hidden /></button>
+        </div>
+        {landscape ? <div style={sectRow}>{sections}</div> : sections}
       </div>
     </div>
   );
@@ -213,9 +224,14 @@ const card: React.CSSProperties = {
 // ── Mobile bottom-sheet styles ──
 const wrapMobile: React.CSSProperties = { position: 'fixed', inset: 0, background: 'rgba(0,0,0,.5)', zIndex: 40, fontFamily: F, display: 'flex', alignItems: 'flex-end' };
 const sheetMobile: React.CSSProperties = { background: '#12121e', color: '#e8e8f0', borderRadius: '20px 20px 0 0', padding: 20, width: '100vw', maxHeight: '85dvh', overflowY: 'auto', boxShadow: '0 -8px 40px -8px rgba(0,0,0,.7)', paddingBottom: 'calc(20px + env(safe-area-inset-bottom))', paddingLeft: 'calc(20px + env(safe-area-inset-left))', paddingRight: 'calc(20px + env(safe-area-inset-right))', boxSizing: 'border-box' };
+// ── Mobile LANDSCAPE styles (wide + short) ──
+const wrapLandscape: React.CSSProperties = { position: 'fixed', inset: 0, background: 'rgba(0,0,0,.5)', zIndex: 40, fontFamily: F, display: 'flex', boxSizing: 'border-box', padding: 'max(8px, env(safe-area-inset-top)) max(10px, env(safe-area-inset-right)) max(8px, env(safe-area-inset-bottom)) max(20px, env(safe-area-inset-left))' };
+const cardLandscape: React.CSSProperties = { background: '#12121e', color: '#e8e8f0', borderRadius: 16, padding: 16, width: 'min(720px, 100%)', maxHeight: '100%', overflowY: 'auto', margin: 'auto', boxShadow: '0 24px 60px -20px rgba(0,0,0,.7)', boxSizing: 'border-box' };
 const hdr: React.CSSProperties = { display: 'flex', alignItems: 'center', marginBottom: 12 };
 const x: React.CSSProperties = { background: 'none', border: 'none', color: '#8888a0', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', padding: 0 };
 const sect: React.CSSProperties = { border: '1px solid #2a2a40', borderRadius: 12, padding: 12, marginBottom: 10 };
+// Landscape: sections flow left-to-right and wrap, each keeping a comfortable width.
+const sectRow: React.CSSProperties = { display: 'flex', flexDirection: 'row', flexWrap: 'wrap', gap: 12, alignItems: 'flex-start' };
 const sh: React.CSSProperties = { fontWeight: 800, fontSize: 14, marginBottom: 8 };
 const item: React.CSSProperties = { display: 'flex', gap: 8, alignItems: 'center', fontSize: 13, padding: '3px 0' };
 const eqInput: React.CSSProperties = {

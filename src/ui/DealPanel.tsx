@@ -5,6 +5,7 @@ import { socketManager } from '../network/SocketManager';
 import { EVENTS } from '../types/SocketEvents';
 import { formatMoney } from '../utils/format';
 import { useIsMobile } from './useIsMobile';
+import { useIsLandscape } from './useIsLandscape';
 import type { Player, RentDeal, PropertyState } from '../types/GameState';
 import { BOARD_SPACES } from '../constants/board';
 import { FONT_FAMILY } from '../constants/fonts';
@@ -81,14 +82,21 @@ export function DealPanel() {
   const [selectedCounterProps, setSelectedCounterProps] = useState<Set<number>>(new Set());
 
   const isMobile = useIsMobile();
+  const isLandscape = useIsLandscape();
+  const landscape = isMobile && isLandscape;
 
   if (!isOpen || !turn) return null;
 
   const name = (id: string) => players.find((p) => p.id === id)?.name ?? id;
   const emit = (ev: string, payload: object) => socketManager.emit(ev, payload);
 
-  const outerWrap = isMobile ? wrapMobile : wrap;
-  const innerCard = isMobile ? sheetMobile : card;
+  const outerWrap = landscape ? wrapLandscape : isMobile ? wrapMobile : wrap;
+  const innerCard = landscape ? cardLandscape : isMobile ? sheetMobile : card;
+  // In landscape, lay two sections side-by-side (wide + short); otherwise stack
+  // them exactly as before (fragment is transparent — identical DOM).
+  const sectStyle = landscape ? sectFlex : sect;
+  const twoSects = (a: React.ReactNode, b: React.ReactNode) =>
+    landscape ? <div style={sectRow}>{a}{b}</div> : <>{a}{b}</>;
 
   // Helper: compute eligible properties for a given player id
   const eligibleProps = (ownerId: string): PropertyState[] =>
@@ -138,23 +146,24 @@ export function DealPanel() {
           <Hdr title="Counter Offer" onClose={() => { setCounterMode(false); close(false); }} />
           <div style={line}>{name(deal.debtorId)} owes {formatMoney(deal.totalRentOwed)} total</div>
 
-          <div style={sect}>
-            <div style={sh}>Properties to offer</div>
-            <PropertyPicker
-              eligibleProps={debtorEligible}
-              selected={selectedCounterProps}
-              onToggle={toggleCounterProp}
-            />
-          </div>
-
-          <div style={sect}>
-            <label style={item}>Cash to offer
-              <input type="number" min={0} value={counterMoney} aria-label="counter money"
-                onChange={(e) => setCounterMoney(Math.max(0, +e.target.value))} style={inp} /></label>
-            <label style={item}>Exemption requested
-              <input type="number" min={0} max={deal.totalRentOwed} value={counterExemption} aria-label="counter exemption"
-                onChange={(e) => setCounterExemption(Math.max(0, Math.min(deal.totalRentOwed, +e.target.value)))} style={inp} /></label>
-          </div>
+          {twoSects(
+            <div style={sectStyle}>
+              <div style={sh}>Properties to offer</div>
+              <PropertyPicker
+                eligibleProps={debtorEligible}
+                selected={selectedCounterProps}
+                onToggle={toggleCounterProp}
+              />
+            </div>,
+            <div style={sectStyle}>
+              <label style={item}>Cash to offer
+                <input type="number" min={0} value={counterMoney} aria-label="counter money"
+                  onChange={(e) => setCounterMoney(Math.max(0, +e.target.value))} style={inp} /></label>
+              <label style={item}>Exemption requested
+                <input type="number" min={0} max={deal.totalRentOwed} value={counterExemption} aria-label="counter exemption"
+                  onChange={(e) => setCounterExemption(Math.max(0, Math.min(deal.totalRentOwed, +e.target.value)))} style={inp} /></label>
+            </div>,
+          )}
 
           <div style={row}>
             <button style={btnP} onClick={sendCounter}>Send Counter</button>
@@ -205,35 +214,36 @@ export function DealPanel() {
       <Hdr title="Can't pay rent?" onClose={() => close(false)} />
       <div style={line}>You owe {formatMoney(owed)} to {creditorIds.map(name).join(', ') || '—'}</div>
 
-      <div style={sect}>
-        <div style={sh}>Take a GO advance</div>
-        <div style={row}>
-          {[1, 2, 3].map((n) => (
-            <button key={n} style={btn} disabled={!canGo(n)} onClick={() => emit(EVENTS.LOAN_GO_DEDUCTION, { count: n })}>
-              Take {n} ({formatMoney(n * 2_000_000)})
-            </button>
-          ))}
-        </div>
-        <div style={{ fontSize: 11, color: '#8888a0', marginTop: 4 }}>Used {goUsed}/5 lifetime.</div>
-        {goSkips > 0 && (
-          <div style={{ fontSize: 11, color: '#8888a0', marginTop: 2 }}>GO passes to skip: {goSkips}</div>
-        )}
-      </div>
-
-      <div style={sect}>
-        <div style={sh}>Propose a rent deal</div>
-        <div style={{ fontSize: 12, color: '#8888a0', marginBottom: 6 }}>Properties to offer:</div>
-        <PropertyPicker
-          eligibleProps={myEligibleProps}
-          selected={selectedOfferProps}
-          onToggle={toggleOfferProp}
-        />
-        <label style={item}>Offer cash
-          <input type="number" min={0} value={offerMoney} aria-label="offer money" onChange={(e) => setOfferMoney(Math.max(0, +e.target.value))} style={inp} /></label>
-        <label style={item}>Request exemption
-          <input type="number" min={0} max={owed} value={exemption} aria-label="exemption" onChange={(e) => setExemption(Math.max(0, Math.min(owed, +e.target.value)))} style={inp} /></label>
-        <button style={btnP} onClick={sendOffer}>Propose deal</button>
-      </div>
+      {twoSects(
+        <div style={sectStyle}>
+          <div style={sh}>Take a GO advance</div>
+          <div style={row}>
+            {[1, 2, 3].map((n) => (
+              <button key={n} style={btn} disabled={!canGo(n)} onClick={() => emit(EVENTS.LOAN_GO_DEDUCTION, { count: n })}>
+                Take {n} ({formatMoney(n * 2_000_000)})
+              </button>
+            ))}
+          </div>
+          <div style={{ fontSize: 11, color: '#8888a0', marginTop: 4 }}>Used {goUsed}/5 lifetime.</div>
+          {goSkips > 0 && (
+            <div style={{ fontSize: 11, color: '#8888a0', marginTop: 2 }}>GO passes to skip: {goSkips}</div>
+          )}
+        </div>,
+        <div style={sectStyle}>
+          <div style={sh}>Propose a rent deal</div>
+          <div style={{ fontSize: 12, color: '#8888a0', marginBottom: 6 }}>Properties to offer:</div>
+          <PropertyPicker
+            eligibleProps={myEligibleProps}
+            selected={selectedOfferProps}
+            onToggle={toggleOfferProp}
+          />
+          <label style={item}>Offer cash
+            <input type="number" min={0} value={offerMoney} aria-label="offer money" onChange={(e) => setOfferMoney(Math.max(0, +e.target.value))} style={inp} /></label>
+          <label style={item}>Request exemption
+            <input type="number" min={0} max={owed} value={exemption} aria-label="exemption" onChange={(e) => setExemption(Math.max(0, Math.min(owed, +e.target.value)))} style={inp} /></label>
+          <button style={btnP} onClick={sendOffer}>Propose deal</button>
+        </div>,
+      )}
     </div></div>
   );
 }
@@ -250,10 +260,16 @@ const card: React.CSSProperties = { background: '#12121e', color: '#e8e8f0', bor
 // ── Mobile bottom-sheet styles ──
 const wrapMobile: React.CSSProperties = { position: 'fixed', inset: 0, background: 'rgba(0,0,0,.5)', zIndex: 40, fontFamily: F, display: 'flex', alignItems: 'flex-end' };
 const sheetMobile: React.CSSProperties = { background: '#12121e', color: '#e8e8f0', borderRadius: '20px 20px 0 0', padding: 20, width: '100vw', maxHeight: '85dvh', overflowY: 'auto', boxShadow: '0 -8px 40px -8px rgba(0,0,0,.7)', paddingBottom: 'calc(20px + env(safe-area-inset-bottom))', paddingLeft: 'calc(20px + env(safe-area-inset-left))', paddingRight: 'calc(20px + env(safe-area-inset-right))', boxSizing: 'border-box' };
+// ── Mobile LANDSCAPE styles (wide + short) ──
+const wrapLandscape: React.CSSProperties = { position: 'fixed', inset: 0, background: 'rgba(0,0,0,.5)', zIndex: 40, fontFamily: F, display: 'flex', boxSizing: 'border-box', padding: 'max(8px, env(safe-area-inset-top)) max(10px, env(safe-area-inset-right)) max(8px, env(safe-area-inset-bottom)) max(20px, env(safe-area-inset-left))' };
+const cardLandscape: React.CSSProperties = { background: '#12121e', color: '#e8e8f0', borderRadius: 16, padding: 16, width: 'min(680px, 100%)', maxHeight: '100%', overflowY: 'auto', margin: 'auto', boxShadow: '0 24px 60px -20px rgba(0,0,0,.7)', boxSizing: 'border-box' };
 const hdr: React.CSSProperties = { display: 'flex', alignItems: 'center', marginBottom: 12 };
 const x: React.CSSProperties = { background: 'none', border: 'none', color: '#8888a0', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', padding: 0 };
 const line: React.CSSProperties = { fontSize: 14, margin: '4px 0' };
 const sect: React.CSSProperties = { border: '1px solid #2a2a40', borderRadius: 12, padding: 12, marginTop: 12 };
+// Landscape: two sections side-by-side; each fills half the wide card.
+const sectRow: React.CSSProperties = { display: 'flex', flexDirection: 'row', gap: 12, alignItems: 'flex-start', marginTop: 12 };
+const sectFlex: React.CSSProperties = { ...sect, flex: 1, minWidth: 0, marginTop: 0 };
 const sh: React.CSSProperties = { fontWeight: 800, fontSize: 14, marginBottom: 8 };
 const item: React.CSSProperties = { display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: 13, margin: '6px 0', gap: 10 };
 const inp: React.CSSProperties = { width: 150, maxWidth: '45vw', background: '#08080f', color: '#e8e8f0', border: '1px solid #2a2a40', borderRadius: 8, padding: '6px 8px', fontFamily: F, minHeight: 44, boxSizing: 'border-box' };

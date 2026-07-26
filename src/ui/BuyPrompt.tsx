@@ -6,6 +6,7 @@ import { BOARD_SPACES } from '../constants/board';
 import { COLOR_GROUP_HEX } from '../constants/theme';
 import { formatMoney } from '../utils/format';
 import { useIsMobile } from './useIsMobile';
+import { useIsLandscape } from './useIsLandscape';
 import { FONT_FAMILY } from '../constants/fonts';
 import { DeedCard } from './DeedCard';
 
@@ -17,6 +18,8 @@ export function BuyPrompt() {
   const phase = useGameStore((s) => s.state?.turn.phase);
   const properties = useGameStore((s) => s.state?.properties);
   const isMobile = useIsMobile();
+  const isLandscape = useIsLandscape();
+  const landscape = isMobile && isLandscape;
 
   if (!me || !isMyTurn || phase !== 'action') return null;
 
@@ -33,7 +36,7 @@ export function BuyPrompt() {
   const accent = space.colorGroup ? COLOR_GROUP_HEX[space.colorGroup] : '#d4af37';
   const cardFrame = space.cardFrame;
   const mortgaged = !!owned?.isMortgaged;
-  const deedW = isMobile ? 128 : 150;
+  const deedW = landscape ? 112 : isMobile ? 128 : 150;
 
   const buy = () => socketManager.emit(EVENTS.TURN_BUY_PROPERTY);
   const decline = () => socketManager.emit(EVENTS.TURN_END);
@@ -57,6 +60,34 @@ export function BuyPrompt() {
       {!canAfford && <div style={{ color: '#e5533d', marginTop: 8, fontSize: 13 }}>Not enough cash</div>}
     </>
   );
+
+  // ── Mobile LANDSCAPE (wide + short): deed on the left, name/price/buttons on
+  // the right so the dialog is wide-and-short rather than tall. ──
+  if (landscape) {
+    return (
+      <div style={wrapLandscape}>
+        <div style={cardLandscape}>
+          <div style={rowLandscape}>
+            {cardFrame != null && (
+              <DeedCard cardFrame={cardFrame} mortgaged={mortgaged} width={deedW} aria-label={`${space.name} deed`} />
+            )}
+            <div style={infoColLandscape}>
+              <div style={{ height: 8, borderRadius: 6, background: accent, marginBottom: 8 }} />
+              <div style={{ fontWeight: 800, fontSize: 20 }}>{space.name}</div>
+              <div style={{ color: '#9a8f7c', margin: '4px 0 12px', fontVariantNumeric: 'tabular-nums' }}>
+                Price {formatMoney(price)}
+              </div>
+              <div style={{ display: 'flex', gap: 10 }}>
+                <button onClick={buy} disabled={!canAfford} style={{ ...btn, ...(canAfford ? buyBtn : disabledBtn) }}>Buy</button>
+                <button onClick={decline} style={{ ...btn, ...declineBtn }}>Decline</button>
+              </div>
+              {!canAfford && <div style={{ color: '#e5533d', marginTop: 8, fontSize: 13 }}>Not enough cash</div>}
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   if (isMobile) {
     return (
@@ -101,3 +132,17 @@ const sheetMobile: React.CSSProperties = {
   paddingRight: 'calc(22px + env(safe-area-inset-right))',
   boxSizing: 'border-box',
 };
+// ── Mobile LANDSCAPE styles (wide + short) ──
+const wrapLandscape: React.CSSProperties = {
+  position: 'fixed', inset: 0, fontFamily: FONT, zIndex: 40, display: 'flex',
+  boxSizing: 'border-box', pointerEvents: 'none',
+  padding:
+    'max(8px, env(safe-area-inset-top)) max(10px, env(safe-area-inset-right)) max(8px, env(safe-area-inset-bottom)) max(20px, env(safe-area-inset-left))',
+};
+const cardLandscape: React.CSSProperties = {
+  pointerEvents: 'auto', background: '#fbf6ec', color: '#3b3224', borderRadius: 18,
+  padding: 18, width: 'min(560px, 100%)', maxHeight: '100%', overflowY: 'auto', margin: 'auto',
+  boxShadow: '0 24px 60px -20px rgba(0,0,0,.6)', boxSizing: 'border-box',
+};
+const rowLandscape: React.CSSProperties = { display: 'flex', flexDirection: 'row', gap: 16, alignItems: 'center' };
+const infoColLandscape: React.CSSProperties = { flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column' };

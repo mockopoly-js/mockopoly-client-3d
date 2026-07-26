@@ -6,6 +6,7 @@ import { BOARD_SPACES } from '../constants/board';
 import { COLOR_GROUP_HEX } from '../constants/theme';
 import { formatMoney } from '../utils/format';
 import { useIsMobile } from './useIsMobile';
+import { useIsLandscape } from './useIsLandscape';
 import { FONT_FAMILY } from '../constants/fonts';
 
 // Color groups that support building (exclude railroad and utility)
@@ -20,6 +21,8 @@ export function MortgagePanel() {
   const myId = useGameStore((s) => s.myPlayerId);
   const partnerships = useGameStore((s) => s.state?.partnerships);
   const isMobile = useIsMobile();
+  const isLandscape = useIsLandscape();
+  const landscape = isMobile && isLandscape;
 
   if (idx == null) return null;
   // .at() is BoardSpace | undefined — an out-of-range idx is a real runtime
@@ -110,6 +113,44 @@ export function MortgagePanel() {
     </>
   );
 
+  // ── Mobile LANDSCAPE (wide + short): header/meta on top, the mortgage and
+  // build button-grids laid side-by-side so the dialog is wide-and-short. ──
+  if (landscape) {
+    return (
+      <div style={wrapLandscape}>
+        <div style={cardLandscape}>
+          <div style={hdr}>
+            <span style={{ ...strip, background: accent }} />
+            <span style={{ flex: 1, fontWeight: 800, fontSize: 18 }}>{space.name}</span>
+            <button onClick={() => selectProperty(null)} aria-label="Close" style={x}><X size={18} aria-hidden /></button>
+          </div>
+          <div style={meta}>
+            {prop.hasHotel ? 'Hotel' : `${prop.houses} house${prop.houses === 1 ? '' : 's'}`}
+            {prop.isMortgaged && ' · Mortgaged'}
+            {houseCost > 0 && ` · House ${formatMoney(houseCost)}`}
+          </div>
+          {!canManage && <div style={{ color: '#8888a0', fontSize: 13 }}>You do not own this property.</div>}
+          <div style={gridsRowLandscape}>
+            {mine && (
+              <div style={gridColLandscape}>
+                <button style={btn} disabled={!canMortgage} onClick={() => emit(EVENTS.MORTGAGE_APPLY)}>Mortgage</button>
+                <button style={btn} disabled={!canLift} onClick={() => emit(EVENTS.MORTGAGE_LIFT)}>Unmortgage</button>
+              </div>
+            )}
+            {canManage && canBuild && (
+              <div style={gridColLandscape}>
+                <button style={btn} disabled={!canBuyHouse} onClick={() => emit(EVENTS.BUILD_BUY_HOUSE)}>Buy House</button>
+                <button style={btn} disabled={!canSellHouse} onClick={() => emit(EVENTS.BUILD_SELL_HOUSE)}>Sell House</button>
+                <button style={btn} disabled={!canBuyHotel} onClick={() => emit(EVENTS.BUILD_BUY_HOTEL)}>Buy Hotel</button>
+                <button style={btn} disabled={!canSellHotel} onClick={() => emit(EVENTS.BUILD_SELL_HOTEL)}>Sell Hotel</button>
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   if (isMobile) {
     return (
       <div style={wrapMobile}>
@@ -147,3 +188,18 @@ const sheetMobile: React.CSSProperties = {
   paddingRight: 'calc(20px + env(safe-area-inset-right))',
   boxSizing: 'border-box',
 };
+
+// ── Mobile LANDSCAPE styles (wide + short) ──
+const wrapLandscape: React.CSSProperties = {
+  position: 'fixed', inset: 0, background: 'rgba(0,0,0,.5)', zIndex: 40, fontFamily: FONT_FAMILY,
+  display: 'flex', boxSizing: 'border-box',
+  padding:
+    'max(8px, env(safe-area-inset-top)) max(10px, env(safe-area-inset-right)) max(8px, env(safe-area-inset-bottom)) max(20px, env(safe-area-inset-left))',
+};
+const cardLandscape: React.CSSProperties = {
+  background: '#12121e', color: '#e8e8f0', borderRadius: 16, padding: 16,
+  width: 'min(560px, 100%)', maxHeight: '100%', overflowY: 'auto', margin: 'auto',
+  boxShadow: '0 24px 60px -20px rgba(0,0,0,.7)', boxSizing: 'border-box',
+};
+const gridsRowLandscape: React.CSSProperties = { display: 'flex', flexDirection: 'row', gap: 12, alignItems: 'flex-start' };
+const gridColLandscape: React.CSSProperties = { ...grid, flex: 1, minWidth: 0 };
