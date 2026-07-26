@@ -3,7 +3,11 @@ import * as THREE from 'three';
 import { useGLTF } from '@react-three/drei';
 import { useFrame } from '@react-three/fiber';
 import { BOARD_WORLD_SIZE } from './positions';
-import { rebuildForestAsChunks, isForestGroundMesh } from './forestChunking';
+import {
+  rebuildForestAsChunks,
+  isForestGroundMesh,
+  horizontalNearestDistanceToBox,
+} from './forestChunking';
 
 /**
  * The low-poly FOREST environment (`public/models/forest.glb`, ~1.7 MB,
@@ -145,16 +149,24 @@ const FOREST_SWAP_INTERVAL = 0.05;                   // s: throttle the per-chun
  * render (Minecraft-style POP-IN at the edge — intended; no fog is added to hide
  * it, per the no-extra-cost constraint).
  *
- * CONSISTENCY (why it is a CLEAN ring, not ragged): the nearest distance is measured
- * against each chunk's INSTANCED world AABB (covers ALL of the chunk's instances)
- * via `Box3.clampPoint` — the TRUE nearest point on the chunk's extent, not a loose
- * bounding-sphere proxy. A sphere's `distanceTo(center) − radius` over-estimates
- * closeness for tall/elongated/flat chunks (a mountain's radius folds in its full
- * height; a flat ground cell's folds in its half-diagonal), so the 32u cut used to
- * land at a DIFFERENT true distance per chunk → ragged, with tall relief culling
- * inconsistently. The AABB clamp makes every chunk cull at the SAME true distance
- * (uniform ring) and guarantees a chunk with ANY instance within the radius always
- * renders (no close-culling).
+ * CONSISTENCY (why it is a CLEAN ring, not ragged): the distance is the HORIZONTAL
+ * (ground-plane, XZ-only) nearest distance from the camera to each chunk's INSTANCED
+ * world AABB (covers ALL of the chunk's instances) — see
+ * {@link horizontalNearestDistanceToBox}. The AABB is correct and instanced-aware,
+ * but a full 3-D nearest-point test (`Box3.clampPoint`) folds each chunk's VERTICAL
+ * extent into the distance, and that extent varies hugely by prop type over the SAME
+ * ground cell (a flat ground tile spans tenths of a unit in Y; the trees on it span
+ * several; a moss mountain spans tens). With the camera orbiting a few units above the
+ * ground, a tall chunk's box rises toward the camera height and reports a SMALLER 3-D
+ * nearest distance than the flat ground box under it, so the two crossed the 32u ring
+ * at DIFFERENT camera distances → the ground culled while the trees/mountain on it
+ * stayed (a hole in the middle of the visible terrain) and the ring read as ragged.
+ * Dropping Y makes every chunk over a ground patch — ground, foliage, rock, mountain —
+ * measure the SAME distance and cross the ring TOGETHER (uniform ring, adjacent chunks
+ * cull together, no mid-field holes). Because the horizontal distance is always ≤ the
+ * 3-D distance, the test is strictly MORE inclusive than before: a chunk with ANY
+ * instance within the radius always renders (no close-culling), and holes can only
+ * ever fall BEYOND the ring.
  *
  * The check runs in the SAME throttled loop as the opaque/fade swap and reuses a
  * module-level scratch vector for the clamp → no new loop, no per-frame allocation.
@@ -407,9 +419,11 @@ interface ForestChunkMeta {
   worldRadius: number;
   /**
    * World-space AABB covering ALL of the chunk's instances (static after mount).
-   * Used by the render-distance cull to measure the TRUE nearest point on the
-   * chunk's extent (`Box3.clampPoint`), which is tighter and more uniform than the
-   * bounding-sphere proxy for tall/elongated/flat chunks → a clean cull ring.
+   * Used by the render-distance cull, which measures the HORIZONTAL (XZ-only)
+   * nearest distance from the camera to this box (see
+   * {@link horizontalNearestDistanceToBox}). Only the box's XZ footprint is read;
+   * its Y extent is intentionally ignored so chunks of every prop type over the
+   * same ground cell cull at the same distance → a clean, uniform ring.
    */
   worldBox: THREE.Box3;
   /**
@@ -421,14 +435,6 @@ interface ForestChunkMeta {
   /** Current material state (which variant `mesh.material` points at). */
   isOpaque: boolean;
 }
-
-/**
- * Module-level scratch for the per-frame render-distance clamp (`Box3.clampPoint`
- * writes the nearest point here). Reused across every chunk and every frame so the
- * throttled loop performs ZERO per-frame allocation. Safe because the loop runs
- * synchronously on the main thread (there is one ForestEnvironment instance).
- */
-const _forestNearestPoint = new THREE.Vector3();
 
 /**
  * Build the static per-chunk metadata for the mobile render-distance cull + swap.
@@ -446,7 +452,8 @@ const _forestNearestPoint = new THREE.Vector3();
  *     swap exactly as before.
  *   • worldBox — the instanced AABB transformed to world (`Box3.applyMatrix4`
  *     re-bounds all 8 corners, so it is correct under the group scale/rotation).
- *     Used by the render-distance cull for a TRUE nearest-point test.
+ *     Used by the render-distance cull, which reads only its XZ footprint (the
+ *     HORIZONTAL nearest distance — see {@link horizontalNearestDistanceToBox}).
  *
  * Returns `null` if any chunk's world matrix is not ready yet (degenerate/empty
  * bound) so the caller can retry on a later frame rather than cache a wrong meta.
@@ -699,19 +706,22 @@ export function ForestEnvironment({ isMobile = false }: { isMobile?: boolean }):
     const camPos = state.camera.position;
     const metas = store.metas;
     for (const meta of metas) {
-      // ── MINECRAFT-STYLE RENDER DISTANCE (TRUE nearest-point cull) ────────────
-      // Nearest point on the chunk's INSTANCED world AABB to the camera: any
-      // instance within FOREST_RENDER_DISTANCE keeps the chunk visible; once EVERY
-      // instance is beyond it the chunk is skipped entirely (visible=false → no
-      // draw call/geometry/fill). The AABB clamp is the true nearest distance, so
-      // every chunk (trees/rocks/mountains/ground) culls at the SAME distance — a
-      // clean uniform ring, not the ragged sphere-radius cut. Near-board chunks
-      // overlap the board footprint → nearest ≈ 0 → they never hide (the forest
-      // ring around the board and the board itself always render). Runs BEFORE the
-      // swap so a hidden chunk skips the swap work this frame. Only reassign
-      // .visible on an actual change to avoid churn.
-      meta.worldBox.clampPoint(camPos, _forestNearestPoint);
-      const boxNearest = _forestNearestPoint.distanceTo(camPos);
+      // ── MINECRAFT-STYLE RENDER DISTANCE (HORIZONTAL nearest-distance cull) ────
+      // Horizontal (XZ-only) nearest distance from the camera to the chunk's
+      // INSTANCED world AABB footprint: any instance whose ground-plane distance is
+      // within FOREST_RENDER_DISTANCE keeps the chunk visible; once the whole
+      // footprint is beyond it the chunk is skipped entirely (visible=false → no
+      // draw call/geometry/fill). Ignoring the box's Y extent is what makes the ring
+      // UNIFORM: chunks of every prop type over the same ground cell (flat ground,
+      // the trees on it, a tall mountain) measure the SAME distance and cross the
+      // ring TOGETHER — no ground culling out from under trees, no ragged
+      // type-dependent cut (see FOREST_RENDER_DISTANCE / horizontalNearestDistanceToBox).
+      // The horizontal distance is always ≤ the 3-D distance, so the test is strictly
+      // MORE inclusive: a chunk with ANY instance within the radius always renders (no
+      // close-culling). Near-board chunks overlap the board footprint → distance ≈ 0 →
+      // they never hide. Runs BEFORE the swap so a hidden chunk skips the swap work
+      // this frame. Only reassign .visible on an actual change to avoid churn.
+      const boxNearest = horizontalNearestDistanceToBox(meta.worldBox, camPos.x, camPos.z);
       const shouldRender = boxNearest <= FOREST_RENDER_DISTANCE;
       if (meta.mesh.visible !== shouldRender) meta.mesh.visible = shouldRender;
       if (!shouldRender) continue;

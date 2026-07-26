@@ -1,6 +1,10 @@
 import { describe, it, expect } from 'vitest';
 import * as THREE from 'three';
-import { rebuildForestAsChunks, isForestGroundMesh } from './forestChunking';
+import {
+  rebuildForestAsChunks,
+  isForestGroundMesh,
+  horizontalNearestDistanceToBox,
+} from './forestChunking';
 
 /** Build an InstancedMesh named `name` with instances at the given XZ positions. */
 function makeMesh(name: string, positions: [number, number][]): THREE.InstancedMesh {
@@ -87,6 +91,64 @@ describe('isForestGroundMesh', () => {
     for (const n of ['PP_Tree_10', 'PP_Birch_Tree_05', 'PP_Hyacinth_04', 'PP_Rock_Moss_Grown_11']) {
       expect(isForestGroundMesh(n)).toBe(false);
     }
+  });
+});
+
+describe('horizontalNearestDistanceToBox', () => {
+  it('returns 0 when the point XZ is inside the box footprint, ignoring Y', () => {
+    const box = new THREE.Box3(new THREE.Vector3(-5, -1, -5), new THREE.Vector3(5, 40, 5));
+    // Point far ABOVE the box but inside the XZ footprint → horizontal distance 0.
+    expect(horizontalNearestDistanceToBox(box, 0, 0)).toBe(0);
+    expect(horizontalNearestDistanceToBox(box, 4.9, -4.9)).toBe(0);
+  });
+
+  it('measures the true horizontal gap to the nearest edge/corner, ignoring Y', () => {
+    const box = new THREE.Box3(new THREE.Vector3(0, -100, 0), new THREE.Vector3(10, 100, 10));
+    // Straight off the +X face by 5 (z inside) → 5, regardless of huge Y extent.
+    expect(horizontalNearestDistanceToBox(box, 15, 5)).toBeCloseTo(5, 6);
+    // Off a corner: (3,4) beyond the (10,10) corner → 5.
+    expect(horizontalNearestDistanceToBox(box, 13, 14)).toBeCloseTo(5, 6);
+  });
+
+  it('is UNIFORM across chunks over the same ground cell despite wildly different Y extents', () => {
+    // Same XZ footprint (one ~9u grid cell), three prop types stacked on it:
+    // flat ground, mid-height trees, a tall moss mountain. Their world AABBs share
+    // the XZ footprint but differ enormously in Y.
+    const cellMin = new THREE.Vector3(20, 0, -4.5);
+    const cellMax = new THREE.Vector3(29, 0, 4.5);
+    const ground = new THREE.Box3(cellMin.clone(), cellMax.clone().setY(0.3));
+    const trees = new THREE.Box3(cellMin.clone(), cellMax.clone().setY(6));
+    const mountain = new THREE.Box3(cellMin.clone(), cellMax.clone().setY(34));
+
+    // Camera orbiting a few units above the ground.
+    const camX = 0;
+    const camZ = 0;
+
+    const dGround = horizontalNearestDistanceToBox(ground, camX, camZ);
+    const dTrees = horizontalNearestDistanceToBox(trees, camX, camZ);
+    const dMountain = horizontalNearestDistanceToBox(mountain, camX, camZ);
+
+    // All three report the SAME horizontal distance → they cross any render-distance
+    // ring together (uniform ring, no ground-out-from-under-trees mid-field hole).
+    expect(dGround).toBeCloseTo(20, 6); // 20u to the +X near face
+    expect(dTrees).toBeCloseTo(dGround, 6);
+    expect(dMountain).toBeCloseTo(dGround, 6);
+
+    // CONTRAST — the OLD full-3D nearest-point metric (Box3.clampPoint) folds in the
+    // Y extent, so with the camera a few units up the tall chunks report a SMALLER
+    // distance than the flat ground under them → they crossed the ring at different
+    // camera distances (the ragged ring / boundary hole this fix removes).
+    const cam = new THREE.Vector3(camX, 5, camZ);
+    const p = new THREE.Vector3();
+    const old3d = (b: THREE.Box3) => b.clampPoint(cam, p).distanceTo(cam);
+    const oldGround = old3d(ground);
+    const oldTrees = old3d(trees);
+    const oldMountain = old3d(mountain);
+    // Under the old metric the mountain reads as measurably CLOSER than the ground
+    // (its box rises to the camera's Y), so a 32u cut kept it while dropping the
+    // ground beneath it. The new metric makes that divergence exactly zero.
+    expect(oldGround - oldMountain).toBeGreaterThan(0.5);
+    expect(oldTrees).toBeLessThan(oldGround);
   });
 });
 
