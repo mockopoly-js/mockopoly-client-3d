@@ -7,7 +7,8 @@ import { tileToWorld, buildTilePath } from './positions';
 import { stackOffset } from './hopPath';
 import { TOKEN_HEX } from '../constants/theme';
 import { CharacterToken, type CharacterTokenHandle } from './CharacterToken';
-import { resolveCharacter, DEFAULT_CHARACTER } from '../constants/characters';
+import { resolveCharacter, DEFAULT_CHARACTER, toMobileCharacterUrl } from '../constants/characters';
+import { useIsMobile } from '../ui/useIsMobile';
 import type { Player } from '../types/GameState';
 
 const BASE_Y = 0.15;
@@ -153,6 +154,18 @@ function destOffset(playerId: string, to: number, players: Player[]): [number, n
 export function PlayerTokens() {
   const players = (useGameStore((s) => s.state?.players) ?? []).filter((p) => !p.isBankrupt);
 
+  // MOBILE-ONLY: load the meshopt-compressed character variants (smaller
+  // download + faster parse, skinning + animation preserved LOSSLESSLY — see
+  // toMobileCharacterUrl). Desktop keeps the byte-identical originals. The
+  // decoder is bundled in three-stdlib + auto-installed by drei's useGLTF, so no
+  // client wiring is needed. Mirrors the isMobile gating used by
+  // ForestEnvironment / CityDressing.
+  const isMobile = useIsMobile();
+  const charUrl = (id: string | null | undefined): string => {
+    const url = resolveCharacter(id ?? DEFAULT_CHARACTER).url;
+    return isMobile ? toMobileCharacterUrl(url) : url;
+  };
+
   // Stable identity key for the current roster's (id, character) pairs. Extracted
   // so the preload effect below depends on the CONTENT (re-runs only when a
   // player's chosen character actually changes), not on the players array's
@@ -165,10 +178,12 @@ export function PlayerTokens() {
   // fresh `players` runs only when a player's chosen character actually changes.
   useEffect(() => {
     for (const p of players) {
-      CharacterToken.preload(resolveCharacter(p.character ?? DEFAULT_CHARACTER).url);
+      // Preload the SAME variant the token will actually load (mobile meshopt vs
+      // desktop original) so the drei cache is warm for the right url.
+      CharacterToken.preload(charUrl(p.character));
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- rosterCharKey is the content-hash of exactly the (id, character) info the loop reads; adding `players` would re-run this preload on every unrelated GAME_STATE_UPDATE
-  }, [rosterCharKey]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- rosterCharKey is the content-hash of exactly the (id, character) info the loop reads; adding `players` would re-run this preload on every unrelated GAME_STATE_UPDATE. isMobile is included so a viewport crossing the mobile breakpoint preloads the correct variant.
+  }, [rosterCharKey, isMobile]);
 
   // Per-player "is walking" → drives Idle↔Walk. React state so the clip prop
   // re-renders; a ref mirror lets useFrame flip it without a stale closure and
@@ -538,7 +553,7 @@ export function PlayerTokens() {
         const [x, , z] = tileToWorld(p.position);
         const [ox, oz] = restOffset(p, players);
         const hex = TOKEN_HEX[p.token];
-        const char = resolveCharacter(p.character ?? DEFAULT_CHARACTER);
+        const url = charUrl(p.character);
         const clip = moving[p.id] ? 'Run' : 'Idle';
         return (
           <group
@@ -572,7 +587,7 @@ export function PlayerTokens() {
               ref={(h) => {
                 chars.current[p.id] = h;
               }}
-              url={char.url}
+              url={url}
               scale={CHAR_SCALE}
               clip={clip}
               isCelebrating={!!isCelebrating.current[p.id]}

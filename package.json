@@ -28,6 +28,7 @@
     "models:city:mobile": "node scripts/gen-city-mobile.mjs",
     "models:board:mobile": "node scripts/gen-board-mobile.mjs",
     "models:characters": "node scripts/gen-characters.mjs",
+    "models:characters:mobile": "node scripts/gen-characters-mobile.mjs",
     "models:thumbnails": "node scripts/gen-character-thumbnails.mjs",
     "models:build": "npm run models:tokens && npm run models:buildings && npm run models:city-props && npm run models:forest && npm run models:city"
   },
