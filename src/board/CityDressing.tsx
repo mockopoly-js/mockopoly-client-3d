@@ -58,6 +58,7 @@ const CITY_FILL_HALF = 3.55;  // target half-extent on X and Z axes (safely insi
 const CITY_PAN_X = 0;         // world-X fine-tune (post-scale); 0 = bbox-centered on origin
 const CITY_PAN_Z = 0;         // world-Z fine-tune (post-scale); 0 = bbox-centered on origin
 const CITY_Y = 0.02;          // rest the city ground on the board top (TOP_Y)
+const CITY_Y_LIFT = 0.08;     // mobile-only: lift city off board surface to prevent z-fight
 const CITY_ROT = 0;           // radians; nudge to aim streets toward the camera
 
 const CITY_URL = '/models/city.glb';
@@ -165,7 +166,7 @@ export function CityDressing({ isMobile = false }: { isMobile?: boolean }): Reac
     <group
       ref={groupRef}
       name="city-center"
-      position={[CITY_PAN_X, CITY_Y, CITY_PAN_Z]}
+      position={[CITY_PAN_X, CITY_Y + (isMobile ? CITY_Y_LIFT : 0), CITY_PAN_Z]}
       rotation={[0, CITY_ROT, 0]}
       scale={groupScale as [number, number, number] | number}
     >
