@@ -21,10 +21,16 @@ export const INITIAL_CAM_OFFSET: [number, number, number] = [-7.27, 7.04, 0.24];
 // sky/forest toward the edges (less empty background) without tilting the view.
 //
 // MOBILE_CAM_DIST is the single live-tune knob: SMALLER = closer = board bigger.
-// Desktop distance is ~10.12; 6.9 fills the short landscape viewport well.
-// Only CameraRig consumes this, and only when useIsMobile() is true — desktop
-// framing (INITIAL_CAM_OFFSET) is completely untouched.
-export const MOBILE_CAM_DIST = 6.9;
+// Desktop distance is ~10.12. Was 6.9; tightened ~25% to 5.2 so the board
+// DOMINATES the viewport at spawn and the dpr-2 board text reads well (bigger
+// glyphs on screen = more device pixels per glyph, which offsets the dpr 2.5->2
+// drop). Still along the SAME ray (same elevation/angle), so the board stays
+// fully in frame within the forest clearing — this only dollies in, it does NOT
+// scale the board mesh (scaling would push the board out into the trees). The
+// camera stays FREE: the user can still orbit/zoom out; this is just the spawn
+// framing. Only CameraRig consumes this, and only when useIsMobile() is true —
+// desktop framing (INITIAL_CAM_OFFSET) is completely untouched.
+export const MOBILE_CAM_DIST = 5.2;
 const _offsetLen = Math.hypot(
   INITIAL_CAM_OFFSET[0],
   INITIAL_CAM_OFFSET[1],

@@ -9,6 +9,7 @@ import {
   HueSaturation,
   BrightnessContrast,
   SMAA,
+  FXAA,
 } from '@react-three/postprocessing';
 import { SoftShadows, Stats, useTexture } from '@react-three/drei';
 import { BoardTiles } from '../board/BoardTiles';
@@ -142,11 +143,13 @@ const HEMI_INTENSITY = 0.25;
  *  - MOBILE_DPR_MOVING — the cheap dpr held while the camera ORBITS / zooms /
  *    pans, so the interaction stays fast and smooth. Token walk, dice roll and
  *    character animation deliberately DO NOT change dpr — only camera movement.
- *  - MOBILE_DPR_STILL — the phone's NATIVE dpr, CAPPED AT 2.5. Under always-render
+ *  - MOBILE_DPR_STILL — the phone's NATIVE dpr, CAPPED AT 2. Under always-render
  *    the scene draws continuously, so a dpr of 3 would thermally throttle an
  *    iPhone (that was only sustainable under the old on-demand path where rest
- *    rendered 0 frames). min(devicePixelRatio, 2) (≈2 on iPhone 13 Pro) keeps a
- *    razor-sharp board (4096 texture + anisotropy/mipmaps + SMAA) thermally
+ *    rendered 0 frames). The cap was 2.5; dropping it to 2 cuts the FIXED
+ *    full-screen fill (HDRI bg + postFX) by ~36% (2²/2.5² = 0.64), the dominant
+ *    empty-board cost. min(devicePixelRatio, 2) (≈2 on iPhone 13 Pro) keeps a
+ *    readable board (4096 texture + anisotropy/mipmaps + FXAA) thermally
  *    sustainable. It is also the initial `dpr` prop so the first paint is crisp.
  * MOBILE_SETTLE_MS is the no-camera-motion debounce before the crisp dpr is
  * restored. Kept short (120ms) so the crisp resolution lands quickly after the
@@ -157,7 +160,7 @@ const HEMI_INTENSITY = 0.25;
 const MOBILE_DPR_MOVING = 1.3;
 const MOBILE_DPR_STILL = Math.min(
   typeof window !== 'undefined' ? window.devicePixelRatio || 2 : 2,
-  2.5,
+  2,
 );
 const MOBILE_SETTLE_MS = 120;
 
@@ -524,11 +527,18 @@ export function GameScene() {
           AO passes and Bloom's mip-chain downsample/upsample — are the dominant
           mobile FPS cost and contribute NOTHING to sharpness, so they are
           dropped here. Kept, because they are cheap and carry the "game look" +
-          crispness: ToneMapping, the HueSaturation / BrightnessContrast color
-          grade (the punchy saturation/contrast), and SMAA (cheap edge AA that
-          keeps edges crisp). Effect order mirrors the desktop tail:
-          ToneMapping -> grade -> SMAA. multisampling={0} + stencilBuffer={false}
-          match desktop so SMAA (not MSAA) does the anti-aliasing.
+          crispness: ToneMapping and the HueSaturation / BrightnessContrast color
+          grade (the punchy saturation/contrast).
+
+          Edge AA is FXAA, NOT SMAA. SMAA is ~4 extra full-screen passes (edge
+          detect + blend-weight + neighborhood blend + its own render targets) —
+          pure fixed fill, the very cost we're cutting on the empty board. FXAA
+          is a single per-fragment effect that merges straight into the existing
+          color-grade EffectPass, so it adds no standalone full-screen pass.
+          Milder edge quality than SMAA, but at dpr 2 the extra device pixels
+          carry the edges. Effect order mirrors the desktop tail:
+          ToneMapping -> grade -> FXAA. multisampling={0} + stencilBuffer={false}
+          match desktop so the shader effect (not MSAA) does the anti-aliasing.
 
           Rendered as a SEPARATE composer (rather than conditionally toggling
           children of one) because @react-three/postprocessing merges/orders
@@ -542,8 +552,9 @@ export function GameScene() {
           <HueSaturation saturation={SATURATION} />
           {/* Brightness/contrast trim (both 0 = unchanged); slight contrast punch. */}
           <BrightnessContrast brightness={BRIGHTNESS} contrast={CONTRAST} />
-          {/* Edge AA (keeps edges crisp without the fill cost of the AO/Bloom passes). */}
-          <SMAA />
+          {/* Edge AA: FXAA merges into the grade EffectPass (no standalone
+              full-screen pass like SMAA) — the fill win over SMAA on mobile. */}
+          <FXAA />
         </EffectComposer>
       ) : (
         <EffectComposer multisampling={0} stencilBuffer={false}>
