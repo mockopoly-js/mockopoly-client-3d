@@ -121,6 +121,15 @@ function BoardSlab({ texture }: { texture: THREE.Texture }) {
       polygonOffsetUnits: -1,
     });
 
+    // EXCLUDE THE BOARD FROM SCENE FOG (mobile adds a distance fog via scene.fog;
+    // see GameScene FOG_* consts). The board must stay crisp + unfogged even
+    // though it renders in a pass where scene.fog is live, so both slab materials
+    // opt out at the material level. Desktop-inert: scene.fog is null on desktop,
+    // so USE_FOG is never emitted regardless and the compiled program + rendered
+    // pixels are byte-identical — safe to set unconditionally.
+    edge.fog = false;
+    top.fog = false;
+
     // Inject a saturation boost into the TOP face shader only — applied AFTER
     // tonemapping_fragment, operating directly on gl_FragColor.rgb so that
     // lighting, IBL, and ACES tone-mapping are already baked in and cannot wash

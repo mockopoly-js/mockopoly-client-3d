@@ -24,12 +24,14 @@
  *       transform in the original FLOAT space (verified byte-identical instance
  *       T/S), so all downstream position math is unchanged.
  *
- *   (B) TRUE multi-tier LOD: every SMALL-PROP relief type (trees, flowers,
- *       mushrooms, grass, rocks) keeps its FULL geometry AND gains TWO decimated
- *       sibling meshes — `<name>_LOD1` (kept ~50%) and `<name>_LOD2` (kept ~25%,
- *       more aggressive). MOUNTAINS are EXCLUDED — they are large relief surfaces
- *       like the ground and their decimation tore the ridge on device, so they
- *       keep full geometry with NO `_LOD*` (see below). At runtime (mobile only)
+ *   (B) TRUE multi-tier LOD: every SMALL-PROP relief type (trees, birch, flowers,
+ *       mushrooms, grass) keeps its FULL geometry AND gains TWO decimated
+ *       sibling meshes — `<name>_LOD1` (kept ~50%) and `<name>_LOD2` (kept ~12%,
+ *       super-low far tier). MOUNTAINS **and ROCKS** are EXCLUDED — mountains are
+ *       large relief surfaces like the ground and their decimation tore the ridge
+ *       on device; rocks' hard low-poly facets tear into gashed silhouettes when
+ *       simplified — so both keep full geometry with NO `_LOD*` (see below). At
+ *       runtime (mobile only)
  *       ForestEnvironment swaps each chunk's geometry DYNAMICALLY by CAMERA
  *       distance: near → full, mid → LOD1, far → LOD2 (with hysteresis so tiers do
  *       not flicker at a boundary). Camera-relative, so the free-roam camera
@@ -98,16 +100,32 @@ const FLAT_RE = /meadow|path|lake/i;
  * chunker falls back to their full geometry (`lodGeometry.get()` misses →
  * full-res, identical to the ground path). Mountains are still chunked +
  * frustum-culled at runtime (edge-ringing mountains are often fully off-screen),
- * so there is no perf regression. Every OTHER relief type (trees, flowers,
- * mushrooms, grass, rocks) still gets `_LOD1`/`_LOD2` — those decimate cleanly.
+ * so there is no perf regression. The remaining relief types (trees, birch,
+ * flowers, mushrooms, grass) still get `_LOD1`/`_LOD2` — those decimate cleanly.
+ * ROCKS are ALSO excluded (see ROCK_RE below).
  */
 const MOUNTAIN_RE = /mountain/i;
 
-// Multi-tier relief LOD, tight error bound so silhouettes hold up:
-//   LOD1 keeps ~50% of triangles (mid distance), LOD2 keeps ~25% (far distance).
+/**
+ * ROCK types — Rock / Rock_Moss_Grown_*. EXCLUDED from `_LOD*` like the ground and
+ * mountains: their hard low-poly facets TEAR when decimated (the simplifier
+ * collapses the sparse shared edges into gashed silhouettes), so they keep their
+ * ORIGINAL geometry and get NO `_LOD1`/`_LOD2` siblings — the runtime chunker's
+ * `lodGeometry.get()` then misses and falls back to full geometry forever (no
+ * client change needed; behavior is data-driven by the PRESENCE of the siblings).
+ * Rocks are still chunked + frustum-culled + far-ring thinned at runtime. Remaining
+ * `_LOD*` relief types are trees / birch / flowers / mushrooms / grass only.
+ */
+const ROCK_RE = /rock/i;
+
+// Multi-tier relief LOD. LOD1 = mid distance, LOD2 = far distance (super-low).
+//   LOD1 keeps ~50% of triangles at a TIGHT error bound so mid silhouettes hold.
+//   LOD2 keeps ~12% (far, tiny on screen); the tight LOD1 error can't reach 12%,
+//   so LOD2 uses a LOOSER error to let the simplifier actually collapse that far.
 const LOD1_RATIO = 0.5;
-const LOD2_RATIO = 0.25;
-const LOD_ERROR = 0.05;
+const LOD2_RATIO = 0.12;
+const LOD_ERROR = 0.05; // LOD1 (and the tight bound LOD1 needs)
+const LOD2_ERROR = 0.15; // LOD2 only — looser so the simplifier reaches ~12%
 
 const MB = (n) => (n / 1024 / 1024).toFixed(3) + ' MB';
 const triOf = (prim) => {
@@ -224,25 +242,26 @@ async function main() {
   const perType = []; // { name, full, lod1, lod2 } for reporting
 
   console.log(
-    '[gen-forest-mobile] keeping ground + mountains at full geometry + adding relief _LOD1/_LOD2 tiers ...',
+    '[gen-forest-mobile] keeping ground + mountains + rocks at full geometry + adding relief _LOD1/_LOD2 tiers ...',
   );
   for (const mesh of [...root.listMeshes()]) {
     const name = mesh.getName();
     const prim = mesh.listPrimitives()[0];
     if (!prim) continue;
 
-    if (FLAT_RE.test(name) || MOUNTAIN_RE.test(name)) {
-      // Flat ground AND mountains — DECIMATION EXCLUDED (see banner). Both are
-      // large relief surfaces whose simplify pass tore the surface/ridge on
-      // device. Keep the ORIGINAL geometry untouched and add NO `_LOD*` sibling,
-      // so the runtime chunker falls back to this full geometry. Both are still
-      // chunked + frustum-culled at runtime.
+    if (FLAT_RE.test(name) || MOUNTAIN_RE.test(name) || ROCK_RE.test(name)) {
+      // Flat ground, mountains AND rocks — DECIMATION EXCLUDED (see banners).
+      // Ground/mountains are large relief surfaces whose simplify pass tore the
+      // surface/ridge; rocks' hard low-poly facets tear into gashed silhouettes.
+      // All keep their ORIGINAL geometry and get NO `_LOD*` sibling, so the runtime
+      // chunker falls back to this full geometry. All are still chunked +
+      // frustum-culled at runtime.
       const tris = triOf(prim);
       groundBefore += tris;
       groundAfter += tris; // unchanged — not decimated
     } else {
       // (B) Relief — keep full geometry, add TWO decimated tiers:
-      //   `<name>_LOD1` (~50%, mid distance) and `<name>_LOD2` (~25%, far).
+      //   `<name>_LOD1` (~50%, mid distance) and `<name>_LOD2` (~12%, far, super-low).
       const fullTris = triOf(prim);
       reliefFullTris += fullTris;
 
@@ -253,7 +272,9 @@ async function main() {
       // its geometry into the per-type tiers and removes it before render.
       scene.addChild(doc.createNode(name + '_LOD1').setMesh(lod1Mesh));
 
-      const lod2Prim = simplifyByPosition(doc, prim, LOD2_RATIO, LOD_ERROR);
+      // LOD2 uses the LOOSER LOD2_ERROR: the tight LOD_ERROR (for LOD1) would stall
+      // the simplifier well above the 12% target on these hard-edged props.
+      const lod2Prim = simplifyByPosition(doc, prim, LOD2_RATIO, LOD2_ERROR);
       const lod2Mesh = doc.createMesh(name + '_LOD2').addPrimitive(lod2Prim);
       scene.addChild(doc.createNode(name + '_LOD2').setMesh(lod2Mesh));
 
@@ -299,9 +320,13 @@ async function main() {
   console.log('\n[gen-forest-mobile] DONE');
   console.log(`  out:               ${OUT}`);
   console.log(`  size:              ${MB(statSync(IN).size)} -> ${MB(outSize)} (${outSize} bytes)`);
-  console.log(`  full-res tris:     ${groundBefore} -> ${groundAfter} (ground + mountains, no _LOD*)`);
   console.log(
-    `  relief tiers:      ${lodMeshes} added — full ${reliefFullTris} -> LOD1 ${reliefLod1Tris} (~50%) -> LOD2 ${reliefLod2Tris} (~25%) tris`,
+    `  full-res tris:     ${groundBefore} -> ${groundAfter} (ground + mountains + rocks, no _LOD*)`,
+  );
+  const lod2Pct = reliefFullTris ? ((reliefLod2Tris / reliefFullTris) * 100).toFixed(1) : '0';
+  const lod1Pct = reliefFullTris ? ((reliefLod1Tris / reliefFullTris) * 100).toFixed(1) : '0';
+  console.log(
+    `  relief tiers:      ${lodMeshes} added — full ${reliefFullTris} -> LOD1 ${reliefLod1Tris} (~${lod1Pct}%) -> LOD2 ${reliefLod2Tris} (~${lod2Pct}%) tris`,
   );
   console.log('  per-type (full -> LOD1 -> LOD2 tris):');
   for (const t of perType) {

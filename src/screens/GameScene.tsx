@@ -191,6 +191,42 @@ const MOBILE_SCENE_DPR = 2;
 const MOBILE_BOARD_DEPTH_BIAS = 0.03;
 
 /**
+ * ── MOBILE-ONLY DISTANCE FOG (atmospheric far-haze) ───────────────────────────
+ * A cheap per-fragment linear fog that fades the far terrain/foliage into an
+ * atmospheric haze so the distant forest reads as depth (and so the forest ring
+ * cull in ForestEnvironment can drop far chunks whose fogged-out edge is already
+ * invisible — see FOREST_CULL_DISTANCE there). MOBILE ONLY: the `<fog>` element
+ * below is gated on `isMobile`, so on desktop `scene.fog` stays null and the
+ * desktop render is byte-identical.
+ *
+ * WHY LINEAR `THREE.Fog` (not `FogExp2`): linear fog reaches fogFactor = 1.0
+ * EXACTLY at FOG_FAR, giving the forest ring cull a deterministic "fully-hazed"
+ * cutoff distance to hide its cut edge behind. Exp2 is asymptotic (never fully
+ * opaque), so there would be no distance at which a culled chunk is provably
+ * invisible.
+ *
+ * APPLIES AUTOMATICALLY to every fog-enabled MeshStandardMaterial in the SCENE
+ * pass — forest fade + opaque variants, city, and the forest ground/foliage —
+ * because `material.fog` defaults to true and three compiles `USE_FOG` in when
+ * `scene.fog` is set. The forest's onBeforeCompile patches (applyForestFade,
+ * injectMobileMediump) and the board saturation patch never touch the
+ * `fog_pars_*`/`fog_vertex`/`fog_fragment` chunks, so fog still injects.
+ *
+ * DOES NOT fog the BOARD: BoardTiles sets edge/top `material.fog = false`, so the
+ * board stays crisp + unfogged even though it renders in a pass where scene.fog
+ * is still live. `scene.fog` is NEVER nulled per-pass (that would thrash the
+ * shader-program cache); the board simply opts out at the material level.
+ *
+ * COLOR: reuse the flat-sky fallback tone (#cbe8f5) so fogged far terrain melts
+ * into the HDRI sky and the cull edge is invisible (warm-twilight tint later).
+ * NEAR/FAR (world units): board/city/near treeline (fogDepth ~10-20) stay clear;
+ * the deep forest is fully hazed by FOG_FAR.
+ */
+const FOG_COLOR = '#cbe8f5';
+const FOG_NEAR = 24;
+const FOG_FAR = 52;
+
+/**
  * Manually applies an equirectangular sky texture as scene.environment
  * (and optionally scene.background) so Three.js actually picks it up.
  * drei's <Environment files=...> path resolves ambiguously for LDR webp and
@@ -426,6 +462,14 @@ export function GameScene() {
       */}
       {/* eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- SHOW_HDRI_BACKGROUND is a documented build-time toggle (see header) */}
       {!SHOW_HDRI_BACKGROUND && <color attach="background" args={['#cbe8f5']} />}
+      {/* MOBILE-ONLY distance fog (see FOG_* consts). Declared here, early in the
+          scene tree, so scene.fog exists before ShaderWarmup's compileAsync and the
+          first frame — every fog-enabled material links with USE_FOG on the first
+          compile (no first-frame recompile hitch). Linear THREE.Fog so fog=1.0 lands
+          exactly at FOG_FAR (deterministic cutoff for the forest ring cull). Only
+          the SCENE pass consumes it; the board opts out via material.fog=false. On
+          desktop this is not mounted → scene.fog stays null → byte-identical. */}
+      {isMobile && <fog attach="fog" args={[FOG_COLOR, FOG_NEAR, FOG_FAR]} />}
       {/* Soft shadow injection (must be early in the scene, no assets).
           Desktop only: SoftShadows (drei PCSS) costs a per-fragment sample loop
           on every shadow-receiving pixel. On mobile we skip it so Canvas

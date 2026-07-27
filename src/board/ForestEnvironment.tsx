@@ -7,8 +7,10 @@ import {
   rebuildForestAsChunks,
   isForestGroundMesh,
   selectForestLodTier,
+  horizontalNearestDistanceToBox,
   type ForestChunkLod,
   type ForestLodTier,
+  type ForestHorizontalBox,
 } from './forestChunking';
 import {
   getDebugVisibility,
@@ -217,20 +219,50 @@ const LOD_HYSTERESIS = 1.5; // world units: anti-flicker dead-band around each t
  *       tight local bound. If a type has NO instances in ANY cell it still
  *       becomes ONE local-bounded, cullable chunk (never left island-wide).
  *   FOREST_THIN_DISTANCE — world-unit radius from board center; only TREE/FOLIAGE
- *       instances BEYOND this are thinned (ground is never thinned). 30 leaves the
- *       near/mid forest around the board completely untouched.
+ *       instances BEYOND this are thinned (ground is never thinned). 26 leaves the
+ *       near/mid forest around the board untouched while starting the thin a touch
+ *       closer than before (was 30).
  *   FOREST_THIN_KEEP     — fraction of FAR-ring TREE/FOLIAGE instances to keep
  *       (0<f≤1); ground is excluded entirely so the far terrain floor is never
- *       holed. The near-camera dither-fade is NEAR-ONLY (far trees stay solid),
- *       so 0.5 statically drops every other far tree with no fade masking it —
- *       keep it conservative. Set to 1.0 to DISABLE thinning entirely (chunking
- *       still applies) — one line: keepEvery collapses to 1.
+ *       holed. 0.3 keeps 1 of every 3 far trees (keepEvery=round(1/0.3)=3). The
+ *       far ring is now ALSO hazed to sky by the distance fog AND culled past the
+ *       fog wall (FOREST_CULL_DISTANCE), so the three compound: the distant forest
+ *       is cheap and reads as atmospheric depth rather than a hard thinned edge.
+ *       Thinning is STATIC (no orbit pop); fog + cull are camera-relative and
+ *       consistent. Set to 1.0 to DISABLE thinning entirely (chunking still
+ *       applies) — one line: keepEvery collapses to 1.
  */
 const FOREST_CHUNK_GRID = 10;
 const FOREST_MIN_CHUNK_INSTANCES = 4;
 const FOREST_MERGE_CELL_MIN = 1;
-const FOREST_THIN_DISTANCE = 30;
-const FOREST_THIN_KEEP = 0.5;
+const FOREST_THIN_DISTANCE = 26;
+const FOREST_THIN_KEEP = 0.3;
+
+/**
+ * ── MOBILE-ONLY: RING CULL BEYOND THE FOG WALL (the perf win) ─────────────────
+ * The distance fog (GameScene FOG_* consts) fades far terrain to sky haze but the
+ * chunks are still DRAWN — a hazed-but-rendered far ring still pays vertex +
+ * (fully-opaque) fill cost. This ring cull hides any chunk whose NEAREST fragment
+ * is beyond FOREST_CULL_DISTANCE, so the far ring past the fog wall is not drawn
+ * at all. Because that nearest fragment is already fog=1.0 (fully hazed to the
+ * sky) before the chunk is culled, the cut edge is INVISIBLE — no hole, unlike a
+ * naive render-distance cull whose edge pops against clear geometry.
+ *
+ * METRIC vs FOG: the cull uses horizontal (XZ) nearest distance
+ * ({@link horizontalNearestDistanceToBox}); fog uses view-space depth
+ * (fogDepth = -mvPosition.z). For the tilted-overhead camera fogDepth ≈ 0.8 ×
+ * horizontal for forward chunks, so culling AT FOG_FAR horizontal would leave a
+ * chunk only ~80% fogged → a visible pop. We therefore set the cull ring BEYOND
+ * fog-opaque — FOREST_CULL_DISTANCE ≈ FOG_FAR × 1.27 (66 vs 52) — so a chunk's
+ * nearest fragment has fogDepth ≥ FOG_FAR (provably fog=1.0) before it is culled.
+ * If a ring edge ever shows when orbiting/zooming, raise this multiplier.
+ *
+ * Chunks keep frustumCulled=true; this ring cull removes far IN-FRUSTUM chunks
+ * that frustum culling alone cannot. Hysteresis stops flip-flop as the camera
+ * orbits/pans across the ring boundary.
+ */
+const FOREST_CULL_DISTANCE = 66; // world units: hide a chunk once its nearest fragment is beyond this (≈ FOG_FAR × 1.27)
+const FOREST_CULL_HYSTERESIS = 3; // world units: re-show only once back inside CULL − this (anti flip-flop)
 
 /**
  * ── DEV-ONLY: forest chunk category classifier for the debug visibility panel ──
@@ -439,6 +471,17 @@ interface ForestChunkMeta {
   /** World-space radius of that sphere (static after mount). */
   worldRadius: number;
   /**
+   * World-space horizontal (XZ) AABB of the chunk's INSTANCED bounding box (static
+   * after mount). Drives the ring cull via {@link horizontalNearestDistanceToBox}.
+   */
+  horizontalBox: ForestHorizontalBox;
+  /**
+   * Ring-cull visibility state WITH hysteresis (the per-frame loop's own record,
+   * separate from `mesh.visible` so the DEV debug panel can AND with it). Starts
+   * true (chunks are born visible until the first cull tick decides otherwise).
+   */
+  ringVisible: boolean;
+  /**
    * True if the chunk's world sphere overlaps the board's ±BOARD_CLIP_HALF XZ
    * footprint. Such chunks MUST keep the poke-through clip no matter where the
    * camera is, so they are pinned to the fade material and never swapped.
@@ -466,10 +509,11 @@ interface ForestChunkMeta {
  * `emitChunk` ran, on a stale/null cached bound, or on which geometry (full vs LOD)
  * the chunk ended up with. The bound is LOCAL to the chunk; the outer group
  * transform is fixed for the session, so we resolve `matrixWorld` (updateWorldMatrix)
- * and bake the sphere into WORLD space once here: worldCenter/worldRadius — sphere
- * center transformed by matrixWorld, radius scaled by the max world-scale axis
- * (conservative) — drive the opaque/fade swap. The bounding box is computed only as
- * the readiness signal (an empty box means instances/matrixWorld are not settled).
+ * and bake BOTH the sphere and the box into WORLD space once here. worldCenter/
+ * worldRadius (sphere center transformed by matrixWorld, radius scaled by the max
+ * world-scale axis, conservative) drive the opaque/fade swap; horizontalBox (the
+ * box's world XZ min/max) drives the ring cull. An empty box also doubles as the
+ * readiness signal (instances/matrixWorld not settled yet).
  *
  * Returns `null` if any chunk's world matrix is not ready yet (degenerate/empty
  * bound) so the caller can retry on a later frame rather than cache a wrong meta.
@@ -493,6 +537,19 @@ function buildForestChunkMetas(chunks: THREE.InstancedMesh[]): ForestChunkMeta[]
     scale.setFromMatrixScale(mesh.matrixWorld);
     const worldRadius = bs.radius * Math.max(scale.x, scale.y, scale.z);
 
+    // Box → world (drives the ring cull). Box3.applyMatrix4 transforms all 8
+    // corners and re-expands to an axis-aligned box, so it is correct even under
+    // the forest group's rotation (FOREST_ROT). matrixWorld already folds in the
+    // outer group scale/position (updateWorldMatrix above), so min/max are TRUE
+    // world coords. Clone first so the mesh's own cached boundingBox is untouched.
+    const worldBox = bb.clone().applyMatrix4(mesh.matrixWorld);
+    const horizontalBox: ForestHorizontalBox = {
+      minX: worldBox.min.x,
+      maxX: worldBox.max.x,
+      minZ: worldBox.min.z,
+      maxZ: worldBox.max.z,
+    };
+
     // Conservative (box-of-sphere) overlap with the board's ±HALF world footprint.
     // Over-marking is safe (the chunk simply keeps the clip); under-marking would
     // let terrain poke through the board, so bias inclusive.
@@ -503,7 +560,17 @@ function buildForestChunkMetas(chunks: THREE.InstancedMesh[]): ForestChunkMeta[]
     // LOD tiers for the dynamic camera-distance swap (null → non-eligible, stays
     // full). The chunk is born full-detail, so it starts at tier 0.
     const lod = (mesh.userData as { forestLod?: ForestChunkLod }).forestLod ?? null;
-    metas.push({ mesh, worldCenter, worldRadius, needsBoardClip, isOpaque: false, lod, tier: 0 });
+    metas.push({
+      mesh,
+      worldCenter,
+      worldRadius,
+      horizontalBox,
+      ringVisible: true,
+      needsBoardClip,
+      isOpaque: false,
+      lod,
+      tier: 0,
+    });
   }
   return metas;
 }
@@ -737,7 +804,12 @@ export function ForestEnvironment({ isMobile = false }: { isMobile?: boolean }):
     const apply = () => {
       const flags = getDebugVisibility();
       for (const { mesh, category } of entries) {
-        mesh.visible = flags.wholeForest && (category === null || flags[category]);
+        const debugVisible = flags.wholeForest && (category === null || flags[category]);
+        // Record the debug decision so the per-frame ring cull (the OTHER
+        // mesh.visible writer, on mobile) can AND with it instead of clobbering
+        // it. Both writers converge within one throttled cull tick (~50ms).
+        (mesh.userData as { forestDebugVisible?: boolean }).forestDebugVisible = debugVisible;
+        mesh.visible = debugVisible;
       }
     };
     apply();
@@ -750,9 +822,13 @@ export function ForestEnvironment({ isMobile = false }: { isMobile?: boolean }):
     };
   }, [object]);
 
-  // ── MOBILE-ONLY per-frame chunk pass: DYNAMIC LOD + opaque/fade material swap ──
-  // ONE throttled (~20x/s) camera-distance loop drives two independent per-chunk
-  // decisions off a single computed distance (no second loop, no allocation):
+  // ── MOBILE-ONLY per-frame chunk pass: RING CULL + DYNAMIC LOD + opaque/fade swap ──
+  // ONE throttled (~20x/s) camera-distance loop drives three independent per-chunk
+  // decisions off a single camera position (no second loop, no allocation):
+  //   (0) RING CULL beyond the fog wall — hide a chunk (`mesh.visible=false`) once
+  //       its NEAREST fragment is past FOREST_CULL_DISTANCE (with hysteresis), then
+  //       `continue` to skip the LOD/material work for hidden chunks. The cut edge
+  //       is already fog=1.0 (hazed to sky), so no hole shows. This is the perf win.
   //   (1) DYNAMIC LOD — for eligible relief chunks, pick full/LOD1/LOD2 by the
   //       chunk's distance to the CAMERA (with hysteresis, so no boundary flicker)
   //       and swap `chunk.geometry` only when the tier changes. Camera-relative,
@@ -761,11 +837,11 @@ export function ForestEnvironment({ isMobile = false }: { isMobile?: boolean }):
   //   (2) OPAQUE/FADE material swap (non-board chunks only) — flip to the
   //       discard-free opaque material once the nearest fragment is beyond the fade
   //       range (early-Z can then cull it) and back when it re-enters.
-  // Off-screen chunks are handled by three's frustum culling (frustumCulled=true on
-  // every chunk); there is no render-distance cull, so no chunk is ever hidden here.
-  // Desktop early-returns (no chunks). Chunk world bounds are static, so they are
-  // cached on the first valid frame; the loop does only a distanceTo + compares (no
-  // allocation). See the swap/LOD threshold notes above.
+  // Off-screen chunks are ALSO handled by three's frustum culling (frustumCulled=true
+  // on every chunk); the ring cull removes far IN-FRUSTUM chunks frustum culling
+  // cannot. Desktop early-returns (no chunks). Chunk world bounds are static, so they
+  // are cached on the first valid frame; the loop does only distance math + compares
+  // (no allocation). See the cull/swap/LOD threshold notes above.
   const chunkMetaRef = useRef<{ chunks: THREE.InstancedMesh[]; metas: ForestChunkMeta[] } | null>(
     null,
   );
@@ -789,6 +865,29 @@ export function ForestEnvironment({ isMobile = false }: { isMobile?: boolean }):
     const camPos = state.camera.position;
     const metas = store.metas;
     for (const meta of metas) {
+      // (0) RING CULL beyond the fog wall. Horizontal (XZ) nearest distance to the
+      // chunk's world AABB, with hysteresis so the boundary doesn't flip-flop as
+      // the camera orbits. A hidden chunk's nearest fragment is past
+      // FOREST_CULL_DISTANCE (≈ FOG_FAR × 1.27) → already fog=1.0 → its cut edge is
+      // invisible (no hole). `continue` skips the LOD/material work below.
+      const nearestH = horizontalNearestDistanceToBox(camPos.x, camPos.z, meta.horizontalBox);
+      if (meta.ringVisible) {
+        if (nearestH > FOREST_CULL_DISTANCE) meta.ringVisible = false;
+      } else if (nearestH < FOREST_CULL_DISTANCE - FOREST_CULL_HYSTERESIS) {
+        meta.ringVisible = true;
+      }
+      if (import.meta.env.DEV) {
+        // Reconcile with the DEV debug-visibility panel (the other mesh.visible
+        // writer): a chunk shows only if BOTH the ring AND the debug flags allow
+        // it. Tree-shaken in production, where the ring is the sole writer.
+        const debugVisible =
+          (meta.mesh.userData as { forestDebugVisible?: boolean }).forestDebugVisible ?? true;
+        meta.mesh.visible = meta.ringVisible && debugVisible;
+      } else {
+        meta.mesh.visible = meta.ringVisible;
+      }
+      if (!meta.ringVisible) continue;
+
       // Distance camera → chunk center, computed ONCE and reused by both passes.
       const centerDist = camPos.distanceTo(meta.worldCenter);
 

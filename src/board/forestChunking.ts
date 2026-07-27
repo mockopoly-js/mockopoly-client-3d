@@ -126,6 +126,39 @@ export function selectForestLodTier(
   return tier as ForestLodTier;
 }
 
+/**
+ * Axis-aligned WORLD-space horizontal (XZ) footprint of a forest chunk — the min/max
+ * of its instanced bounding box projected onto the ground plane. Stored per-chunk by
+ * ForestEnvironment and fed to {@link horizontalNearestDistanceToBox} for the ring cull.
+ */
+export interface ForestHorizontalBox {
+  minX: number;
+  maxX: number;
+  minZ: number;
+  maxZ: number;
+}
+
+/**
+ * ── FOREST RING CULL METRIC ───────────────────────────────────────────────────
+ * Horizontal (XZ) distance from the camera to the NEAREST point of a chunk's
+ * world-space AABB, ignoring Y. Returns 0 when the camera's XZ is inside the box.
+ *
+ * This is the metric for the "cull beyond fog" ring: a chunk is hidden once its
+ * nearest fragment is provably past the fog-opaque distance (see
+ * FOREST_CULL_DISTANCE in ForestEnvironment), so its cut edge is fully hazed to
+ * the sky and never shows a hole. Cheap: two clamped subtractions + one hypot,
+ * no allocation — safe to call per chunk every throttled frame.
+ */
+export function horizontalNearestDistanceToBox(
+  camX: number,
+  camZ: number,
+  box: ForestHorizontalBox,
+): number {
+  const dx = Math.max(box.minX - camX, 0, camX - box.maxX);
+  const dz = Math.max(box.minZ - camZ, 0, camZ - box.maxZ);
+  return Math.hypot(dx, dz);
+}
+
 export interface ForestChunkParams {
   /** The cloned forest scene whose InstancedMeshes will be replaced in place. */
   scene: THREE.Object3D;

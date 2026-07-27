@@ -4,6 +4,7 @@ import {
   rebuildForestAsChunks,
   isForestGroundMesh,
   selectForestLodTier,
+  horizontalNearestDistanceToBox,
   type ForestChunkLod,
 } from './forestChunking';
 
@@ -300,6 +301,41 @@ describe('rebuildForestAsChunks', () => {
     }
   });
 
+  it('(g4) ROCKS are excluded from LOD (no _LOD* siblings → absent from map → full geometry, no tiers) but ARE still chunked + thinned', () => {
+    // gen-forest-mobile.mjs routes /rock/i to the "no _LOD*" branch, so rocks
+    // never appear in the runtime lodGeometry map. The chunker is data-driven by
+    // that PRESENCE, so a rock type with no map entry keeps full geometry forever
+    // and carries no tiers — while still being chunked (local cullable bounds) and
+    // far-ring thinned like any other non-ground relief type.
+    const rock = makeMesh('PP_Rock_Moss_Grown_11', DENSE_CLUSTERS); // 16 ≥ MIN_CHUNK
+    const fullGeom = rock.geometry;
+    const treeLod1 = new THREE.BoxGeometry(2, 2, 2);
+    const treeLod2 = new THREE.BoxGeometry(3, 3, 3);
+    const scene = makeScene(rock);
+    rebuildForestAsChunks(
+      params({
+        scene,
+        thinDistance: 5,
+        keepFraction: 0.5, // far ring thinned (rocks are NOT ground)
+        // Map only carries a DIFFERENT type; the rock is absent (as in the real glb).
+        lodGeometry: new Map([['PP_Tree_10', { lod1: treeLod1, lod2: treeLod2 }]]),
+      }),
+    );
+
+    expect(rock.parent).toBeNull(); // original island-wide mesh replaced by chunks
+    const chunks = allInstanced(scene);
+    expect(chunks.length).toBeGreaterThan(0);
+    for (const c of chunks) {
+      expect(c.name).toMatch(/-chunk\d+$/);
+      expect(c.frustumCulled).toBe(true); // still chunked + cullable
+      expect(c.geometry).toBe(fullGeom); // full geometry (no LOD entry)
+      expect(chunkLod(c)).toBeNull(); // NO tiers → stays full at runtime
+    }
+    // Far ring thinned (rocks are eligible for thinning even without LOD): the
+    // 16 far instances (all beyond thinDistance=5) keep 1 of 2 → 8 survive.
+    expect(countInstances(scene)).toBe(8);
+  });
+
   it('(f2) the underlying "no cell clears the threshold" fallback still works with an explicit high mergeCellMin', () => {
     // Regression coverage for the fallback branch itself, independent of the
     // shipped default (1): with mergeCellMin explicitly raised back to the old
@@ -355,5 +391,39 @@ describe('selectForestLodTier (dynamic camera-distance LOD)', () => {
   it('resolves multi-tier jumps in a single call (teleporting camera)', () => {
     expect(selectForestLodTier(0, 100, D1, D2, H)).toBe(2); // full → LOD2 directly
     expect(selectForestLodTier(2, 0, D1, D2, H)).toBe(0); // LOD2 → full directly
+  });
+});
+
+describe('horizontalNearestDistanceToBox (ring-cull metric)', () => {
+  // A 4×4 world box centered at origin on the XZ plane (Y ignored).
+  const BOX = { minX: -2, maxX: 2, minZ: -2, maxZ: 2 };
+
+  it('returns 0 when the camera XZ is inside the box', () => {
+    expect(horizontalNearestDistanceToBox(0, 0, BOX)).toBe(0);
+    expect(horizontalNearestDistanceToBox(1.9, -1.9, BOX)).toBe(0); // still inside
+  });
+
+  it('measures the perpendicular gap to a face (axis-aligned approach)', () => {
+    expect(horizontalNearestDistanceToBox(5, 0, BOX)).toBeCloseTo(3); // 5 - maxX(2)
+    expect(horizontalNearestDistanceToBox(-5, 0, BOX)).toBeCloseTo(3); // minX(-2) - (-5)
+    expect(horizontalNearestDistanceToBox(0, 6, BOX)).toBeCloseTo(4); // 6 - maxZ(2)
+  });
+
+  it('measures the corner (diagonal) gap when the camera clears the box on both axes', () => {
+    // Nearest corner is (maxX, maxZ) = (2, 2); camera at (5, 6) → dx=3, dz=4 → 5.
+    expect(horizontalNearestDistanceToBox(5, 6, BOX)).toBeCloseTo(5);
+  });
+
+  it('ignores Y entirely (a box is a footprint here)', () => {
+    // Same XZ query regardless of how the box is described — no Y field exists.
+    expect(horizontalNearestDistanceToBox(5, 6, BOX)).toBeCloseTo(5);
+  });
+
+  it('crosses the ship FOG_FAR×1.27 cutoff exactly where expected', () => {
+    // A chunk footprint whose nearest edge sits at horizontal 66 (FOREST_CULL_DISTANCE)
+    // is right at the cull boundary; one just inside stays, one just outside culls.
+    const far = { minX: 66, maxX: 80, minZ: -5, maxZ: 5 };
+    expect(horizontalNearestDistanceToBox(0, 0, far)).toBeCloseTo(66);
+    expect(horizontalNearestDistanceToBox(4, 0, far)).toBeCloseTo(62); // camera moved in → inside ring
   });
 });
