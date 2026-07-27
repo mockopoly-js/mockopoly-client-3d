@@ -4,6 +4,10 @@ import {
   rebuildForestAsChunks,
   isForestGroundMesh,
   selectForestLodTier,
+  selectForestDensityTier,
+  densityKeepForTier,
+  hashInstancePosition,
+  orderByPositionHash,
   horizontalNearestDistanceToBox,
   type ForestChunkLod,
 } from './forestChunking';
@@ -55,6 +59,26 @@ function countMatching(scene: THREE.Object3D, re: RegExp): number {
   return allInstanced(scene)
     .filter((im) => re.test(im.name))
     .reduce((sum, im) => sum + im.count, 0);
+}
+
+/** Read back the XZ translation of every instance of a chunk, in RENDER order. */
+function chunkOrderXZ(im: THREE.InstancedMesh): [number, number][] {
+  const m = new THREE.Matrix4();
+  const p = new THREE.Vector3();
+  const out: [number, number][] = [];
+  for (let i = 0; i < im.count; i++) {
+    im.getMatrixAt(i, m);
+    p.setFromMatrixPosition(m);
+    out.push([p.x, p.z]);
+  }
+  return out;
+}
+
+/** A lodGeometry map marking every listed type as FOLIAGE (eligible relief). */
+function foliageMap(...names: string[]): Map<string, { lod1: THREE.BufferGeometry; lod2: THREE.BufferGeometry }> {
+  const map = new Map<string, { lod1: THREE.BufferGeometry; lod2: THREE.BufferGeometry }>();
+  for (const n of names) map.set(n, { lod1: new THREE.BoxGeometry(2, 2, 2), lod2: new THREE.BoxGeometry(3, 3, 3) });
+  return map;
 }
 
 const BOX_MIN = new THREE.Vector3(-12, 0, -12);
@@ -359,6 +383,72 @@ describe('rebuildForestAsChunks', () => {
     expect(meshes[0].boundingSphere).not.toBeNull();
     expect(countInstances(scene)).toBe(spread.length); // all 9 preserved — unthinned
   });
+
+  it('(h) reorders a FOLIAGE chunk deterministically by position hash (same input → same order)', () => {
+    // gridN=1 → every instance lands in one cell → ONE chunk holding all of them,
+    // so we can read back the exact render order the reorder produced.
+    const positions: [number, number][] = [];
+    for (const x of [-9, -3, 3, 9]) for (const z of [-9, -3, 3, 9]) positions.push([x, z]); // 16 ≥ MIN_CHUNK
+    const build = (): [number, number][] => {
+      const tree = makeMesh('PP_Tree_10', positions);
+      const scene = makeScene(tree);
+      rebuildForestAsChunks(
+        params({ scene, gridN: 1, keepFraction: 1, lodGeometry: foliageMap('PP_Tree_10') }),
+      );
+      const chunks = allInstanced(scene);
+      expect(chunks).toHaveLength(1); // single cell → single chunk
+      return chunkOrderXZ(chunks[0]);
+    };
+
+    const first = build();
+    const second = build();
+    expect(second).toEqual(first); // deterministic across rebuilds (no Math.random)
+    expect(first).toHaveLength(positions.length); // ALL instances kept (dynamic reduction)
+
+    // The render order is exactly the hash-sorted permutation of the positions.
+    const perm = orderByPositionHash(positions.map(([x, z]) => ({ x, z })));
+    const expected = perm.map((i) => positions[i]);
+    expect(first).toEqual(expected);
+    // …and it is a genuine REORDER (not identity) — the input is not hash-sorted.
+    expect(first).not.toEqual(positions);
+    // Reorder is a PERMUTATION: no instance dropped or duplicated.
+    expect([...perm].sort((a, b) => a - b)).toEqual([...positions.keys()]);
+  });
+
+  it('(i) ANY PREFIX of a reordered FOLIAGE chunk is spatially SPREAD, not clustered in one cell', () => {
+    // A 6×6 grid spanning four quadrants. A good white-noise hash makes any prefix
+    // an even spatial sample, so a prefix of ~1/4 the instances must touch most
+    // quadrants (never pile into one corner — the whole point for fog thinning).
+    const positions: [number, number][] = [];
+    for (const x of [-9, -6, -3, 3, 6, 9]) for (const z of [-9, -6, -3, 3, 6, 9]) positions.push([x, z]);
+    const perm = orderByPositionHash(positions.map(([x, z]) => ({ x, z })));
+
+    const quad = ([x, z]: [number, number]): string => `${Math.sign(x)},${Math.sign(z)}`;
+    const prefixLen = 12; // ~1/3 of 36
+    const prefix = perm.slice(0, prefixLen).map((i) => positions[i]);
+    const counts = new Map<string, number>();
+    for (const p of prefix) counts.set(quad(p), (counts.get(quad(p)) ?? 0) + 1);
+
+    expect(counts.size).toBe(4); // all four quadrants represented in the prefix
+    // No quadrant hogs the prefix (perfectly even = 3 each; allow slack).
+    for (const c of counts.values()) expect(c).toBeLessThanOrEqual(6);
+  });
+
+  it('(j) GROUND and ROCK chunks are NOT reordered (reorder is foliage-only)', () => {
+    // Neither type is in the lodGeometry map → not foliage → original order kept.
+    const positions: [number, number][] = [];
+    for (const x of [-9, -3, 3, 9]) for (const z of [-9, -3, 3, 9]) positions.push([x, z]);
+    for (const name of ['PP_Grass_11', 'PP_Rock_Moss_Grown_11']) {
+      const im = makeMesh(name, positions);
+      const scene = makeScene(im);
+      rebuildForestAsChunks(
+        params({ scene, gridN: 1, keepFraction: 1, lodGeometry: foliageMap('PP_Tree_10') }),
+      );
+      const chunks = allInstanced(scene);
+      expect(chunks).toHaveLength(1);
+      expect(chunkOrderXZ(chunks[0])).toEqual(positions); // untouched insertion order
+    }
+  });
 });
 
 describe('selectForestLodTier (dynamic camera-distance LOD)', () => {
@@ -455,5 +545,100 @@ describe('horizontalNearestDistanceToBox (ring-cull metric)', () => {
     const far = { minX: 66, maxX: 80, minZ: -5, maxZ: 5 };
     expect(horizontalNearestDistanceToBox(0, 0, far)).toBeCloseTo(66);
     expect(horizontalNearestDistanceToBox(4, 0, far)).toBeCloseTo(62); // camera moved in → inside ring
+  });
+});
+
+describe('selectForestDensityTier (dynamic camera-distance foliage density)', () => {
+  // Mirrors the SHIPPED bands (ForestEnvironment DENSITY_NEAR_DIST / DENSITY_FOG_DIST
+  // / DENSITY_HYSTERESIS): near < 24, fog 24..52, deep ≥ 52, ±2 hysteresis. These are
+  // LIVE-CAMERA distances (the camera is free/movable) so the fog ring tracks the camera.
+  const NEAR = 24; // near <-> fog threshold
+  const FOG = 52; // fog <-> deep threshold
+  const H = 2; // hysteresis dead-band
+
+  it('picks near→0, fog→1, deep→2 from a cold start (current tier 0)', () => {
+    expect(selectForestDensityTier(0, 10, NEAR, FOG, H)).toBe(0); // foreground
+    expect(selectForestDensityTier(0, 40, NEAR, FOG, H)).toBe(1); // fog ring
+    expect(selectForestDensityTier(0, 60, NEAR, FOG, H)).toBe(2); // deep fog
+  });
+
+  it('applies hysteresis at the near<->fog boundary (no flicker)', () => {
+    expect(selectForestDensityTier(0, 25, NEAR, FOG, H)).toBe(0); // 25 < 26 → stays near
+    expect(selectForestDensityTier(0, 27, NEAR, FOG, H)).toBe(1); // 27 > 26 → fog
+    expect(selectForestDensityTier(1, 23, NEAR, FOG, H)).toBe(1); // 23 > 22 → stays fog
+    expect(selectForestDensityTier(1, 21, NEAR, FOG, H)).toBe(0); // 21 < 22 → near
+  });
+
+  it('applies hysteresis at the fog<->deep boundary (no flicker)', () => {
+    expect(selectForestDensityTier(1, 53, NEAR, FOG, H)).toBe(1); // 53 < 54 → stays fog
+    expect(selectForestDensityTier(1, 55, NEAR, FOG, H)).toBe(2); // 55 > 54 → deep
+    expect(selectForestDensityTier(2, 51, NEAR, FOG, H)).toBe(2); // 51 > 50 → stays deep
+    expect(selectForestDensityTier(2, 49, NEAR, FOG, H)).toBe(1); // 49 < 50 → fog
+  });
+
+  it('resolves multi-tier jumps in a single call (teleporting/panning camera)', () => {
+    expect(selectForestDensityTier(0, 200, NEAR, FOG, H)).toBe(2); // near → deep directly
+    expect(selectForestDensityTier(2, 0, NEAR, FOG, H)).toBe(0); // deep → near directly
+  });
+});
+
+describe('densityKeepForTier + chunk.count truncation math', () => {
+  // Mirrors the SHIPPED keep-fractions (ForestEnvironment DENSITY_*_KEEP).
+  const NK = 0.65; // near keep
+  const FK = 0.18; // fog keep
+  const DK = 0.1; // deep keep
+
+  it('maps each density tier to its keep-fraction', () => {
+    expect(densityKeepForTier(0, NK, FK, DK)).toBe(NK);
+    expect(densityKeepForTier(1, NK, FK, DK)).toBe(FK);
+    expect(densityKeepForTier(2, NK, FK, DK)).toBe(DK);
+  });
+
+  it('count = round(fullCount * keep) — incl. the "50 flowers in fog → show ~10" case', () => {
+    // The exact expression the per-frame loop writes to chunk.count.
+    const count = (full: number, tier: 0 | 1 | 2): number =>
+      Math.round(full * densityKeepForTier(tier, NK, FK, DK));
+    expect(count(50, 1)).toBe(9); // 50 * 0.18 = 9 (~10, matches the art direction)
+    expect(count(50, 2)).toBe(5); // 50 * 0.10 = 5 (deep fog, even fewer)
+    expect(count(100, 0)).toBe(65); // 100 * 0.65 = 65 (foreground global reduction)
+    expect(count(0, 1)).toBe(0); // empty chunk stays empty
+  });
+});
+
+describe('hashInstancePosition + orderByPositionHash (deterministic spatial reorder)', () => {
+  it('is deterministic and in [0,1) — same position always maps to the same value', () => {
+    for (const [x, z] of [[0, 0], [-9, 9], [1234.5, -678.25], [16000, -16000]] as [number, number][]) {
+      const h = hashInstancePosition(x, z);
+      expect(h).toBe(hashInstancePosition(x, z)); // stable (no Math.random)
+      expect(h).toBeGreaterThanOrEqual(0);
+      expect(h).toBeLessThan(1);
+    }
+  });
+
+  it('gives UNCORRELATED values to neighbouring positions (white-noise ordering)', () => {
+    // Adjacent quantized cells must NOT produce near-equal hashes, else prefixes
+    // would cluster. Sample a small neighbourhood and assert the spread is wide.
+    const vals: number[] = [];
+    for (let x = 0; x < 5; x++) for (let z = 0; z < 5; z++) vals.push(hashInstancePosition(x, z));
+    const uniq = new Set(vals);
+    expect(uniq.size).toBe(vals.length); // all distinct
+    expect(Math.max(...vals) - Math.min(...vals)).toBeGreaterThan(0.5); // wide spread
+  });
+
+  it('orderByPositionHash returns a full permutation, tie-broken by index for determinism', () => {
+    const positions = [
+      { x: 3, z: 7 },
+      { x: -4, z: 1 },
+      { x: 9, z: -2 },
+      { x: 0, z: 0 },
+      { x: -8, z: -8 },
+    ];
+    const perm = orderByPositionHash(positions);
+    expect([...perm].sort((a, b) => a - b)).toEqual([0, 1, 2, 3, 4]); // permutation of all indices
+    expect(orderByPositionHash(positions)).toEqual(perm); // deterministic
+
+    // Identical positions (hash tie) keep ASCENDING index order (stable tiebreak).
+    const dupes = [{ x: 5, z: 5 }, { x: 5, z: 5 }, { x: 5, z: 5 }];
+    expect(orderByPositionHash(dupes)).toEqual([0, 1, 2]);
   });
 });

@@ -7,9 +7,12 @@ import {
   rebuildForestAsChunks,
   isForestGroundMesh,
   selectForestLodTier,
+  selectForestDensityTier,
+  densityKeepForTier,
   horizontalNearestDistanceToBox,
   type ForestChunkLod,
   type ForestLodTier,
+  type ForestDensityTier,
   type ForestHorizontalBox,
 } from './forestChunking';
 import {
@@ -183,6 +186,47 @@ const FOREST_SWAP_INTERVAL = 0.05;                   // s: throttle the per-chun
 const LOD_DIST_1 = 7;       // world units: nearer than this → full geometry
 const LOD_DIST_2 = 14;      // world units: farther than this → LOD2; between → LOD1
 const LOD_HYSTERESIS = 1.5; // world units: anti-flicker dead-band around each threshold
+
+/**
+ * ── MOBILE-ONLY: DYNAMIC FOLIAGE DENSITY BY LIVE CAMERA DISTANCE ──────────────
+ * Art direction: "lower the foliage density all together" (a global foreground
+ * reduction) AND "if 50 flowers are in the fog, show only ~10" (a hard thin in
+ * the fog band, less still in deep fog). Foliage ONLY = eligible relief chunks
+ * (`meta.lod != null` → trees / flowers / mushrooms / grass, the types present in
+ * `lodGeometry`). Rocks / mountains / ground carry no LOD tiers and are UNTOUCHED.
+ *
+ * CRITICAL — the camera pans/translates FREELY, so density is driven by the LIVE
+ * per-frame distance from the CAMERA to each chunk (`centerDist`, already computed
+ * above for the LOD swap), NEVER a build-time / board-center distance. That makes
+ * the fog-ring thinning CAMERA-RELATIVE: the thinned band tracks the camera as it
+ * pans, so it always coincides with where the fog actually is. A build-time thin
+ * would freeze the thin ring at a fixed world location and expose it the instant
+ * the user panned away — exactly the bug this design avoids.
+ *
+ * Mechanism (ORTHOGONAL to — and composing with — the LOD geometry swap, the
+ * opaque/fade material swap, and the ring cull): every foliage chunk's instances
+ * were HASH-REORDERED at build time (forestChunking `orderByPositionHash`) so ANY
+ * PREFIX is a spatially-even subset. Here we pick a keep-fraction by camera-
+ * distance band and set `chunk.count = round(fullCount * keep)` — rendering that
+ * spatially-even prefix. `chunk.count` is written ONLY when the band (tier)
+ * changes (tracked per-chunk like the LOD `tier`) to avoid per-frame churn, and
+ * restored to the full count when a chunk returns to the near band.
+ * {@link selectForestDensityTier} applies ±DENSITY_HYSTERESIS so the count never
+ * flickers at a band edge (residual pops occur inside the fog, where the haze
+ * hides them). Non-foliage chunks (`meta.lod === null`) are never truncated.
+ *
+ * Tunable (the user live-tunes these):
+ *   DENSITY_NEAR_DIST — below this a foliage chunk keeps DENSITY_NEAR_KEEP.
+ *   DENSITY_FOG_DIST  — above this → DENSITY_DEEP_KEEP; between the two → DENSITY_FOG_KEEP.
+ *   DENSITY_*_KEEP    — keep-fractions per band (near / fog / deep).
+ *   DENSITY_HYSTERESIS — dead-band around each threshold (anti-flicker).
+ */
+const DENSITY_NEAR_DIST = 24;   // ≈ FOG_NEAR: inside this → foreground global reduction
+const DENSITY_FOG_DIST = 52;    // ≈ FOG_FAR: fog ring ends here (deep fog beyond, out to cull=66)
+const DENSITY_NEAR_KEEP = 0.65; // foreground: keep 65% (global density reduction)
+const DENSITY_FOG_KEEP = 0.18;  // fog ring: keep 18% (~9 of 50 → "50 flowers, show ~10")
+const DENSITY_DEEP_KEEP = 0.1;  // deep fog: keep 10% (heaviest thin, hazed to sky)
+const DENSITY_HYSTERESIS = 2;   // world units: anti-flicker dead-band around each band edge
 
 /**
  * ── MOBILE-ONLY FOREST CHUNKING + DISTANCE THINNING (revertable experiment) ──
@@ -528,6 +572,21 @@ interface ForestChunkMeta {
   /** Current LOD tier `mesh.geometry` points at (0 full / 1 LOD1 / 2 LOD2). */
   tier: ForestLodTier;
   /**
+   * FULL instance count the chunk was BORN with (before any density truncation),
+   * captured once at meta build. The per-frame density pass sets `mesh.count =
+   * round(instanceCount * keep)` and restores it to this when the chunk returns to
+   * the near band. Only FOLIAGE chunks (`lod != null`) are ever truncated;
+   * non-foliage chunks keep `mesh.count === instanceCount` forever.
+   */
+  instanceCount: number;
+  /**
+   * Applied DENSITY tier (0 near / 1 fog / 2 deep) — the density twin of `tier`.
+   * Initialised to -1 (a sentinel meaning "not yet applied") so the FIRST per-frame
+   * evaluation always writes `mesh.count` for the chunk's real band. Only foliage
+   * chunks (`lod != null`) ever leave -1.
+   */
+  densityTier: number;
+  /**
    * DEV-ONLY: true while this chunk's material is the LOD-tier debug tint (green/
    * red), so the per-frame loop can RESTORE the normal fade/opaque material the
    * tick the tint toggle turns off. Always false (and never read) in production —
@@ -607,6 +666,10 @@ function buildForestChunkMetas(chunks: THREE.InstancedMesh[]): ForestChunkMeta[]
       isOpaque: false,
       lod,
       tier: 0,
+      // Chunk is born FULL (emitChunk copies every instance; the count is only
+      // ever truncated per-frame below), so mesh.count here is the full count.
+      instanceCount: mesh.count,
+      densityTier: -1, // sentinel: first per-frame tick applies the real band
       wasTinted: false,
     });
   }
@@ -965,6 +1028,30 @@ export function ForestEnvironment({ isMobile = false }: { isMobile?: boolean }):
           meta.tier = next;
           meta.mesh.geometry =
             next === 0 ? meta.lod.full : next === 1 ? meta.lod.lod1 : meta.lod.lod2;
+        }
+
+        // (1c) DYNAMIC DENSITY by LIVE camera distance (foliage only). Pick a
+        // keep-fraction band with hysteresis and truncate `mesh.count` to render a
+        // spatially-even PREFIX of the hash-reordered instances (near 65% / fog
+        // 18% / deep 10%). Camera-relative, so the thinned fog ring tracks the
+        // free-roam camera as it pans. Written only when the tier CHANGES (no
+        // per-frame churn); the near band restores the full instanceCount.
+        const nextDensity = selectForestDensityTier(
+          meta.densityTier < 0 ? 0 : (meta.densityTier as ForestDensityTier),
+          centerDist,
+          DENSITY_NEAR_DIST,
+          DENSITY_FOG_DIST,
+          DENSITY_HYSTERESIS,
+        );
+        if (nextDensity !== meta.densityTier) {
+          meta.densityTier = nextDensity;
+          const keep = densityKeepForTier(
+            nextDensity,
+            DENSITY_NEAR_KEEP,
+            DENSITY_FOG_KEEP,
+            DENSITY_DEEP_KEEP,
+          );
+          meta.mesh.count = Math.round(meta.instanceCount * keep);
         }
       }
 

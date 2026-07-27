@@ -41,12 +41,19 @@ import * as THREE from 'three';
  *      is emitted as ONE local-bounded, cullable chunk of all its instances
  *      (still cullable — edge-ringing mountains are often fully off-screen).
  *
- * It ALSO statically thins the outer ring of the NON-GROUND (tree/foliage) types
- * ONLY: instances beyond `thinDistance` from the board center are kept at
+ * It ALSO statically thins the outer ring of ROCK/MOUNTAIN types ONLY (non-ground,
+ * non-foliage): instances beyond `thinDistance` from the board center are kept at
  * `keepEvery`-stride (1 of every K). Static (not per-frame / per-camera) so
- * nothing pops as the camera orbits. Ground is never thinned (rule 1), and the
- * single-mesh fallbacks (rules 2 & 3) keep ALL instances unthinned. Set
- * `keepFraction >= 1` to disable thinning entirely (chunking still applies).
+ * nothing pops as the camera orbits. GROUND is never thinned (rule 1). FOLIAGE
+ * (the eligible relief types present in `lodGeometry` — trees/flowers/mushrooms/
+ * grass) is NO LONGER build-thinned: it is kept FULL here and its instances are
+ * HASH-REORDERED (see {@link orderByPositionHash}) so the per-frame loop can thin
+ * DENSITY dynamically by LIVE camera distance (truncating `chunk.count` to a
+ * spatially-even prefix). The camera is free/movable, so a build-time thin would
+ * freeze the thinned ring at a fixed world location and expose it the instant the
+ * user panned — hence the reduction is per-frame, not baked. The single-mesh
+ * fallbacks (rules 2 & 3) keep ALL instances unthinned. Set `keepFraction >= 1`
+ * to disable rock/mountain thinning entirely (chunking + foliage reorder apply).
  *
  * Coordinate frame: `boxMin`, `size`, `center` and every instance position are
  * in the forest scene's ROOT space (the frame `Box3.setFromObject(scene)` used),
@@ -124,6 +131,112 @@ export function selectForestLodTier(
     else break;
   }
   return tier as ForestLodTier;
+}
+
+/**
+ * DENSITY keep-tier index: 0 = near band (foreground, high keep), 1 = fog ring
+ * (low keep), 2 = deep fog (lowest keep, out to the cull ring).
+ */
+export type ForestDensityTier = 0 | 1 | 2;
+
+/**
+ * DYNAMIC camera-distance DENSITY tier selection with HYSTERESIS — the density
+ * twin of {@link selectForestLodTier}. Given a FOLIAGE chunk's CURRENT tier and
+ * its LIVE distance to the camera, returns the density band it should render at:
+ * `< nearDist` → near (0), `nearDist..fogDist` → fog (1), `> fogDist` → deep (2).
+ *
+ * CRITICAL — the camera pans/translates FREELY, so this MUST be driven by the
+ * live per-frame camera distance (NOT a build-time / board-center distance). The
+ * fog-ring thinning is therefore CAMERA-RELATIVE: it tracks the camera as it pans
+ * so the thinned band always coincides with where the fog actually is, never
+ * baked into a fixed world location.
+ *
+ * Each threshold carries a ±`hysteresis` dead-band so a chunk parked on a
+ * boundary never flip-flops frame to frame; multi-tier jumps (a teleporting
+ * camera) resolve in a single call. Pure + allocation-free — safe to call every
+ * throttled frame per chunk.
+ */
+export function selectForestDensityTier(
+  current: ForestDensityTier,
+  camDist: number,
+  nearDist: number,
+  fogDist: number,
+  hysteresis: number,
+): ForestDensityTier {
+  let tier: number = current;
+  // Thin further as the camera pulls away — only cross a boundary once we are
+  // `hysteresis` BEYOND it.
+  while (tier < 2) {
+    const edge = tier === 0 ? nearDist : fogDist;
+    if (camDist > edge + hysteresis) tier += 1;
+    else break;
+  }
+  // Densify again as the camera closes in.
+  while (tier > 0) {
+    const edge = tier === 2 ? fogDist : nearDist;
+    if (camDist < edge - hysteresis) tier -= 1;
+    else break;
+  }
+  return tier as ForestDensityTier;
+}
+
+/**
+ * Keep-FRACTION for a density tier: near → `nearKeep`, fog → `fogKeep`, deep →
+ * `deepKeep`. The per-frame loop multiplies this by the chunk's FULL instance
+ * count and truncates `chunk.count` to `round(fullCount * keep)`, rendering that
+ * spatially-even prefix (the chunk's instances were hash-reordered at build time
+ * — see {@link orderByPositionHash}). Pure — unit-testable with the count math.
+ */
+export function densityKeepForTier(
+  tier: ForestDensityTier,
+  nearKeep: number,
+  fogKeep: number,
+  deepKeep: number,
+): number {
+  return tier === 0 ? nearKeep : tier === 1 ? fogKeep : deepKeep;
+}
+
+/**
+ * Root-space quantization step applied to an instance position before hashing,
+ * for float-stability. SMALL (fine) so each instance gets a distinct, spatially
+ * UNCORRELATED hash — the property that makes any prefix of the hash-sorted order
+ * a spatially-even subset. (Foliage instances sit far more than this apart, so
+ * quantizing never collapses distinct instances together.)
+ */
+export const FOLIAGE_HASH_QUANT = 0.5;
+
+/**
+ * Deterministic, allocation-free spatial hash of a world XZ position → [0,1).
+ * NO Math.random — the same position always maps to the same value, so the
+ * build-time foliage reorder is STABLE across rebuilds (nothing pops when the
+ * scene is re-chunked). The position is quantized by {@link FOLIAGE_HASH_QUANT}
+ * then run through an integer avalanche mix (Math.imul, 32-bit) so neighbouring
+ * positions produce UNCORRELATED outputs — a white-noise ordering whose every
+ * prefix is spatially even.
+ */
+export function hashInstancePosition(x: number, z: number): number {
+  const qx = Math.round(x / FOLIAGE_HASH_QUANT) | 0;
+  const qz = Math.round(z / FOLIAGE_HASH_QUANT) | 0;
+  let h = Math.imul(qx, 0x27d4eb2d) ^ Math.imul(qz, 0x165667b1);
+  h = Math.imul(h ^ (h >>> 15), 0x2c1b3c6d);
+  h ^= h >>> 12;
+  h = Math.imul(h, 0x297a2d39);
+  h ^= h >>> 15;
+  return (h >>> 0) / 4294967296;
+}
+
+/**
+ * Return `[0..positions.length)` reordered so ANY PREFIX is a spatially-even
+ * subset: sort by {@link hashInstancePosition} of each position, tie-broken by
+ * original index for FULL determinism (stable even on a hash collision). Pure —
+ * used at BUILD TIME for FOLIAGE chunks only (rocks/mountains/ground keep their
+ * original instance order). The per-frame density truncation then renders a
+ * prefix of the reordered instances, which is a spatially-even thinned subset.
+ */
+export function orderByPositionHash(positions: readonly { x: number; z: number }[]): number[] {
+  const keyed = positions.map((p, i) => ({ i, h: hashInstancePosition(p.x, p.z) }));
+  keyed.sort((a, b) => a.h - b.h || a.i - b.i);
+  return keyed.map((k) => k.i);
 }
 
 /**
@@ -295,11 +408,29 @@ export function rebuildForestAsChunks(params: ForestChunkParams): void {
     // frustumCulled=true (three's default) — with a LOCAL bound, off-screen
     // chunks now cull. (The island-wide originals had it forced false.)
     chunk.frustumCulled = true;
-    for (let k = 0; k < indices.length; k++) {
-      im.getMatrixAt(indices[k], m4);
+
+    // FOLIAGE ONLY (a type present in `lodGeometry` → `lod` truthy): REORDER this
+    // chunk's instances by a deterministic spatial hash so that ANY PREFIX is a
+    // spatially-even subset. The per-frame loop then truncates `chunk.count` by
+    // LIVE camera distance to thin DENSITY (near 65% / fog 18% / deep 10%) with no
+    // clustering. ALL instances are kept here (born full); the reduction is
+    // dynamic. Rocks/mountains/ground (no `lod`) keep their ORIGINAL order.
+    let order = indices;
+    if (lod) {
+      const positions = indices.map((idx) => {
+        im.getMatrixAt(idx, m4);
+        worldM.multiplyMatrices(im.matrixWorld, m4);
+        pos.setFromMatrixPosition(worldM);
+        return { x: pos.x, z: pos.z };
+      });
+      order = orderByPositionHash(positions).map((p) => indices[p]);
+    }
+
+    for (let k = 0; k < order.length; k++) {
+      im.getMatrixAt(order[k], m4);
       chunk.setMatrixAt(k, m4);
       if (im.instanceColor) {
-        im.getColorAt(indices[k], color);
+        im.getColorAt(order[k], color);
         chunk.setColorAt(k, color);
       }
     }
@@ -317,10 +448,14 @@ export function rebuildForestAsChunks(params: ForestChunkParams): void {
     if (!parent) continue;
 
     // GROUND/FLOOR is chunked for local bounds too, but is NEVER thinned
-    // (thinning punched holes in the far floor). keepEvery=1 for ground disables
-    // the far-ring stride; non-ground keeps the configured thinning.
+    // (thinning punched holes in the far floor). FOLIAGE (present in
+    // `lodGeometry`) is also NOT build-thinned anymore: it is kept FULL and thinned
+    // DYNAMICALLY per-frame by camera distance (see emitChunk's hash-reorder + the
+    // per-frame density truncation). keepEvery=1 for both disables the far-ring
+    // stride; only ROCKS/MOUNTAINS (non-ground, non-foliage) keep the static thin.
     const isGround = isForestGroundMesh(im.name);
-    const typeKeepEvery = isGround ? 1 : keepEvery;
+    const isFoliage = lodGeometry?.has(im.name) ?? false;
+    const typeKeepEvery = isGround || isFoliage ? 1 : keepEvery;
 
     // MIN-CHUNK FLOOR: a low-count type isn't worth SPATIALLY partitioning, but it
     // must still become CULLABLE → emit ONE local-bounded chunk of ALL its
