@@ -1,6 +1,7 @@
-import { useLayoutEffect, useMemo, useRef } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useRef } from 'react';
 import * as THREE from 'three';
 import { useFrame, useThree } from '@react-three/fiber';
+import { useProgress } from '@react-three/drei';
 import {
   EffectPass,
   BloomEffect,
@@ -12,6 +13,7 @@ import {
 import { FullScreenQuad } from 'three-stdlib';
 import { SharpenEffectImpl } from '../screens/SharpenEffect';
 import { WarmGradeEffectImpl } from '../screens/WarmGradeEffect';
+import { useGameStore } from '../state/gameStore';
 import { BOARD_LAYER, CITY_LAYER } from './positions';
 
 /**
@@ -220,6 +222,42 @@ export function MobileCrispBoardPipeline({
   const camera = useThree((s) => s.camera);
   const get = useThree((s) => s.get);
 
+  // ── STATIC SHADOW BAKE readiness + guard ──────────────────────────────────
+  // Same load gate ShaderWarmup uses (drei useProgress, backed by
+  // THREE.DefaultLoadingManager): fire the one-shot bake only once ALL in-flight
+  // async loads have settled (`active === false`) and at least one asset loaded
+  // (`total > 0`), i.e. board/city/forest/buildings/tokens are all mounted.
+  const progressActive = useProgress((s) => s.active);
+  const progressTotal = useProgress((s) => s.total);
+  // Flips true after the frozen shadow map has been baked; reset to false to
+  // force a single re-bake (see the building-signature effect below + cleanup).
+  const baked = useRef(false);
+
+  // RE-BAKE HOOK — buildings (houses/hotels) are the one semi-dynamic caster;
+  // they appear/disappear mid-game. A stable string signature of every
+  // property's house/hotel/mortgage state re-runs the effect only when a build
+  // action actually changes what is on the board. Zustand compares the selector
+  // result by value (strings are primitives), so unrelated GAME_STATE_UPDATEs
+  // (money, position, toasts) do NOT churn it.
+  const buildingSig = useGameStore((s) => {
+    const props = s.state?.properties;
+    if (!props) return '';
+    let sig = '';
+    for (const p of props) {
+      sig += `${p.spaceIndex}:${p.houses}:${p.hasHotel ? 1 : 0}:${p.isMortgaged ? 1 : 0};`;
+    }
+    return sig;
+  });
+  useEffect(() => {
+    // Skip the initial run — the first bake is driven by the load gate, not here.
+    // Once baked, a building-signature change clears the guard so the NEXT frame
+    // re-bakes the frozen map with the new houses/hotels captured (cheap: fires
+    // only on a build action). If deferred, newly-built houses simply carry no
+    // baked shadow until the next bake — acceptable, but this wires it.
+    if (!baked.current) return;
+    baked.current = false;
+  }, [buildingSig]);
+
   // Build the FBOs, the composite material/quad, and the grade EffectPass once.
   // No WebGL calls happen at construction (only on first use / in initialize), so
   // this is safe to run during render. Grade knobs are build-time constants, so
@@ -342,6 +380,28 @@ export function MobileCrispBoardPipeline({
     const prevToneMapping = gl.toneMapping;
     gl.toneMapping = THREE.NoToneMapping;
 
+    // ── STATIC SHADOWS: flip the renderer into FROZEN shadow-map mode ─────────
+    // Runs here (a layout effect, BEFORE the first frame) so it lands before
+    // ShaderWarmup's load-gated compileAsync — every shadow-receiving program
+    // then links WITH shadow sampling exactly once (no first-appearance recompile
+    // hitch). autoUpdate=false is the crux of the 3-layer composite fix: it makes
+    // all three per-frame gl.render calls (scene/board/city passes) hit the
+    // early-return inside shadowMap.render, so the ONE map baked in the useFrame
+    // below is reused every frame — never re-rendered (and never clobbered) per
+    // pass. R3F set enabled=false once at init from shadows={!isMobile} and does
+    // NOT re-assert it per frame, so flipping it here is safe and stays flipped.
+    // PCFSoftShadowMap gives a cheaply-feathered edge on RECEIVE (desktop's PCSS
+    // SoftShadows is deliberately not used on mobile). Cleanup restores every flag
+    // so a resize back to desktop hands R3F a clean renderer.
+    const prevShadowEnabled = gl.shadowMap.enabled;
+    const prevShadowType = gl.shadowMap.type;
+    const prevShadowAutoUpdate = gl.shadowMap.autoUpdate;
+    const prevShadowNeedsUpdate = gl.shadowMap.needsUpdate;
+    gl.shadowMap.enabled = true;
+    gl.shadowMap.type = THREE.PCFSoftShadowMap;
+    gl.shadowMap.autoUpdate = false;
+    gl.shadowMap.needsUpdate = false;
+
     // Additively enable BOTH the board and city layers on every light (a light is
     // only collected if `light.layers.test(camera.layers)`, so without this the
     // board pass AND the city pass would be unlit/black). `.layers` lives on
@@ -362,6 +422,13 @@ export function MobileCrispBoardPipeline({
 
     return () => {
       gl.toneMapping = prevToneMapping;
+      // Restore the renderer's shadow flags (a resize back to desktop must hand
+      // R3F an untouched renderer) and force a re-bake if this pipeline remounts.
+      gl.shadowMap.enabled = prevShadowEnabled;
+      gl.shadowMap.type = prevShadowType;
+      gl.shadowMap.autoUpdate = prevShadowAutoUpdate;
+      gl.shadowMap.needsUpdate = prevShadowNeedsUpdate;
+      baked.current = false;
       for (const light of litLights) {
         light.layers.disable(BOARD_LAYER);
         light.layers.disable(CITY_LAYER);
@@ -420,6 +487,31 @@ export function MobileCrispBoardPipeline({
     const prevAutoClear = gl.autoClear;
     const prevBackground = scene.background;
     gl.autoClear = true;
+
+    // ── ONE-SHOT STATIC SHADOW BAKE ───────────────────────────────────────────
+    // Fires once assets have settled (load gate above) and again whenever the
+    // building signature changes (baked reset in the effect). enableAll() enables
+    // camera-layer bits 0,1,2 so the caster layer-test inside shadowMap.render
+    // (`object.layers.test(camera.layers)`) passes for casters on ALL display
+    // layers simultaneously — the board slab (BOARD_LAYER), city (CITY_LAYER),
+    // buildings + near forest (layer 0) are ALL captured into the KEY light's
+    // single frozen depth map from the light's POV. (Tokens are excluded via
+    // castShadow=false so the frozen map never pins a stuck token shadow — they
+    // use blob decals instead; far forest is frustum-culled by the light's ±14
+    // ortho frame.) needsUpdate=true drives exactly one shadowMap.render this
+    // frame; it auto-resets to false and the render target is restored inside
+    // shadowMap.render, so every subsequent frame reuses the frozen map. The
+    // throwaway beauty render targets sceneFBO — pass 1 below overwrites it this
+    // same frame, so nothing flashes on screen.
+    if (!baked.current && !progressActive && progressTotal > 0) {
+      const prevMask = camera.layers.mask;
+      camera.layers.enableAll();
+      gl.shadowMap.needsUpdate = true;
+      gl.setRenderTarget(rig.sceneFBO);
+      gl.render(scene, camera);
+      camera.layers.mask = prevMask;
+      baked.current = true;
+    }
 
     // 1. SCENE pass — everything on layer 0 (board + city EXCLUDED), at scene dpr.
     //    Keeps scene.background (HDRI sky) so the sky renders here at the cheap dpr.

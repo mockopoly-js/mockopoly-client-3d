@@ -784,6 +784,14 @@ export function ForestEnvironment({ isMobile = false }: { isMobile?: boolean }):
       // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- runtime narrowing: o is Object3D; only actual meshes have isMesh===true
       if (m.isMesh) {
         m.receiveShadow = true; // ground/foliage takes the board's shadow
+        // MOBILE: the near forest ring CASTS into the frozen shadow bake (see
+        // MobileCrispBoardPipeline) so the low golden sun throws long tree shadows
+        // across the ground. Set on the source meshes BEFORE the chunker runs —
+        // rebuildForestAsChunks copies castShadow/receiveShadow onto every rebuilt
+        // chunk (forestChunking). Far chunks fall outside the light's ±14 ortho
+        // frustum (skipped at bake) and are fog-hazed anyway. DESKTOP stays false
+        // (three's default) → byte-identical.
+        m.castShadow = isMobile;
         m.frustumCulled = false;
         // Per-fragment near-camera dither-fade + board-footprint clip so trees
         // close to the camera dissolve out of the way of the board and no terrain

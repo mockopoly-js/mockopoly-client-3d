@@ -197,6 +197,17 @@ const MOBILE_HEMI_INTENSITY = 0.28;
 // AMBIENT: dim WARM floor so shadow sides stay warm-brown, never black.
 const MOBILE_AMBIENT_COLOR = '#ffb877';
 const MOBILE_AMBIENT_INTENSITY = 0.12;
+/**
+ * MOBILE-ONLY frozen shadow-map resolution for the KEY sun. The map is baked
+ * ONCE at load (autoUpdate off — see MobileCrispBoardPipeline), so 2048² costs a
+ * single extra shadow render at load + ~16 MB depth VRAM and ZERO per-frame cost.
+ * The low grazing sun throws LONG shadows spanning the whole board; over the ±14
+ * ortho frame 1024 is only ~37 texels/unit and the long edges staircase badly,
+ * whereas 2048 (~73 texels/unit) keeps the bold long edges clean at no runtime
+ * cost. Drop to 1024 only if load-time VRAM is tight on a low-end device (the
+ * framerate regression risk is nil). Desktop's KEY light keeps its own 1024².
+ */
+const MOBILE_SHADOW_MAP_SIZE = 2048;
 
 /**
  * ── MOBILE ADAPTIVE DPR (mobile only; desktop stays dpr={[1, 1.5]}) ───────────
@@ -629,14 +640,26 @@ export function GameScene() {
         </directionalLight>
       )}
       {/* MOBILE KEY twin — a LOW golden/amber sun (grazing ~21° elevation) for the
-          bold golden-hour direction. LOOK commit ships it WITHOUT castShadow /
-          shadow-* (shadows are added in the follow-up shadows commit). */}
+          bold golden-hour direction. It is the mobile shadow CASTER: its map is
+          BAKED ONCE (frozen) by MobileCrispBoardPipeline (renderer autoUpdate off),
+          so castShadow + a 2048² map cost a single shadow render at load and
+          nothing per frame. The ortho shadow-camera [-14,14,14,-14, 0.5, 45] frames
+          the board (±5) + the near forest ring + the long anti-sun throw toward
+          [-11,·,-7]; the far forest sits outside the frame but is fog-hazed so its
+          missing shadow is invisible. bias/normalBias kill acne on the grazing
+          angle. Desktop's KEY (above) is untouched → byte-identical. */}
       {isMobile && (
         <directionalLight
           color={MOBILE_KEY_COLOR}
           position={MOBILE_KEY_POSITION}
           intensity={MOBILE_KEY_INTENSITY}
-        />
+          castShadow
+          shadow-mapSize={[MOBILE_SHADOW_MAP_SIZE, MOBILE_SHADOW_MAP_SIZE]}
+          shadow-bias={-0.0004}
+          shadow-normalBias={0.02}
+        >
+          <orthographicCamera attach="shadow-camera" args={[-14, 14, 14, -14, 0.5, 45]} />
+        </directionalLight>
       )}
       {/* FILL: cool, low, opposite-ish angle — softens the shadow side without
           flattening the form. No shadow (perf + avoids double shadows). Dropped on

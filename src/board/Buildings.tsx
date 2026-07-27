@@ -32,6 +32,7 @@ import React from 'react';
 import { useGameStore } from '../state/gameStore';
 import { ModelMesh } from './ModelMesh';
 import { houseSlots, hotelSlot } from './buildingSlots';
+import { useIsMobile } from '../ui/useIsMobile';
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -70,6 +71,9 @@ ModelMesh.preload(HOTEL_URL);
  */
 export function Buildings(): React.JSX.Element {
   const properties = useGameStore((s) => s.state?.properties) ?? [];
+  // MOBILE: buildings receive the static baked golden-hour shadow (see
+  // MobileCrispBoardPipeline). Desktop passes false → byte-identical.
+  const isMobile = useIsMobile();
 
   return (
     <group>
@@ -85,6 +89,7 @@ export function Buildings(): React.JSX.Element {
               position={[slot.x, slot.y, slot.z]}
               rotation={[0, slot.rotationY, 0]}
               scale={BUILDING_SCALE}
+              receiveShadow={isMobile}
             />,
           ];
         }
@@ -98,6 +103,7 @@ export function Buildings(): React.JSX.Element {
               position={[slot.x, slot.y, slot.z]}
               rotation={[0, slot.rotationY, 0]}
               scale={BUILDING_SCALE}
+              receiveShadow={isMobile}
             />
           ));
         }

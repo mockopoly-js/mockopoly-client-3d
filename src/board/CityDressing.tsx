@@ -95,9 +95,13 @@ export function CityDressing({ isMobile = false }: { isMobile?: boolean }): Reac
       // at runtime `o` is a generic Object3D and only real meshes carry it.
       // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- runtime narrowing: `o` is Object3D; only actual meshes have isMesh===true
       if (m.isMesh) {
-        // City meshes don't cast shadows (removes ~103 shadow-pass draw calls);
-        // receiveShadow stays on so the board/token shadows still fall on the city.
-        m.castShadow = false;
+        // DESKTOP: city meshes don't cast (removes ~103 shadow-pass draw calls).
+        // MOBILE: the low golden sun's shadows are BAKED ONCE into a frozen map
+        // (autoUpdate off — see MobileCrispBoardPipeline), so the city's cast is a
+        // single load-time cost, not a per-frame one — enable it so the city throws
+        // its long dramatic shadow across the board. receiveShadow stays on so the
+        // board/city/token shadows still fall on the city. Desktop → byte-identical.
+        m.castShadow = isMobile;
         m.receiveShadow = true;
         // MOBILE-ONLY frustum culling. The city's instanced-mesh bounds are LOCAL
         // and compact (it fits the board's inner square in the center), so an

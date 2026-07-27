@@ -161,6 +161,14 @@ interface CharacterTokenProps {
   isCelebrating?: boolean;
   /** Local vertical offset for the whole rig, e.g. to seat feet on the tile. */
   y?: number;
+  /**
+   * Whether every mesh in the rig casts shadows. Default true (desktop dynamic
+   * shadows). PlayerTokens passes FALSE on mobile: mobile shadows are a ONE-TIME
+   * frozen bake, and a moving token baked into that map would leave a stuck
+   * shadow at its load position — so mobile tokens cast no real shadow and use a
+   * cheap blob decal instead (see TokenBlobShadow / PlayerTokens).
+   */
+  castShadow?: boolean;
 }
 
 /**
@@ -170,7 +178,7 @@ interface CharacterTokenProps {
  * `play('Walk')` / `play('Idle')` to switch.
  */
 export const CharacterToken = forwardRef<CharacterTokenHandle, CharacterTokenProps>(
-  function CharacterToken({ url, scale = 0.2, initialClip = 'Idle', clip, isCelebrating = false, y = 0, baseColor }, apiRef) {
+  function CharacterToken({ url, scale = 0.2, initialClip = 'Idle', clip, isCelebrating = false, y = 0, baseColor, castShadow = true }, apiRef) {
     const gltf = useGLTF(url);
 
     // Per-instance clone (independent skeleton). Materials are cloned so each
@@ -185,7 +193,7 @@ export const CharacterToken = forwardRef<CharacterTokenHandle, CharacterTokenPro
         const mesh = o as THREE.Mesh;
         // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- runtime narrowing: o is Object3D; only actual meshes have isMesh===true
         if (!mesh.isMesh) return;
-        mesh.castShadow = true;
+        mesh.castShadow = castShadow;
         mesh.receiveShadow = false;
         if (Array.isArray(mesh.material)) {
           mesh.material = mesh.material.map((mm) => cloneMaterial(mm));
@@ -199,8 +207,8 @@ export const CharacterToken = forwardRef<CharacterTokenHandle, CharacterTokenPro
         applyBaseColor(cloned, baseColor);
       }
       return cloned;
-     
-    }, [gltf.scene, baseColor]);
+
+    }, [gltf.scene, baseColor, castShadow]);
 
     // Dispose the per-instance cloned materials on unmount / re-clone. Geometry
     // is shared with the cached gltf (SkeletonUtils clones nodes but reuses

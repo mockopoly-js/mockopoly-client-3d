@@ -3,8 +3,9 @@ import { useFrame } from '@react-three/fiber';
 import * as THREE from 'three';
 import { useGameStore } from '../state/gameStore';
 import { useGameBusEvent } from '../state/useGameBus';
-import { tileToWorld, tileToWorldXZInto, buildTilePath, type WorldXZ } from './positions';
+import { tileToWorld, tileToWorldXZInto, buildTilePath, BOARD_LAYER, type WorldXZ } from './positions';
 import { setLiveTokenPosition } from './liveTokenPositions';
+import { getTokenBlobShadowTexture } from './TokenBlobShadow';
 import { stackOffset } from './hopPath';
 import { TOKEN_HEX } from '../constants/theme';
 import { CharacterToken, type CharacterTokenHandle } from './CharacterToken';
@@ -200,6 +201,12 @@ export function PlayerTokens() {
     const url = resolveCharacter(id ?? DEFAULT_CHARACTER).url;
     return isMobile ? toMobileCharacterUrl(url) : url;
   };
+
+  // MOBILE-ONLY fake contact shadow under each token. Built lazily (only touched
+  // on mobile — never in tests/desktop, where the blob mesh below is gated out),
+  // shared across all tokens. Tokens are excluded from the static shadow bake
+  // (CharacterToken castShadow={!isMobile}); this decal replaces their shadow.
+  const blobTex = isMobile ? getTokenBlobShadowTexture() : null;
 
   // Stable identity key for the current roster's (id, character) pairs. Extracted
   // so the preload effect below depends on the CONTENT (re-runs only when a
@@ -662,6 +669,10 @@ export function PlayerTokens() {
               isCelebrating={!!isCelebrating.current[p.id]}
               y={-BASE_Y}
               baseColor={p.characterColor ?? undefined}
+              // MOBILE: tokens move, so they can't be in the frozen shadow bake
+              // (would pin a stuck shadow) — they cast nothing and use the blob
+              // decal below. DESKTOP: real dynamic shadows, so cast as before.
+              castShadow={!isMobile}
             />
             {/* IDENTITY RING — a thin hollow annulus in the player's TOKEN_HEX
                 color. Since the character is no longer tinted, THIS is how you
@@ -680,6 +691,41 @@ export function PlayerTokens() {
                 side={THREE.DoubleSide}
               />
             </mesh>
+            {/* MOBILE-ONLY blob shadow — a soft warm-brown decal faking the token's
+                contact shadow (tokens are excluded from the static bake). As a CHILD
+                of this animated group it inherits the token's x/z every frame with
+                zero per-frame code (the group's Y-spin only rotates a symmetric disc
+                → invisible). Local y ⇒ world ≈ 0.026: just above the board top
+                (0.02), below the identity ring (0.06). It MUST live on BOARD_LAYER so
+                it composites in the BOARD pass onto the board slab — on layer 0 it
+                would render in the SCENE pass (where the board is absent) and blend
+                over sky/forest. depthWrite=false ⇒ it only tints boardColor and does
+                NOT write boardDepth, so it is auto-clipped to the board footprint
+                (past the edge boardDepth=1.0 → the composite drops it) and the token
+                mesh (SCENE pass, nearer) still draws over its own blob. MeshBasic is
+                unlit so it needs no lights and renders correctly in any pass. */}
+            {isMobile && (
+              <mesh
+                renderOrder={2}
+                position={[0, -BASE_Y + 0.026, 0]}
+                rotation={[-Math.PI / 2, 0, 0]}
+                ref={(m) => {
+                  if (m) m.layers.set(BOARD_LAYER);
+                }}
+              >
+                <circleGeometry args={[0.42, 32]} />
+                <meshBasicMaterial
+                  map={blobTex}
+                  transparent
+                  depthWrite={false}
+                  fog={false}
+                  toneMapped
+                  side={THREE.DoubleSide}
+                  polygonOffset
+                  polygonOffsetFactor={-2}
+                />
+              </mesh>
+            )}
           </group>
         );
       })}
