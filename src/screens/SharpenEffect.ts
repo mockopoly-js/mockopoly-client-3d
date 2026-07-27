@@ -33,7 +33,7 @@ import { wrapEffect } from '@react-three/postprocessing';
  * dpr 2. Baked into the shader as a compile-time float literal (zero uniform
  * cost); edit this const to retune.
  */
-const SHARPEN_STRENGTH = 0.3;
+const SHARPEN_STRENGTH = 0.45;
 
 const fragmentShader = /* glsl */ `
 void mainImage(const in vec4 inputColor, const in vec2 uv, out vec4 outputColor) {
