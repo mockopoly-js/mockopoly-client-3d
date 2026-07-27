@@ -1,4 +1,4 @@
-import { Suspense, useCallback, useEffect, useRef, useState } from 'react';
+import { Suspense, useEffect, useRef, useState } from 'react';
 import * as THREE from 'three';
 import { Canvas, useThree } from '@react-three/fiber';
 import {
@@ -9,7 +9,6 @@ import {
   HueSaturation,
   BrightnessContrast,
   SMAA,
-  FXAA,
 } from '@react-three/postprocessing';
 import { SoftShadows, Stats, useTexture } from '@react-three/drei';
 import { BoardTiles } from '../board/BoardTiles';
@@ -21,11 +20,11 @@ import { Dice3D } from '../board/Dice3D';
 import { CameraRig } from '../board/CameraRig';
 import { BoardClickTargets } from '../board/BoardClickTargets';
 import { ShaderWarmup } from '../board/ShaderWarmup';
-import { MobileRenderController, type ComposerHandle } from '../board/MobileRenderController';
+import { MobileRenderController } from '../board/MobileRenderController';
+import { MobileCrispBoardPipeline } from '../board/MobileCrispBoardPipeline';
 import { RenderStatsReadout } from '../board/RenderStatsReadout';
 import { BOARD_ROTATION } from '../board/positions';
 import { useIsMobile } from '../ui/useIsMobile';
-import { Sharpen } from './SharpenEffect';
 
 /**
  * Game screen: renders the static 3D board in a daylight diorama scene.
@@ -157,14 +156,14 @@ const HEMI_INTENSITY = 0.25;
  *  - MOBILE_DPR_MOVING — the cheap dpr held while the camera ORBITS / zooms /
  *    pans, so the interaction stays fast and smooth. Token walk, dice roll and
  *    character animation deliberately DO NOT change dpr — only camera movement.
- *  - MOBILE_DPR_STILL — the phone's NATIVE dpr, CAPPED AT 2. Under always-render
- *    the scene draws continuously, so a dpr of 3 would thermally throttle an
- *    iPhone (that was only sustainable under the old on-demand path where rest
- *    rendered 0 frames). The cap was 2.5; dropping it to 2 cuts the FIXED
- *    full-screen fill (HDRI bg + postFX) by ~36% (2²/2.5² = 0.64), the dominant
- *    empty-board cost. min(devicePixelRatio, 2) (≈2 on iPhone 13 Pro) keeps a
- *    readable board (4096 texture + anisotropy/mipmaps + FXAA) thermally
- *    sustainable. It is also the initial `dpr` prop so the first paint is crisp.
+ *  - MOBILE_DPR_STILL — the phone's NATIVE dpr (capped at 3 for thermal headroom).
+ *    The renderer's pixel ratio at rest, i.e. the resolution of the FINAL present.
+ *    The board must present at native dpr to be crisp, so the renderer runs native
+ *    at rest. The EXPENSIVE scene (forest/city/tokens/sky) does NOT pay for this:
+ *    MobileCrispBoardPipeline renders it into a dpr-2 buffer (MOBILE_SCENE_DPR) and
+ *    only the board + composite + grade run at native — so the dominant empty-board
+ *    fill (HDRI sky + geometry + postFX-heavy scene) stays at dpr 2, while the board
+ *    text is razor-crisp. Also the initial `dpr` prop so the first paint is native.
  * MOBILE_SETTLE_MS is the no-camera-motion debounce before the crisp dpr is
  * restored. Kept short (120ms) so the crisp resolution lands quickly after the
  * user stops moving the camera — paired with a faster OrbitControls damping decay
@@ -174,9 +173,22 @@ const HEMI_INTENSITY = 0.25;
 const MOBILE_DPR_MOVING = 1.3;
 const MOBILE_DPR_STILL = Math.min(
   typeof window !== 'undefined' ? window.devicePixelRatio || 2 : 2,
-  2.5,
+  3,
 );
 const MOBILE_SETTLE_MS = 120;
+
+/**
+ * MOBILE-ONLY crisp-board pipeline tunables (see MobileCrispBoardPipeline).
+ * - MOBILE_SCENE_DPR: the FIXED dpr the expensive scene (forest / city / tokens /
+ *   HDRI sky) renders at. The board + composite + present run at native dpr; this
+ *   keeps the heavy scene at dpr 2 so framerate is preserved while the board goes
+ *   native-crisp. (At rest the renderer is native; the scene FBO is sized
+ *   css × min(nativeDpr, MOBILE_SCENE_DPR).)
+ * - MOBILE_BOARD_DEPTH_BIAS: view-space-Z bias biasing the board/scene depth
+ *   composite toward the SCENE at the token/house contact (kills contact shimmer).
+ */
+const MOBILE_SCENE_DPR = 2;
+const MOBILE_BOARD_DEPTH_BIAS = 0.03;
 
 /**
  * Manually applies an equirectangular sky texture as scene.environment
@@ -367,13 +379,6 @@ export function GameScene() {
   // Mobile in-game view must be clean: all dev/debug overlays are suppressed on
   // phones (the FPS Stats, CullingBadge, CullingAudit). Desktop is unchanged.
   const isMobile = useIsMobile();
-  // Handle to the MOBILE post composer so adaptive dpr can resize its buffers
-  // (mobile only; desktop composer takes no ref → byte-identical). Stable ref
-  // callback so it isn't detached/re-attached every render.
-  const composerRef = useRef<ComposerHandle | null>(null);
-  const handleComposerRef = useCallback((c: ComposerHandle | null) => {
-    composerRef.current = c;
-  }, []);
 
   return (
     <>
@@ -435,7 +440,6 @@ export function GameScene() {
           dpr swap. NEVER mounted on desktop, so desktop stays byte-identical. */}
       {isMobile && (
         <MobileRenderController
-          composerRef={composerRef}
           dprMoving={MOBILE_DPR_MOVING}
           dprStill={MOBILE_DPR_STILL}
           settleMs={MOBILE_SETTLE_MS}
@@ -537,47 +541,29 @@ export function GameScene() {
       <ShaderWarmup />
       {isMobile ? (
         /*
-          MOBILE composer (light). The full-screen fill hogs — N8AO's depth /
-          AO passes and Bloom's mip-chain downsample/upsample — are the dominant
-          mobile FPS cost and contribute NOTHING to sharpness, so they are
-          dropped here. Kept, because they are cheap and carry the "game look" +
-          crispness: ToneMapping and the HueSaturation / BrightnessContrast color
-          grade (the punchy saturation/contrast).
-
-          Edge AA is FXAA, NOT SMAA. SMAA is ~4 extra full-screen passes (edge
-          detect + blend-weight + neighborhood blend + its own render targets) —
-          pure fixed fill, the very cost we're cutting on the empty board. FXAA
-          is a single per-fragment effect that merges straight into the existing
-          color-grade EffectPass, so it adds no standalone full-screen pass.
-          Milder edge quality than SMAA, but at dpr 2 the extra device pixels
-          carry the edges. Effect order mirrors the desktop tail:
-          ToneMapping -> grade -> FXAA. multisampling={0} + stencilBuffer={false}
-          match desktop so the shader effect (not MSAA) does the anti-aliasing.
-
-          Rendered as a SEPARATE composer (rather than conditionally toggling
-          children of one) because @react-three/postprocessing merges/orders
-          effect passes from its children and conditional children are flaky
-          there; two composers keep the desktop chain below byte-identical and
-          the mobile swap a clean remount.
+          MOBILE crisp-board pipeline (replaces the mobile <EffectComposer>).
+          Renders the board texture at NATIVE dpr (razor-crisp text) in its own
+          pass, composites it by depth over the dpr-2 forest/city/tokens/sky scene,
+          and applies the SAME mobile grade — AGX ToneMapping -> HueSaturation ->
+          BrightnessContrast -> FXAA -> Sharpen -> sRGB — ONCE over the composited
+          linear image, so board and scene are graded identically. The heavy scene
+          stays at MOBILE_SCENE_DPR (2) for framerate; only the board (a cheap
+          opaque raster) + composite + grade run at native dpr. Forest edges and
+          tokens/houses correctly occlude the board (shared camera depth), with a
+          view-Z bias at the token/board contact to kill shimmer. See
+          MobileCrispBoardPipeline. Desktop keeps its own single-pass composer
+          below (byte-identical). The grade knobs are the SAME values the mobile
+          composer used (SATURATION / BRIGHTNESS / CONTRAST /
+          MOBILE_FXAA_SUBPIXEL_QUALITY), just applied by a hand-built EffectPass.
         */
-        <EffectComposer ref={handleComposerRef} multisampling={0} stencilBuffer={false}>
-          <ToneMapping />
-          {/* Main "game look" saturation knob (0 = unchanged, +0.28 ≈ +28% pop). */}
-          <HueSaturation saturation={SATURATION} />
-          {/* Brightness/contrast trim (both 0 = unchanged); slight contrast punch. */}
-          <BrightnessContrast brightness={BRIGHTNESS} contrast={CONTRAST} />
-          {/* Edge AA: FXAA merges into the grade EffectPass (no standalone
-              full-screen pass like SMAA) — the fill win over SMAA on mobile.
-              subpixelQuality trimmed below default (0.75 -> 0.4) so its edge
-              blur softens the board text less; see MOBILE_FXAA_SUBPIXEL_QUALITY. */}
-          <FXAA subpixelQuality={MOBILE_FXAA_SUBPIXEL_QUALITY} />
-          {/* Sharpen (unsharp mask) — LAST, after the grade + FXAA, so it
-              sharpens the final upscaled image and counters the dpr-2 + FXAA
-              softness on the board text. A per-fragment Effect, so it MERGES
-              into the same EffectPass as ToneMapping/grade/FXAA (no standalone
-              full-screen pass, ~4 texel taps of added cost). Mobile only. */}
-          <Sharpen />
-        </EffectComposer>
+        <MobileCrispBoardPipeline
+          saturation={SATURATION}
+          brightness={BRIGHTNESS}
+          contrast={CONTRAST}
+          fxaaSubpixelQuality={MOBILE_FXAA_SUBPIXEL_QUALITY}
+          sceneDpr={MOBILE_SCENE_DPR}
+          depthBias={MOBILE_BOARD_DEPTH_BIAS}
+        />
       ) : (
         <EffectComposer multisampling={0} stencilBuffer={false}>
           {/*

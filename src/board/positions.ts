@@ -46,6 +46,26 @@ export const BOARD_WORLD_SIZE = 10;
  */
 export const BOARD_ROTATION = -Math.PI / 2;
 
+/**
+ * BOARD_LAYER — dedicated three.js render LAYER for the board slab (edge box +
+ * artwork plane), used by the MOBILE crisp-board pipeline ONLY.
+ *
+ * On mobile, MobileCrispBoardPipeline renders the board in its own pass at NATIVE
+ * device-pixel-ratio by pointing the camera at this layer, and renders the
+ * expensive scene (forest / city / tokens / sky) at dpr 2 with the camera on the
+ * default layer 0 — which EXCLUDES the board (so the board is drawn exactly once,
+ * native). The two linear-HDR passes are then depth-composited and graded once.
+ *
+ * LIGHTING PARITY: three gates lights by layer too (a light is only collected if
+ * `light.layers.test(camera.layers)`), so the pipeline additively enables this
+ * layer on every scene light. The board therefore inherits the SAME lights and
+ * the SAME scene.environment (HDRI IBL) as the main pass and is lit identically.
+ *
+ * Desktop never touches this: the board stays on the default layer 0 and renders
+ * in the normal single pass, so this constant is inert there.
+ */
+export const BOARD_LAYER = 1;
+
 /** Map a tile index to a world-space [x, y=0, z] on the board plane, centered at origin. */
 export function tileToWorld(index: number): [number, number, number] {
   const pos = SPACE_POSITIONS[index];

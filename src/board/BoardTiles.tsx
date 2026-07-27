@@ -1,9 +1,8 @@
-import { useEffect, useMemo, useRef } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useRef } from 'react';
 import * as THREE from 'three';
 import { useTexture, useKTX2 } from '@react-three/drei';
 import { useThree } from '@react-three/fiber';
-import { BOARD_WORLD_SIZE } from './positions';
-// eslint-disable-next-line @typescript-eslint/no-unused-vars -- TEST: isMobile unused while testing webp on mobile; uncomment to revert
+import { BOARD_WORLD_SIZE, BOARD_LAYER } from './positions';
 import { useIsMobile } from '../ui/useIsMobile';
 import { getDebugVisibility, subscribeDebugVisibility } from '../dev/debugVisibility';
 
@@ -88,6 +87,24 @@ function BoardSlab({ texture }: { texture: THREE.Texture }) {
   // cost on the FPS/RenderStatsReadout panels. Ref-only; gated below.
   const groupRef = useRef<THREE.Group>(null);
 
+  // Refs to the two slab meshes so the MOBILE crisp-board pipeline can move them
+  // onto a dedicated render layer (see below).
+  const edgeMeshRef = useRef<THREE.Mesh>(null);
+  const topMeshRef = useRef<THREE.Mesh>(null);
+
+  // MOBILE ONLY: put both board meshes on BOARD_LAYER so the mobile pipeline can
+  // render the board in its own native-resolution pass (camera.layers) while the
+  // dpr-2 main pass (camera on layer 0) EXCLUDES the board. On desktop the board
+  // stays on the default layer 0 → normal single-pass render (byte-identical).
+  // Keyed to isMobile so a resize/orientation flip re-homes the meshes correctly.
+  // useLayoutEffect so the layer is set before the first frame renders.
+  const isMobile = useIsMobile();
+  useLayoutEffect(() => {
+    const target = isMobile ? BOARD_LAYER : 0;
+    edgeMeshRef.current?.layers.set(target);
+    topMeshRef.current?.layers.set(target);
+  }, [isMobile]);
+
   // TWO materials (was a 6-material box). `edge` covers the whole slab body in a
   // single draw; `top` carries the board artwork on a separate top plane. Same
   // colors/textures/roughness as before — only the mesh decomposition changed.
@@ -150,7 +167,7 @@ function BoardSlab({ texture }: { texture: THREE.Texture }) {
           material for all 6 faces → a single draw call for the whole box. Its
           top face is edge-colored but hidden under the board plane below.
           Keeps cast+receive shadow so the slab's downward shadow is unchanged. */}
-      <mesh position={[0, TOP_Y - DEPTH / 2, 0]} material={edge} receiveShadow castShadow>
+      <mesh ref={edgeMeshRef} position={[0, TOP_Y - DEPTH / 2, 0]} material={edge} receiveShadow castShadow>
         <boxGeometry args={[BOARD_WORLD_SIZE, DEPTH, BOARD_WORLD_SIZE]} />
       </mesh>
       {/* Board artwork top face — a flat 10×10 plane at exactly TOP_Y, laid
@@ -160,7 +177,7 @@ function BoardSlab({ texture }: { texture: THREE.Texture }) {
           old box top. Carries the saturation patch (top material) and receives
           shadows so tokens/buildings still cast onto the board. Sits on top of
           the coplanar box face via the material's polygonOffset. */}
-      <mesh position={[0, TOP_Y, 0]} rotation={[-Math.PI / 2, 0, 0]} material={top} receiveShadow>
+      <mesh ref={topMeshRef} position={[0, TOP_Y, 0]} rotation={[-Math.PI / 2, 0, 0]} material={top} receiveShadow>
         <planeGeometry args={[BOARD_WORLD_SIZE, BOARD_WORLD_SIZE]} />
       </mesh>
     </group>

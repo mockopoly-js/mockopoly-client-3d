@@ -64,5 +64,14 @@ class SharpenEffectImpl extends Effect {
   }
 }
 
-/** Declarative wrapper — used only inside the MOBILE EffectComposer. */
+/** Declarative wrapper — the @react-three/postprocessing <EffectComposer> form. */
 export const Sharpen = wrapEffect(SharpenEffectImpl);
+
+/**
+ * Raw `postprocessing` Effect class — for imperative use OUTSIDE a declarative
+ * <EffectComposer>. The mobile crisp-board pipeline builds its grade EffectPass
+ * by hand (`new EffectPass(camera, ...effects)`) so it can drive it at native
+ * resolution over a custom composite buffer; it instantiates this directly
+ * (`new SharpenEffectImpl()`) to keep the sharpen identical to the composer form.
+ */
+export { SharpenEffectImpl };

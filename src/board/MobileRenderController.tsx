@@ -15,8 +15,15 @@ export interface ComposerHandle {
 }
 
 interface MobileRenderControllerProps {
-  /** Ref to the MOBILE <EffectComposer> so a dpr change can resize its buffers. */
-  composerRef: React.RefObject<ComposerHandle | null>;
+  /**
+   * OPTIONAL ref to a MOBILE <EffectComposer> so a dpr change can resize its
+   * buffers. The native-resolution crisp-board pipeline (MobileCrispBoardPipeline)
+   * owns and resizes its OWN render targets each frame from the live pixel ratio,
+   * so it passes no composer ref and this is left undefined — `applyDpr` then just
+   * calls setDpr and the frame loop self-heals the buffer sizes. Kept for the
+   * legacy single-<EffectComposer> path.
+   */
+  composerRef?: React.RefObject<ComposerHandle | null>;
   dprMoving: number;
   dprStill: number;
   settleMs: number;
@@ -60,7 +67,7 @@ export function MobileRenderController({
       // resolution (css size × new pixel ratio) — otherwise the scene keeps
       // rendering at the composer's mount-time resolution and dpr does nothing.
       const { width, height } = getR3F().size;
-      composerRef.current?.setSize(width, height);
+      composerRef?.current?.setSize(width, height);
     };
     // Live-dpr reader (source of truth): R3F re-applies the Canvas `dpr` prop on
     // every reconfigure, so the bus compares against this — not a local cache —
