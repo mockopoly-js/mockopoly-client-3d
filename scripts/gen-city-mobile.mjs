@@ -34,7 +34,8 @@
  */
 import { NodeIO, TextureInfo } from '@gltf-transform/core';
 import { EXTMeshGPUInstancing, KHRDracoMeshCompression } from '@gltf-transform/extensions';
-import { prune, uninstance, flatten, dedup, weld, join, draco } from '@gltf-transform/functions';
+import { prune, uninstance, flatten, dedup, weld, join, simplify, draco } from '@gltf-transform/functions';
+import { MeshoptSimplifier } from 'meshoptimizer';
 import draco3d from 'draco3dgltf';
 import sharp from 'sharp';
 import { statSync } from 'node:fs';
@@ -55,6 +56,13 @@ const ROWS = 8;
 const ATLAS_W = COLS * CELL;      // 2304
 const ATLAS_H = ROWS * CELL;      // 2048
 
+// GENTLE geometry decimation (mobile-only). Runs AFTER join so the simplifier
+// sees the whole city as one connected mesh. Conservative: KEEP ~85% of tris,
+// tight error bound + locked borders so the compact city silhouette and building
+// footprints are preserved. city.glb is never touched (script only writes OUT).
+const SIMPLIFY_RATIO = 0.85;   // fraction of triangles to KEEP
+const SIMPLIFY_ERROR = 0.008;  // max normalized quadric error (silhouette guard)
+
 const clamp01 = (x) => (x < 0 ? 0 : x > 1 ? 1 : x);
 const MB = (n) => (n / 1024 / 1024).toFixed(2) + ' MB';
 // RGBA8 texture VRAM incl. the +1/3 mip chain.
@@ -62,6 +70,7 @@ const texVram = (w, h) => (w * h * 4 * 4) / 3;
 
 async function main() {
   const encoder = await draco3d.createEncoderModule();
+  await MeshoptSimplifier.ready;
   const io = new NodeIO()
     .registerExtensions([EXTMeshGPUInstancing, KHRDracoMeshCompression])
     .registerDependencies({ 'draco3d.encoder': encoder });
@@ -181,8 +190,16 @@ async function main() {
     }
   }
 
-  // ── 4. Collapse: prune → uninstance → flatten → dedup → weld → join → prune → draco
-  console.log('[gen-city-mobile] transform: prune, uninstance, flatten, dedup, weld, join, prune, draco ...');
+  // ── 4. Collapse: prune → uninstance → flatten → dedup → weld → join → simplify → prune → draco
+  // simplify() runs AFTER join() (so it sees the whole city as ~1-2 connected
+  // single-material meshes — the best connectivity to work on) and BEFORE draco()
+  // (so the reduced geometry is what gets compressed). simplify() welds internally,
+  // so it is safe after the existing weld()+join(). lockBorder:true preserves
+  // open-boundary/silhouette edges (building outlines, city perimeter). The SimplePoly
+  // city is hard-edged low-poly "triangle soup", so attribute-consistent welding
+  // leaves few interior collapsible edges → expect a CONSERVATIVE reduction, which is
+  // exactly the "gentle" intent (see the read-back tri count below to verify).
+  console.log('[gen-city-mobile] transform: prune, uninstance, flatten, dedup, weld, join, simplify, prune, draco ...');
   await doc.transform(
     prune(),
     uninstance(),
@@ -190,6 +207,7 @@ async function main() {
     dedup(),
     weld(),
     join(),
+    simplify({ simplifier: MeshoptSimplifier, ratio: SIMPLIFY_RATIO, error: SIMPLIFY_ERROR, lockBorder: true }),
     prune(),
     draco(),
   );

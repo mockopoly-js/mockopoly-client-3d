@@ -186,9 +186,18 @@ const MOBILE_SETTLE_MS = 120;
  *   css × min(nativeDpr, MOBILE_SCENE_DPR).)
  * - MOBILE_BOARD_DEPTH_BIAS: view-space-Z bias biasing the board/scene depth
  *   composite toward the SCENE at the token/house contact (kills contact shimmer).
+ * - MOBILE_CITY_DPR: the FIXED dpr the center CITY renders at, in its OWN pass
+ *   (the city collapses to this min(nativeDpr, 1.5) at rest, and to the cheap
+ *   MOVING dpr while orbiting — see MobileCrispBoardPipeline). Set trivially to
+ *   MOBILE_SCENE_DPR (or MOBILE_DPR_STILL) to A/B the split away.
+ * - MOBILE_CITY_DEPTH_BIAS: view-space-Z bias biasing the city/board & city/ground
+ *   composite toward the CITY at its contact base (the city is the foreground
+ *   object there, so it wins near-ties; a tree genuinely in front still occludes it).
  */
 const MOBILE_SCENE_DPR = 2;
 const MOBILE_BOARD_DEPTH_BIAS = 0.03;
+const MOBILE_CITY_DPR = 1.5;
+const MOBILE_CITY_DEPTH_BIAS = 0.03;
 
 /**
  * ── MOBILE-ONLY DISTANCE FOG (atmospheric far-haze) ───────────────────────────
@@ -606,7 +615,9 @@ export function GameScene() {
           contrast={CONTRAST}
           fxaaSubpixelQuality={MOBILE_FXAA_SUBPIXEL_QUALITY}
           sceneDpr={MOBILE_SCENE_DPR}
+          cityDpr={MOBILE_CITY_DPR}
           depthBias={MOBILE_BOARD_DEPTH_BIAS}
+          cityDepthBias={MOBILE_CITY_DEPTH_BIAS}
         />
       ) : (
         <EffectComposer multisampling={0} stencilBuffer={false}>

@@ -10,16 +10,22 @@ import {
 } from 'postprocessing';
 import { FullScreenQuad } from 'three-stdlib';
 import { SharpenEffectImpl } from '../screens/SharpenEffect';
-import { BOARD_LAYER } from './positions';
+import { BOARD_LAYER, CITY_LAYER } from './positions';
 
 /**
  * ── MOBILE CRISP-BOARD PIPELINE (MOBILE ONLY) ────────────────────────────────
  *
  * Replaces the mobile <EffectComposer>. It renders the board texture at NATIVE
- * device-pixel-ratio (razor-crisp text) while keeping the expensive scene
- * (forest / city / tokens / HDRI sky) at dpr 2 for framerate, then depth-composites
- * the two and applies the SAME colour grade the mobile composer used — once, over
- * the composited linear-HDR image, so the board and scene are graded identically.
+ * device-pixel-ratio (razor-crisp text) and the center city at a reduced dpr (~1.5)
+ * while keeping the rest of the expensive scene (forest / tokens / ground / HDRI
+ * sky) at dpr 2 for framerate, then depth-composites the THREE tiers and applies
+ * the SAME colour grade the mobile composer used — once, over the composited
+ * linear-HDR image, so every tier is graded identically.
+ *
+ * WHY THREE PASSES: a single FBO has ONE resolution, so a per-object resolution
+ * (native board, dpr-1.5 city, dpr-2 rest) REQUIRES a per-object PASS — each tier
+ * renders into its own render target at its own dpr, and a depth composite merges
+ * them for arbitrary (fully free-orbit) camera poses.
  *
  * WHY NOT A COMPOSER EFFECT: a single postprocessing EffectComposer runs every
  * pass at ONE resolution, so a composite added as its last effect would re-sample
@@ -29,19 +35,22 @@ import { BOARD_LAYER } from './positions';
  *
  * FRAME GRAPH (per frame, in a useFrame at renderPriority 1 so R3F's auto-render
  * is suppressed and this is the only thing that presents):
- *   1. SCENE pass  — camera.layers = {0} (board EXCLUDED) → sceneFBO
+ *   1. SCENE pass  — camera.layers = {0} (board + city EXCLUDED) → sceneFBO
  *                    [css × min(dpr,sceneDpr), HalfFloat LINEAR + DepthTexture]
  *   2. BOARD pass  — camera.layers = {BOARD_LAYER} (board ONLY), sky suppressed
  *                    → boardFBO [css × dpr (native), HalfFloat LINEAR + DepthTexture]
- *   3. COMPOSITE   — depth-merge board over scene (native) → compositeFBO (linear)
- *   4. GRADE       — the reused mobile grade EffectPass over compositeFBO → canvas
+ *   3. CITY pass   — camera.layers = {CITY_LAYER} (city ONLY), sky suppressed
+ *                    → cityFBO [css × min(dpr,cityDpr), HalfFloat LINEAR + DepthTexture]
+ *   4. COMPOSITE   — depth-merge city over board over scene (native) → compositeFBO
+ *   5. GRADE       — the reused mobile grade EffectPass over compositeFBO → canvas
  *                    (native): AGX ToneMapping → HueSaturation → BrightnessContrast
  *                    → FXAA → Sharpen → sRGB, encoded once.
  *
- * Both passes share the SAME scene + camera, so the board inherits the SAME lights
- * (this component additively enables BOARD_LAYER on every light — lights are layer
- * gated too) and the SAME scene.environment (HDRI IBL, not layer gated) → the board
- * is lit IDENTICALLY to the single-pass render. NOT a separate un-lit scene.
+ * All passes share the SAME scene + camera, so the board AND city inherit the SAME
+ * lights (this component additively enables BOTH BOARD_LAYER and CITY_LAYER on every
+ * light — lights are layer gated too) and the SAME scene.environment (HDRI IBL, not
+ * layer gated) → they are lit IDENTICALLY to the single-pass render. NOT separate
+ * un-lit scenes. scene.fog is not layer gated either, so the city stays fogged.
  *
  * MOVING vs STILL: everything keys off the live renderer pixel ratio. At rest the
  * renderer is at native dpr (crisp board); while the camera moves the adaptive-dpr
@@ -68,6 +77,14 @@ interface MobileCrispBoardPipelineProps {
    */
   sceneDpr: number;
   /**
+   * Fixed dpr for the CITY pass (the low-poly center city). The city FBO is sized
+   * css × min(liveDpr, cityDpr); at rest liveDpr is native so the city renders at
+   * cityDpr (≈1.5), and while orbiting liveDpr drops to the cheap MOVING dpr so the
+   * city collapses with the rest of the scene (crispness only matters at rest).
+   * Splitting the city into its own pass is what lets it carry its own resolution.
+   */
+  cityDpr: number;
+  /**
    * View-space-Z bias (world-ish units) so a token/house base — which sits ON the
    * board surface (zBoard ≈ zScene at the contact) — resolves to the SCENE, not the
    * board, killing z-fight shimmer at the contact. The board wins a pixel only if it
@@ -75,6 +92,16 @@ interface MobileCrispBoardPipelineProps {
    * shimmer; too large → the board visibly recedes behind low geometry.
    */
   depthBias: number;
+  /**
+   * View-space-Z bias for the CITY tie-break, OPPOSITE in direction to depthBias.
+   * The city is physically the foreground object sitting ON the board/ground, so it
+   * WINS near-ties against whatever occupies the pixel (scene or board) — it wins if
+   * its view-Z is within cityBias of the current surface. A tree genuinely IN FRONT
+   * still occludes it (its view-Z is clearly nearer). Keep small (~0.02–0.03): too
+   * large and the city punches through near-front foliage within that margin; too
+   * small and the 1.5-vs-native contact shimmer returns.
+   */
+  cityDepthBias: number;
 }
 
 // Full-screen composite. Vertex maps the FullScreenQuad's PlaneGeometry(2,2)
@@ -96,14 +123,17 @@ uniform sampler2D sceneColor;
 uniform highp sampler2D sceneDepth;
 uniform sampler2D boardColor;
 uniform highp sampler2D boardDepth;
+uniform sampler2D cityColor;
+uniform highp sampler2D cityDepth;
 uniform float cameraNear;
 uniform float cameraFar;
 uniform float depthBias;
+uniform float cityBias;
 in vec2 vUv;
 out vec4 fragColor;
 
 // three's perspectiveDepthToViewZ: non-linear [0,1] depth -> negative view-space Z.
-// Both passes share the same camera, so these are directly comparable; a NEARER
+// All passes share the same camera, so these are directly comparable; a NEARER
 // surface yields a LARGER (less-negative) value. Converting to view-Z makes the bias
 // uniform in world space across the whole depth range.
 float viewZ(float depth) {
@@ -111,30 +141,34 @@ float viewZ(float depth) {
 }
 
 void main() {
-  vec3 sceneC = texture(sceneColor, vUv).rgb;
+  // BASE: the scene always has full coverage (HDRI sky fills the background), so
+  // it is the fallback everywhere. COLOR bilinear (smooth upscale); DEPTH NEAREST
+  // (DepthTexture default) so the dpr2->native upscale never invents an
+  // intermediate depth across a silhouette -> no halo.
+  vec3 outC = texture(sceneColor, vUv).rgb;
+  float zS  = viewZ(texture(sceneDepth, vUv).x);
+  float outZ = zS;
+
+  // BOARD (native, sparse). rawB==1.0 => board wrote nothing (cleared to far).
+  // Board wins over scene ONLY if strictly nearer by depthBias -> a token/house
+  // base sitting ON the board (zB~=zS) resolves to the scene, killing contact shimmer.
   float rawB = texture(boardDepth, vUv).x;
-  // rawB == 1.0 -> the board pass wrote nothing here (cleared to the far plane) ->
-  // outside the board footprint (forest / sky) -> keep the scene.
-  if (rawB >= 1.0) {
-    fragColor = vec4(sceneC, 1.0);
-    return;
+  if (rawB < 1.0) {
+    float zB = viewZ(rawB);
+    if (zB > zS + depthBias) { outC = texture(boardColor, vUv).rgb; outZ = zB; }
   }
-  // Scene depth is sampled NEAREST (DepthTexture's default filter), so the
-  // dpr-2 -> native upscale never invents an intermediate depth across a
-  // token/house silhouette (which would shimmer at the contact). Scene COLOR
-  // keeps LinearFilter for a smooth upscale.
-  float rawS = texture(sceneDepth, vUv).x;
-  float zS = viewZ(rawS);
-  float zB = viewZ(rawB);
-  // Board wins only if strictly nearer than the scene by depthBias. At a token
-  // base zB ≈ zS, so the tie resolves to the scene (the token) — the crisp board
-  // never bleeds over the token's base. Forest trees / tokens in FRONT of the
-  // board have zS > zB, so they correctly occlude it.
-  if (zB > zS + depthBias) {
-    fragColor = vec4(texture(boardColor, vUv).rgb, 1.0);
-  } else {
-    fragColor = vec4(sceneC, 1.0);
+
+  // CITY (dpr1.5, sparse). rawC==1.0 => no city here. City is physically ON TOP of
+  // board/ground, so it wins NEAR-TIES against whatever currently occupies the
+  // pixel (scene OR board) via cityBias in its favor; a clearly-nearer scene
+  // surface (forest tree in FRONT) still occludes it because then outZ >> zC and the
+  // test fails. Depth NEAREST for the same anti-halo reason as the scene tier.
+  float rawC = texture(cityDepth, vUv).x;
+  if (rawC < 1.0) {
+    float zC = viewZ(rawC);
+    if (zC > outZ - cityBias) { outC = texture(cityColor, vUv).rgb; }
   }
+  fragColor = vec4(outC, 1.0);
 }
 `;
 
@@ -157,7 +191,9 @@ export function MobileCrispBoardPipeline({
   contrast,
   fxaaSubpixelQuality,
   sceneDpr,
+  cityDpr,
   depthBias,
+  cityDepthBias,
 }: MobileCrispBoardPipelineProps): null {
   const gl = useThree((s) => s.gl);
   const scene = useThree((s) => s.scene);
@@ -171,8 +207,12 @@ export function MobileCrispBoardPipeline({
   const rig = useMemo(() => {
     const sceneDepthTex = new THREE.DepthTexture(2, 2, THREE.UnsignedIntType);
     const boardDepthTex = new THREE.DepthTexture(2, 2, THREE.UnsignedIntType);
+    // City FBO — same format/type as the scene FBO (HalfFloat LINEAR + NEAREST
+    // UnsignedInt DepthTexture), sized css × min(dpr, cityDpr) at bind time.
+    const cityDepthTex = new THREE.DepthTexture(2, 2, THREE.UnsignedIntType);
     const sceneFBO = makeTarget(sceneDepthTex);
     const boardFBO = makeTarget(boardDepthTex);
+    const cityFBO = makeTarget(cityDepthTex);
     const compositeFBO = makeTarget(null);
 
     const compositeMat = new THREE.RawShaderMaterial({
@@ -188,9 +228,12 @@ export function MobileCrispBoardPipeline({
         sceneDepth: { value: sceneDepthTex },
         boardColor: { value: boardFBO.texture },
         boardDepth: { value: boardDepthTex },
+        cityColor: { value: cityFBO.texture },
+        cityDepth: { value: cityDepthTex },
         cameraNear: { value: 0.1 },
         cameraFar: { value: 1000 },
         depthBias: { value: depthBias },
+        cityBias: { value: cityDepthBias },
       },
     });
     const quad = new FullScreenQuad(compositeMat);
@@ -215,14 +258,16 @@ export function MobileCrispBoardPipeline({
     return {
       sceneFBO,
       boardFBO,
+      cityFBO,
       compositeFBO,
       sceneDepthTex,
       boardDepthTex,
+      cityDepthTex,
       compositeMat,
       quad,
       gradePass,
     };
-  }, [camera, saturation, brightness, contrast, fxaaSubpixelQuality, depthBias]);
+  }, [camera, saturation, brightness, contrast, fxaaSubpixelQuality, depthBias, cityDepthBias]);
 
   // Last native pixel size the grade pass was sized to (its FXAA/Sharpen texelSize).
   const lastNative = useRef({ w: 0, h: 0 });
@@ -245,28 +290,38 @@ export function MobileCrispBoardPipeline({
     const prevToneMapping = gl.toneMapping;
     gl.toneMapping = THREE.NoToneMapping;
 
-    // Additively enable BOARD_LAYER on every light (a light is only collected if
-    // `light.layers.test(camera.layers)`, so without this the board pass would be
-    // unlit/black). `.layers` lives on Object3D, so we track Object3D and detect
-    // lights via the optional `isLight` flag (Partial → `true | undefined`).
+    // Additively enable BOTH the board and city layers on every light (a light is
+    // only collected if `light.layers.test(camera.layers)`, so without this the
+    // board pass AND the city pass would be unlit/black). `.layers` lives on
+    // Object3D, so we track Object3D and detect lights via the optional `isLight`
+    // flag (Partial → `true | undefined`). Enabling on EVERY light is correct and
+    // future-proof: the mobile-active lights (hemisphere / ambient / KEY) all need
+    // to reach the board + city; FILL/RIM are desktop-only so the traverse simply
+    // won't find them on mobile — no special-casing needed.
     const litLights: THREE.Object3D[] = [];
     scene.traverse((o) => {
       const isLight = (o as Partial<THREE.Light>).isLight === true;
-      if (isLight && !o.layers.isEnabled(BOARD_LAYER)) {
+      if (isLight && (!o.layers.isEnabled(BOARD_LAYER) || !o.layers.isEnabled(CITY_LAYER))) {
         o.layers.enable(BOARD_LAYER);
+        o.layers.enable(CITY_LAYER);
         litLights.push(o);
       }
     });
 
     return () => {
       gl.toneMapping = prevToneMapping;
-      for (const light of litLights) light.layers.disable(BOARD_LAYER);
+      for (const light of litLights) {
+        light.layers.disable(BOARD_LAYER);
+        light.layers.disable(CITY_LAYER);
+      }
       lastNative.current = { w: 0, h: 0 };
       rig.sceneFBO.dispose();
       rig.boardFBO.dispose();
+      rig.cityFBO.dispose();
       rig.compositeFBO.dispose();
       rig.sceneDepthTex.dispose();
       rig.boardDepthTex.dispose();
+      rig.cityDepthTex.dispose();
       rig.compositeMat.dispose();
       rig.quad.dispose();
       rig.gradePass.dispose();
@@ -282,6 +337,9 @@ export function MobileCrispBoardPipeline({
     const sDpr = Math.min(dpr, sceneDpr);
     const sceneW = Math.max(1, Math.round(size.width * sDpr));
     const sceneH = Math.max(1, Math.round(size.height * sDpr));
+    const cDpr = Math.min(dpr, cityDpr);
+    const cityW = Math.max(1, Math.round(size.width * cDpr));
+    const cityH = Math.max(1, Math.round(size.height * cDpr));
 
     // Resize only when the pixel size actually changes (dpr swap on camera-motion
     // start/end, or a viewport resize). setSize reallocates lazily and three
@@ -291,6 +349,9 @@ export function MobileCrispBoardPipeline({
     }
     if (rig.boardFBO.width !== nativeW || rig.boardFBO.height !== nativeH) {
       rig.boardFBO.setSize(nativeW, nativeH);
+    }
+    if (rig.cityFBO.width !== cityW || rig.cityFBO.height !== cityH) {
+      rig.cityFBO.setSize(cityW, cityH);
     }
     if (rig.compositeFBO.width !== nativeW || rig.compositeFBO.height !== nativeH) {
       rig.compositeFBO.setSize(nativeW, nativeH);
@@ -308,8 +369,8 @@ export function MobileCrispBoardPipeline({
     const prevBackground = scene.background;
     gl.autoClear = true;
 
-    // 1. SCENE pass — everything EXCEPT the board (layer 0), at scene dpr. Keeps
-    //    scene.background (HDRI sky) so the sky renders here at the cheap dpr.
+    // 1. SCENE pass — everything on layer 0 (board + city EXCLUDED), at scene dpr.
+    //    Keeps scene.background (HDRI sky) so the sky renders here at the cheap dpr.
     camera.layers.set(0);
     gl.setRenderTarget(rig.sceneFBO);
     gl.render(scene, camera);
@@ -323,14 +384,26 @@ export function MobileCrispBoardPipeline({
     camera.layers.set(BOARD_LAYER);
     gl.setRenderTarget(rig.boardFBO);
     gl.render(scene, camera);
+
+    // 3. CITY pass — ONLY the city layer, at dpr 1.5. Keep the sky suppressed (a
+    //    sparse layer; depth clears to 1.0 outside the city footprint). scene.fog
+    //    stays live so the city is fogged exactly as before, and scene.environment
+    //    (IBL) is untouched so its lighting is identical.
+    camera.layers.set(CITY_LAYER);
+    gl.setRenderTarget(rig.cityFBO);
+    gl.render(scene, camera);
+
+    // Restore the sky background AFTER both sparse passes, and the default layer
+    // for the composite quad + everything else (the FullScreenQuad renders on 0).
     scene.background = prevBackground;
     camera.layers.set(0);
 
-    // 3. COMPOSITE — depth-merge board over scene into a native linear-HDR buffer.
+    // 4. COMPOSITE — 3-way depth merge (city over board over scene) into a native
+    //    linear-HDR buffer.
     gl.setRenderTarget(rig.compositeFBO);
     rig.quad.render(gl);
 
-    // 4. GRADE + PRESENT — the merged mobile grade chain, sRGB-encoded once,
+    // 5. GRADE + PRESENT — the merged mobile grade chain, sRGB-encoded once,
     //    straight to the canvas at native dpr.
     rig.gradePass.render(gl, rig.compositeFBO, null, delta);
 

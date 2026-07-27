@@ -1,6 +1,7 @@
-import { useEffect, useMemo, useRef } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useRef } from 'react';
 import * as THREE from 'three';
 import { useGLTF } from '@react-three/drei';
+import { CITY_LAYER } from './positions';
 import { getDebugVisibility, subscribeDebugVisibility } from '../dev/debugVisibility';
 
 /**
@@ -161,6 +162,25 @@ export function CityDressing({ isMobile = false }: { isMobile?: boolean }): Reac
     apply();
     return subscribeDebugVisibility(apply);
   }, [object]);
+
+  // MOBILE ONLY: put EVERY city object on CITY_LAYER so the mobile pipeline can
+  // render the city in its own reduced-dpr pass (camera.layers = {CITY_LAYER})
+  // while the dpr-2 scene pass (camera on layer 0) and the native board pass both
+  // EXCLUDE it. This MUST traverse the whole subtree, not just the wrapper group:
+  // three's projectObject reads each object's OWN `layers.test(camera.layers)` to
+  // decide renderability and does NOT inherit a parent's layer (only visible=false
+  // prunes children), so setting the group alone would leave the meshes on layer 0.
+  // `layers.set` REPLACES the mask (exclusive membership), so on mobile every city
+  // object leaves layer 0 → the scene pass no longer draws the city. On desktop the
+  // target is 0 (three.js default) → byte-identical, and desktop never gates layers
+  // anyway. useLayoutEffect (not passive) so layers are set before the pipeline's
+  // first useFrame. Keyed to [isMobile, object] so a resize/orientation flip or a
+  // scene re-clone re-homes every object correctly.
+  useLayoutEffect(() => {
+    const target = isMobile ? CITY_LAYER : 0;
+    object.traverse((o) => o.layers.set(target));
+    groupRef.current?.layers.set(target);
+  }, [isMobile, object]);
 
   return (
     <group

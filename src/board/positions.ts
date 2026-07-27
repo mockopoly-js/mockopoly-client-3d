@@ -66,6 +66,30 @@ export const BOARD_ROTATION = -Math.PI / 2;
  */
 export const BOARD_LAYER = 1;
 
+/**
+ * CITY_LAYER — dedicated three.js render LAYER for the low-poly center city,
+ * used by the MOBILE crisp-board pipeline ONLY.
+ *
+ * On mobile, MobileCrispBoardPipeline renders the city in its OWN pass at a
+ * reduced device-pixel-ratio (MOBILE_CITY_DPR ≈ 1.5) by pointing the camera at
+ * this layer, then depth-composites it with the board pass (native dpr) and the
+ * scene pass (dpr 2 — forest / tokens / ground / sky, camera on the default
+ * layer 0 which EXCLUDES both board AND city). Splitting the city into its own
+ * pass is the only way to give it a per-object resolution: a single FBO has one
+ * resolution, so per-object resolution ⇒ per-object pass.
+ *
+ * LIGHTING PARITY: three gates lights by layer too (a light is only collected if
+ * `light.layers.test(camera.layers)`), so the pipeline additively enables this
+ * layer on every scene light alongside BOARD_LAYER. The city therefore inherits
+ * the SAME lights and the SAME scene.environment (HDRI IBL — not layer gated) as
+ * the main pass and is lit identically. scene.fog is likewise not layer gated, so
+ * the city stays fogged exactly as it was in the single scene pass.
+ *
+ * Desktop never touches this: the city stays on the default layer 0 and renders
+ * in the normal single pass, so this constant is inert there.
+ */
+export const CITY_LAYER = 2;
+
 /** Map a tile index to a world-space [x, y=0, z] on the board plane, centered at origin. */
 export function tileToWorld(index: number): [number, number, number] {
   const pos = SPACE_POSITIONS[index];
