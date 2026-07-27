@@ -12,7 +12,6 @@ import {
   horizontalNearestDistanceToBox,
   type ForestChunkLod,
   type ForestLodTier,
-  type ForestDensityTier,
   type ForestHorizontalBox,
 } from './forestChunking';
 import {
@@ -212,21 +211,42 @@ const LOD_HYSTERESIS = 1.5; // world units: anti-flicker dead-band around each t
  * changes (tracked per-chunk like the LOD `tier`) to avoid per-frame churn, and
  * restored to the full count when a chunk returns to the near band.
  * {@link selectForestDensityTier} applies ±DENSITY_HYSTERESIS so the count never
- * flickers at a band edge (residual pops occur inside the fog, where the haze
- * hides them). Non-foliage chunks (`meta.lod === null`) are never truncated.
+ * flickers at a band edge. Non-foliage chunks (`meta.lod === null`) are never
+ * truncated.
+ *
+ * ── WHY THE BANDS SIT WHERE THEY DO (fog-metric correction + split steps) ──────
+ * A density step is only invisible if the fog it hides behind is actually OPAQUE
+ * at the distance the step fires. Two things previously broke that and made the
+ * biggest cut pop in CLEAR AIR:
+ *   1. METRIC MISMATCH. Density classifies by EUCLIDEAN `camPos.distanceTo(center)`
+ *      but fog is linear in VIEW-SPACE DEPTH (`fogDepth ≈ 0.8 × distance` for the
+ *      tilted-overhead camera — see the ring-cull note below). The ring cull
+ *      already corrects this exact mismatch (FOREST_CULL_DISTANCE = FOG_FAR × 1.27
+ *      so a culled chunk is provably fog=1.0); the density bands MUST too, or a
+ *      band edge lands ~25% NEARER than the fog opacity it means to hide behind.
+ *   2. ONE HUGE STEP AT THE FOG ONSET. A single 0.65→0.18 cut (3.6×) at ≈FOG_NEAR
+ *      fired exactly where linear fog opacity is still 0 — maximally visible.
+ * Fix: the bands are pushed out into fog-opaque space (mirroring the cull's ×1.27)
+ * AND the one big cut is SPLIT into three gentle steps (≤~2.2× each), each landing
+ * at progressively higher fog opacity so the haze grows into every cut. Anchored
+ * to the fog band [FOG_NEAR=24, FOG_FAR=52] (GameScene) via the correction:
+ *   • 36 → fogDepth≈29, fog opacity≈0.17 — first, SMALLEST cut 0.65→0.42 (1.55×)
+ *   • 48 → fogDepth≈38, fog opacity≈0.51 — 0.42→0.22 (1.9×)
+ *   • 58 → fogDepth≈46, fog opacity≈0.80 — LARGEST cut 0.22→0.10 (2.2×), well hazed
+ * Keeping more foreground foliage at full count out to 36 barely costs anything:
+ * everything past LOD_DIST_2 (14) is already the ~5%-detail LOD2 geometry.
  *
  * Tunable (the user live-tunes these):
- *   DENSITY_NEAR_DIST — below this a foliage chunk keeps DENSITY_NEAR_KEEP.
- *   DENSITY_FOG_DIST  — above this → DENSITY_DEEP_KEEP; between the two → DENSITY_FOG_KEEP.
- *   DENSITY_*_KEEP    — keep-fractions per band (near / fog / deep).
+ *   DENSITY_BAND_DISTS — ASCENDING euclidean camera-distance band edges (one per
+ *       step); band count = length + 1. Pushed past ≈FOG_NEAR to sit in fog-opaque
+ *       space (see above), never at the fog onset.
+ *   DENSITY_BAND_KEEPS — nearest-first keep-fractions, one per band (length =
+ *       DENSITY_BAND_DISTS.length + 1). Monotonically decreasing.
  *   DENSITY_HYSTERESIS — dead-band around each threshold (anti-flicker).
  */
-const DENSITY_NEAR_DIST = 24;   // ≈ FOG_NEAR: inside this → foreground global reduction
-const DENSITY_FOG_DIST = 52;    // ≈ FOG_FAR: fog ring ends here (deep fog beyond, out to cull=66)
-const DENSITY_NEAR_KEEP = 0.65; // foreground: keep 65% (global density reduction)
-const DENSITY_FOG_KEEP = 0.18;  // fog ring: keep 18% (~9 of 50 → "50 flowers, show ~10")
-const DENSITY_DEEP_KEEP = 0.1;  // deep fog: keep 10% (heaviest thin, hazed to sky)
-const DENSITY_HYSTERESIS = 2;   // world units: anti-flicker dead-band around each band edge
+const DENSITY_BAND_DISTS = [36, 48, 58] as const; // euclidean cam→center edges (fog-corrected)
+const DENSITY_BAND_KEEPS = [0.65, 0.42, 0.22, 0.1] as const; // near / near-fog / fog / deep fog
+const DENSITY_HYSTERESIS = 2; // world units: anti-flicker dead-band around each band edge
 
 /**
  * ── MOBILE-ONLY FOREST CHUNKING + DISTANCE THINNING (revertable experiment) ──
@@ -1032,25 +1052,20 @@ export function ForestEnvironment({ isMobile = false }: { isMobile?: boolean }):
 
         // (1c) DYNAMIC DENSITY by LIVE camera distance (foliage only). Pick a
         // keep-fraction band with hysteresis and truncate `mesh.count` to render a
-        // spatially-even PREFIX of the hash-reordered instances (near 65% / fog
-        // 18% / deep 10%). Camera-relative, so the thinned fog ring tracks the
-        // free-roam camera as it pans. Written only when the tier CHANGES (no
-        // per-frame churn); the near band restores the full instanceCount.
+        // spatially-even PREFIX of the hash-reordered instances (four bands: 65% /
+        // 42% / 22% / 10%, stepping down as fog opacity rises — see DENSITY_BAND_*).
+        // Camera-relative, so the thinned fog ring tracks the free-roam camera as
+        // it pans. Written only when the band CHANGES (no per-frame churn); the
+        // near band restores the full instanceCount.
         const nextDensity = selectForestDensityTier(
-          meta.densityTier < 0 ? 0 : (meta.densityTier as ForestDensityTier),
+          meta.densityTier, // sentinel -1 (not-yet-applied) → treated as band 0 inside
           centerDist,
-          DENSITY_NEAR_DIST,
-          DENSITY_FOG_DIST,
+          DENSITY_BAND_DISTS,
           DENSITY_HYSTERESIS,
         );
         if (nextDensity !== meta.densityTier) {
           meta.densityTier = nextDensity;
-          const keep = densityKeepForTier(
-            nextDensity,
-            DENSITY_NEAR_KEEP,
-            DENSITY_FOG_KEEP,
-            DENSITY_DEEP_KEEP,
-          );
+          const keep = densityKeepForTier(nextDensity, DENSITY_BAND_KEEPS);
           meta.mesh.count = Math.round(meta.instanceCount * keep);
         }
       }

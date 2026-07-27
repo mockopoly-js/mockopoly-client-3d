@@ -549,59 +549,140 @@ describe('horizontalNearestDistanceToBox (ring-cull metric)', () => {
 });
 
 describe('selectForestDensityTier (dynamic camera-distance foliage density)', () => {
-  // Mirrors the SHIPPED bands (ForestEnvironment DENSITY_NEAR_DIST / DENSITY_FOG_DIST
-  // / DENSITY_HYSTERESIS): near < 24, fog 24..52, deep ≥ 52, ±2 hysteresis. These are
-  // LIVE-CAMERA distances (the camera is free/movable) so the fog ring tracks the camera.
-  const NEAR = 24; // near <-> fog threshold
-  const FOG = 52; // fog <-> deep threshold
+  // Mirrors the SHIPPED bands (ForestEnvironment DENSITY_BAND_DISTS / _HYSTERESIS):
+  // FOUR bands split by three ASCENDING euclidean cam→center edges, ±2 hysteresis.
+  // These are LIVE-CAMERA distances (the camera is free/movable) so the fog rings
+  // track the camera. The edges are PUSHED PAST the fog onset (see the fog-metric
+  // regression block below) — they are NOT the raw FOG_NEAR/FOG_FAR values.
+  const DISTS = [36, 48, 58] as const; // near | near-fog | fog | deep edges
   const H = 2; // hysteresis dead-band
 
-  it('picks near→0, fog→1, deep→2 from a cold start (current tier 0)', () => {
-    expect(selectForestDensityTier(0, 10, NEAR, FOG, H)).toBe(0); // foreground
-    expect(selectForestDensityTier(0, 40, NEAR, FOG, H)).toBe(1); // fog ring
-    expect(selectForestDensityTier(0, 60, NEAR, FOG, H)).toBe(2); // deep fog
+  it('picks band 0/1/2/3 across the four bands from a cold start (current 0)', () => {
+    expect(selectForestDensityTier(0, 10, DISTS, H)).toBe(0); // foreground
+    expect(selectForestDensityTier(0, 40, DISTS, H)).toBe(1); // near-fog
+    expect(selectForestDensityTier(0, 52, DISTS, H)).toBe(2); // fog ring
+    expect(selectForestDensityTier(0, 70, DISTS, H)).toBe(3); // deep fog
   });
 
-  it('applies hysteresis at the near<->fog boundary (no flicker)', () => {
-    expect(selectForestDensityTier(0, 25, NEAR, FOG, H)).toBe(0); // 25 < 26 → stays near
-    expect(selectForestDensityTier(0, 27, NEAR, FOG, H)).toBe(1); // 27 > 26 → fog
-    expect(selectForestDensityTier(1, 23, NEAR, FOG, H)).toBe(1); // 23 > 22 → stays fog
-    expect(selectForestDensityTier(1, 21, NEAR, FOG, H)).toBe(0); // 21 < 22 → near
+  it('treats the -1 "not yet applied" sentinel as band 0 (first tick resolves the real band)', () => {
+    expect(selectForestDensityTier(-1, 10, DISTS, H)).toBe(0); // near
+    expect(selectForestDensityTier(-1, 70, DISTS, H)).toBe(3); // walks up from 0 to deep
   });
 
-  it('applies hysteresis at the fog<->deep boundary (no flicker)', () => {
-    expect(selectForestDensityTier(1, 53, NEAR, FOG, H)).toBe(1); // 53 < 54 → stays fog
-    expect(selectForestDensityTier(1, 55, NEAR, FOG, H)).toBe(2); // 55 > 54 → deep
-    expect(selectForestDensityTier(2, 51, NEAR, FOG, H)).toBe(2); // 51 > 50 → stays deep
-    expect(selectForestDensityTier(2, 49, NEAR, FOG, H)).toBe(1); // 49 < 50 → fog
+  it('applies hysteresis at the band-0<->1 boundary (edge 36, no flicker)', () => {
+    expect(selectForestDensityTier(0, 37, DISTS, H)).toBe(0); // 37 < 38 → stays 0
+    expect(selectForestDensityTier(0, 39, DISTS, H)).toBe(1); // 39 > 38 → band 1
+    expect(selectForestDensityTier(1, 35, DISTS, H)).toBe(1); // 35 > 34 → stays 1
+    expect(selectForestDensityTier(1, 33, DISTS, H)).toBe(0); // 33 < 34 → band 0
   });
 
-  it('resolves multi-tier jumps in a single call (teleporting/panning camera)', () => {
-    expect(selectForestDensityTier(0, 200, NEAR, FOG, H)).toBe(2); // near → deep directly
-    expect(selectForestDensityTier(2, 0, NEAR, FOG, H)).toBe(0); // deep → near directly
+  it('applies hysteresis at the band-1<->2 boundary (edge 48, no flicker)', () => {
+    expect(selectForestDensityTier(1, 49, DISTS, H)).toBe(1); // 49 < 50 → stays 1
+    expect(selectForestDensityTier(1, 51, DISTS, H)).toBe(2); // 51 > 50 → band 2
+    expect(selectForestDensityTier(2, 47, DISTS, H)).toBe(2); // 47 > 46 → stays 2
+    expect(selectForestDensityTier(2, 45, DISTS, H)).toBe(1); // 45 < 46 → band 1
+  });
+
+  it('applies hysteresis at the band-2<->3 boundary (edge 58, no flicker)', () => {
+    expect(selectForestDensityTier(2, 59, DISTS, H)).toBe(2); // 59 < 60 → stays 2
+    expect(selectForestDensityTier(2, 61, DISTS, H)).toBe(3); // 61 > 60 → band 3
+    expect(selectForestDensityTier(3, 57, DISTS, H)).toBe(3); // 57 > 56 → stays 3
+    expect(selectForestDensityTier(3, 55, DISTS, H)).toBe(2); // 55 < 56 → band 2
+  });
+
+  it('resolves multi-band jumps in a single call (teleporting/panning camera)', () => {
+    expect(selectForestDensityTier(0, 200, DISTS, H)).toBe(3); // near → deep directly
+    expect(selectForestDensityTier(3, 0, DISTS, H)).toBe(0); // deep → near directly
+  });
+
+  it('clamps a stale current band above the max back into range (no OOB walk)', () => {
+    expect(selectForestDensityTier(99, 70, DISTS, H)).toBe(3); // stays deepest
+    expect(selectForestDensityTier(99, 0, DISTS, H)).toBe(0); // densifies to near
+  });
+
+  it('is data-driven in the band count (a 2-edge / 3-band config still works)', () => {
+    // The signature does NOT hardcode four bands — fewer edges ⇒ fewer bands. This
+    // is what let the near→fog step be SPLIT (finding 1) with no signature change.
+    const twoEdges = [20, 40] as const;
+    expect(selectForestDensityTier(0, 10, twoEdges, H)).toBe(0);
+    expect(selectForestDensityTier(0, 30, twoEdges, H)).toBe(1);
+    expect(selectForestDensityTier(0, 50, twoEdges, H)).toBe(2);
   });
 });
 
 describe('densityKeepForTier + chunk.count truncation math', () => {
-  // Mirrors the SHIPPED keep-fractions (ForestEnvironment DENSITY_*_KEEP).
-  const NK = 0.65; // near keep
-  const FK = 0.18; // fog keep
-  const DK = 0.1; // deep keep
+  // Mirrors the SHIPPED keep-fractions (ForestEnvironment DENSITY_BAND_KEEPS),
+  // nearest-first: near / near-fog / fog / deep-fog.
+  const KEEPS = [0.65, 0.42, 0.22, 0.1] as const;
 
-  it('maps each density tier to its keep-fraction', () => {
-    expect(densityKeepForTier(0, NK, FK, DK)).toBe(NK);
-    expect(densityKeepForTier(1, NK, FK, DK)).toBe(FK);
-    expect(densityKeepForTier(2, NK, FK, DK)).toBe(DK);
+  it('maps each density band to its keep-fraction', () => {
+    expect(densityKeepForTier(0, KEEPS)).toBe(0.65);
+    expect(densityKeepForTier(1, KEEPS)).toBe(0.42);
+    expect(densityKeepForTier(2, KEEPS)).toBe(0.22);
+    expect(densityKeepForTier(3, KEEPS)).toBe(0.1);
+  });
+
+  it('clamps an out-of-range band index to the array bounds', () => {
+    expect(densityKeepForTier(-1, KEEPS)).toBe(0.65); // sentinel / underflow → nearest
+    expect(densityKeepForTier(99, KEEPS)).toBe(0.1); // overflow → deepest
   });
 
   it('count = round(fullCount * keep) — incl. the "50 flowers in fog → show ~10" case', () => {
     // The exact expression the per-frame loop writes to chunk.count.
-    const count = (full: number, tier: 0 | 1 | 2): number =>
-      Math.round(full * densityKeepForTier(tier, NK, FK, DK));
-    expect(count(50, 1)).toBe(9); // 50 * 0.18 = 9 (~10, matches the art direction)
-    expect(count(50, 2)).toBe(5); // 50 * 0.10 = 5 (deep fog, even fewer)
+    const count = (full: number, tier: number): number =>
+      Math.round(full * densityKeepForTier(tier, KEEPS));
+    expect(count(50, 2)).toBe(11); // 50 * 0.22 = 11 (~10, matches the art direction)
+    expect(count(50, 3)).toBe(5); // 50 * 0.10 = 5 (deep fog, even fewer)
     expect(count(100, 0)).toBe(65); // 100 * 0.65 = 65 (foreground global reduction)
-    expect(count(0, 1)).toBe(0); // empty chunk stays empty
+    expect(count(50, 1)).toBe(21); // 50 * 0.42 = 21 (near-fog, the gentle first cut)
+    expect(count(0, 2)).toBe(0); // empty chunk stays empty
+  });
+});
+
+describe('foliage density bands hide their steps behind fog (finding-1 regression)', () => {
+  // THE BUG (finding 1): the single largest density cut (0.65→0.18, 3.6×) fired at
+  // ≈FOG_NEAR where linear fog opacity is exactly 0 (CLEAR AIR), because (a) the
+  // near edge equalled FOG_NEAR and (b) density measures EUCLIDEAN cam→center
+  // distance while fog measures VIEW-SPACE DEPTH (fogDepth ≈ 0.8 × distance). The
+  // fix pushes the edges into fog-opaque space (mirroring the ring cull's
+  // FOG_FAR×1.27 correction) AND splits the one big cut into gentle steps. These
+  // asserts pin BOTH so the visible thinning pop cannot silently return.
+  const DISTS = [36, 48, 58] as const; // shipped DENSITY_BAND_DISTS
+  const KEEPS = [0.65, 0.42, 0.22, 0.1] as const; // shipped DENSITY_BAND_KEEPS
+  // GameScene fog band + the file's established view-space-depth ratio.
+  const FOG_NEAR = 24;
+  const FOG_FAR = 52;
+  const FOG_DEPTH_RATIO = 0.8; // fogDepth ≈ 0.8 × euclidean cam→center distance
+  const fogOpacity = (dist: number): number => {
+    const depth = FOG_DEPTH_RATIO * dist;
+    return Math.min(1, Math.max(0, (depth - FOG_NEAR) / (FOG_FAR - FOG_NEAR)));
+  };
+
+  it('never fires the first step at the fog onset (near edge is past FOG_NEAR)', () => {
+    expect(DISTS[0]).toBeGreaterThan(FOG_NEAR); // 36 > 24 — no longer the onset
+    expect(fogOpacity(DISTS[0])).toBeGreaterThan(0); // there IS haze at the first cut
+  });
+
+  it('keeps every step gentler than the old 3.6× cliff, monotonically thinning', () => {
+    const oldCliff = 0.65 / 0.18; // ≈ 3.6× — the single cut the finding flagged
+    for (let i = 1; i < KEEPS.length; i++) {
+      const ratio = KEEPS[i - 1] / KEEPS[i];
+      expect(ratio).toBeGreaterThan(1); // a real cut (density strictly decreases)
+      expect(ratio).toBeLessThan(2.4); // each cut ≤ ~2.2×, far below the old cliff
+      expect(ratio).toBeLessThan(oldCliff);
+    }
+  });
+
+  it('places progressively LARGER cuts at progressively HIGHER fog opacity', () => {
+    const [o0, o1, o2] = DISTS.map(fogOpacity);
+    expect(o1).toBeGreaterThan(o0); // fog opacity strictly increases across edges
+    expect(o2).toBeGreaterThan(o1);
+    const step0 = KEEPS[0] / KEEPS[1];
+    const step1 = KEEPS[1] / KEEPS[2];
+    const step2 = KEEPS[2] / KEEPS[3];
+    expect(step1).toBeGreaterThan(step0); // steps grow as we go deeper …
+    expect(step2).toBeGreaterThan(step1);
+    expect(o2).toBeGreaterThan(0.7); // … so the BIGGEST cut is ≥70% hazed to sky
   });
 });
 

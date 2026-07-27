@@ -134,66 +134,68 @@ export function selectForestLodTier(
 }
 
 /**
- * DENSITY keep-tier index: 0 = near band (foreground, high keep), 1 = fog ring
- * (low keep), 2 = deep fog (lowest keep, out to the cull ring).
+ * DENSITY BAND index: 0 = near band (foreground, HIGHEST keep) out to the final
+ * band (deepest fog, LOWEST keep). The band count is DATA-DRIVEN — one more than
+ * the number of distance thresholds — so the bands can be retuned (split into
+ * more, gentler steps, or merged) WITHOUT a signature change. Band `i` covers the
+ * distance range `[thresholds[i-1], thresholds[i])`; see {@link selectForestDensityTier}.
  */
-export type ForestDensityTier = 0 | 1 | 2;
+export type ForestDensityTier = number;
 
 /**
- * DYNAMIC camera-distance DENSITY tier selection with HYSTERESIS — the density
- * twin of {@link selectForestLodTier}. Given a FOLIAGE chunk's CURRENT tier and
- * its LIVE distance to the camera, returns the density band it should render at:
- * `< nearDist` → near (0), `nearDist..fogDist` → fog (1), `> fogDist` → deep (2).
+ * DYNAMIC camera-distance DENSITY band selection with HYSTERESIS — the density
+ * twin of {@link selectForestLodTier}. Given a FOLIAGE chunk's CURRENT band and
+ * its LIVE distance to the camera, returns the band it should render at:
+ * `< thresholds[0]` → band 0 (near), `>= thresholds[last]` → the final (deepest)
+ * band, each intermediate range → the matching band. `thresholds` MUST be
+ * ASCENDING. A negative `current` (the "not yet applied" sentinel) is treated as
+ * band 0, so the first call always resolves to the chunk's real band.
  *
  * CRITICAL — the camera pans/translates FREELY, so this MUST be driven by the
  * live per-frame camera distance (NOT a build-time / board-center distance). The
  * fog-ring thinning is therefore CAMERA-RELATIVE: it tracks the camera as it pans
- * so the thinned band always coincides with where the fog actually is, never
+ * so the thinned bands always coincide with where the fog actually is, never
  * baked into a fixed world location.
  *
  * Each threshold carries a ±`hysteresis` dead-band so a chunk parked on a
- * boundary never flip-flops frame to frame; multi-tier jumps (a teleporting
- * camera) resolve in a single call. Pure + allocation-free — safe to call every
- * throttled frame per chunk.
+ * boundary never flip-flops frame to frame; multi-band jumps (a teleporting
+ * camera) resolve in a single call. Pure + allocation-free (`thresholds` is
+ * passed by reference, never copied) — safe to call every throttled frame per chunk.
  */
 export function selectForestDensityTier(
   current: ForestDensityTier,
   camDist: number,
-  nearDist: number,
-  fogDist: number,
+  thresholds: readonly number[],
   hysteresis: number,
 ): ForestDensityTier {
-  let tier: number = current;
+  const maxTier = thresholds.length;
+  let tier = current < 0 ? 0 : current > maxTier ? maxTier : current;
   // Thin further as the camera pulls away — only cross a boundary once we are
   // `hysteresis` BEYOND it.
-  while (tier < 2) {
-    const edge = tier === 0 ? nearDist : fogDist;
-    if (camDist > edge + hysteresis) tier += 1;
+  while (tier < maxTier) {
+    if (camDist > thresholds[tier] + hysteresis) tier += 1;
     else break;
   }
   // Densify again as the camera closes in.
   while (tier > 0) {
-    const edge = tier === 2 ? fogDist : nearDist;
-    if (camDist < edge - hysteresis) tier -= 1;
+    if (camDist < thresholds[tier - 1] - hysteresis) tier -= 1;
     else break;
   }
-  return tier as ForestDensityTier;
+  return tier;
 }
 
 /**
- * Keep-FRACTION for a density tier: near → `nearKeep`, fog → `fogKeep`, deep →
- * `deepKeep`. The per-frame loop multiplies this by the chunk's FULL instance
- * count and truncates `chunk.count` to `round(fullCount * keep)`, rendering that
- * spatially-even prefix (the chunk's instances were hash-reordered at build time
- * — see {@link orderByPositionHash}). Pure — unit-testable with the count math.
+ * Keep-FRACTION for a density band: `keeps[band]`, clamped to the array bounds.
+ * `keeps` is nearest-first and MUST have exactly one more entry than the threshold
+ * list (`thresholds.length + 1`) — one keep per band. The per-frame loop
+ * multiplies this by the chunk's FULL instance count and truncates `chunk.count`
+ * to `round(fullCount * keep)`, rendering that spatially-even prefix (the chunk's
+ * instances were hash-reordered at build time — see {@link orderByPositionHash}).
+ * Pure — unit-testable with the count math.
  */
-export function densityKeepForTier(
-  tier: ForestDensityTier,
-  nearKeep: number,
-  fogKeep: number,
-  deepKeep: number,
-): number {
-  return tier === 0 ? nearKeep : tier === 1 ? fogKeep : deepKeep;
+export function densityKeepForTier(tier: ForestDensityTier, keeps: readonly number[]): number {
+  const i = tier < 0 ? 0 : tier >= keeps.length ? keeps.length - 1 : tier;
+  return keeps[i];
 }
 
 /**
