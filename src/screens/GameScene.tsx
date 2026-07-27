@@ -24,6 +24,7 @@ import { MobileRenderController } from '../board/MobileRenderController';
 import { MobileCrispBoardPipeline } from '../board/MobileCrispBoardPipeline';
 import { RenderStatsReadout } from '../board/RenderStatsReadout';
 import { BOARD_ROTATION } from '../board/positions';
+import { getProceduralSky } from '../board/ProceduralSky';
 import { useIsMobile } from '../ui/useIsMobile';
 
 /**
@@ -69,6 +70,18 @@ const BG_INTENSITY = 1.0;
 const SHOW_HDRI_BACKGROUND = true;
 
 /**
+ * MOBILE-ONLY sky/env intensities (see HdriSkyMobile + ProceduralSky). The mobile
+ * branch REPLACES sky.webp with the procedural warm-gradient equirect for BOTH
+ * scene.background AND scene.environment (IBL), so the whole mobile scene stays
+ * coherently golden with no extra light rig. Slightly hotter env (0.85 vs 0.6)
+ * because the warm gradient is dimmer/more saturated than the bright sky.webp, so
+ * it needs a touch more IBL to keep the low-poly surfaces lit. Desktop keeps
+ * ENV_INTENSITY/BG_INTENSITY on sky.webp, untouched.
+ */
+const MOBILE_ENV_INTENSITY = 0.85;
+const MOBILE_BG_INTENSITY = 1.0;
+
+/**
  * Global color-grade tunables — applied by the post FX chain AFTER tone mapping
  * so we grade the tone-mapped LDR image (colors read punchy instead of washed
  * out). Effect order in the composer: Bloom -> ToneMapping -> HueSaturation ->
@@ -86,6 +99,19 @@ const SHOW_HDRI_BACKGROUND = true;
 const SATURATION = 0.28;
 const BRIGHTNESS = 0.0;
 const CONTRAST = 0.12;
+
+/**
+ * MOBILE-ONLY grade knobs — DECOUPLED from the desktop values above so the
+ * golden-hour look can push bolder without touching the frozen desktop composer.
+ * Passed to <MobileCrispBoardPipeline> instead of SATURATION/BRIGHTNESS/CONTRAST.
+ * MOBILE_SATURATION is bumped 0.28 → 0.36 (bolder/more vivid to survive AGX
+ * desaturation + the warm split-tone); brightness/contrast mirror the desktop
+ * feel with a hair more contrast punch. Desktop <HueSaturation>/<BrightnessContrast>
+ * still read SATURATION/BRIGHTNESS/CONTRAST → byte-identical.
+ */
+const MOBILE_SATURATION = 0.36;
+const MOBILE_BRIGHTNESS = 0.0;
+const MOBILE_CONTRAST = 0.15;
 
 /**
  * MOBILE FXAA subpixel-blend quality (postprocessing FXAAEffect `subpixelQuality`
@@ -146,6 +172,31 @@ const RIM_POSITION: [number, number, number] = [-4, 8, -8];
 // the shaping instead of a uniform wash brightening every surface equally.
 const AMBIENT_INTENSITY = 0.15;
 const HEMI_INTENSITY = 0.25;
+
+/**
+ * ── MOBILE-ONLY GOLDEN-HOUR LIGHT RIG ────────────────────────────────────────
+ * A single LOW warm sun (KEY) + a warm sky/ground hemisphere + a dim warm ambient
+ * floor IS the golden-hour look — FILL/RIM stay desktop-only (already dropped on
+ * mobile). These twins replace the desktop hemisphere/ambient/KEY on mobile;
+ * desktop keeps its KEY / HEMI / AMBIENT consts above, byte-identical.
+ *
+ * KEY (the sun): golden/amber, positioned LOW for a grazing angle. Geometry of
+ * [11,5,7]: horizontal dist √(121+49) = 13.0, elevation atan(5/13.0) ≈ 21° → a
+ * low sun that (with the COMMIT-2 shadows) throws long dramatic shadows toward
+ * [-11,·,-7]. LOOK commit ships it WITHOUT castShadow/shadow-* (shadows land in
+ * commit 2).
+ */
+const MOBILE_KEY_COLOR = '#ffb060';
+const MOBILE_KEY_INTENSITY = 1.9;
+const MOBILE_KEY_POSITION: [number, number, number] = [11, 5, 7];
+// HEMISPHERE: warm dusk sky over a warm-brown ground bounce, so unlit sides read
+// warm rather than the cool desktop sky/olive-ground fill.
+const MOBILE_HEMI_SKY = '#ffcf9a';
+const MOBILE_HEMI_GROUND = '#3a2a1c';
+const MOBILE_HEMI_INTENSITY = 0.28;
+// AMBIENT: dim WARM floor so shadow sides stay warm-brown, never black.
+const MOBILE_AMBIENT_COLOR = '#ffb877';
+const MOBILE_AMBIENT_INTENSITY = 0.12;
 
 /**
  * ── MOBILE ADAPTIVE DPR (mobile only; desktop stays dpr={[1, 1.5]}) ───────────
@@ -226,22 +277,30 @@ const MOBILE_CITY_DEPTH_BIAS = 0.03;
  * is still live. `scene.fog` is NEVER nulled per-pass (that would thrash the
  * shader-program cache); the board simply opts out at the material level.
  *
- * COLOR: reuse the flat-sky fallback tone (#cbe8f5) so fogged far terrain melts
- * into the HDRI sky and the cull edge is invisible (warm-twilight tint later).
+ * COLOR: dusty amber-orange (#d98a5a) sitting on the procedural golden sky's
+ * lower/horizon band (between SKY_MID #e8845a and SKY_HORIZON #d05a4a), so fogged
+ * far terrain melts INTO the warm horizon and the ring-cull cut edge (already
+ * fog=1.0) is invisible. This also FIXES the old cool-blue #cbe8f5 seam that
+ * clashed with any warm sky. MOBILE ONLY (the <fog> below is isMobile-gated), so
+ * desktop scene.fog stays null → byte-identical.
  * NEAR/FAR (world units): board/city/near treeline (fogDepth ~10-20) stay clear;
- * the deep forest is fully hazed by FOG_FAR.
+ * the deep forest is fully hazed by FOG_FAR. Kept at 24/52 — the forest ring-cull
+ * (FOREST_CULL_DISTANCE ≈ FOG_FAR×1.27) and ForestEnvironment's density-band math
+ * are tuned to these exact numbers, so DO NOT move them.
  */
-const FOG_COLOR = '#cbe8f5';
+const FOG_COLOR = '#d98a5a';
 const FOG_NEAR = 24;
 const FOG_FAR = 52;
 
 /**
- * Manually applies an equirectangular sky texture as scene.environment
- * (and optionally scene.background) so Three.js actually picks it up.
- * drei's <Environment files=...> path resolves ambiguously for LDR webp and
- * leaves scene.background null; this component is deterministic.
+ * DESKTOP sky/env. Manually applies the equirectangular sky.webp as
+ * scene.environment (and optionally scene.background) so Three.js actually picks
+ * it up. drei's <Environment files=...> path resolves ambiguously for LDR webp
+ * and leaves scene.background null; this component is deterministic. Loads
+ * sky.webp via useTexture (suspends). Byte-identical to the pre-split component —
+ * desktop is HARD-FROZEN.
  */
-function HdriSky() {
+function HdriSkyDesktop() {
   const scene = useThree((s) => s.scene);
   const gl = useThree((s) => s.gl);
   const tex = useTexture('/images/sky.webp');
@@ -271,6 +330,44 @@ function HdriSky() {
     };
   }, [tex, scene, gl]);
   return null;
+}
+
+/**
+ * MOBILE sky/env — golden-hour, ASSET-FREE. Loads NO texture (no Suspense);
+ * instead it assigns the module-singleton procedural warm-gradient equirect
+ * (ProceduralSky) to BOTH scene.background (visible sky) AND scene.environment
+ * (IBL). Using the warm equirect as the environment tints ALL ambient/reflection
+ * warm with zero extra light rig, and — because scene.environment is NOT layer
+ * gated — the board + city passes inherit it identically in the 3-pass mobile
+ * composite. Replaces sky.webp on mobile only; desktop keeps sky.webp untouched.
+ */
+function HdriSkyMobile() {
+  const scene = useThree((s) => s.scene);
+  useEffect(() => {
+    const grad = getProceduralSky();
+    scene.environment = grad;
+    scene.environmentIntensity = MOBILE_ENV_INTENSITY;
+    scene.background = grad;
+    scene.backgroundIntensity = MOBILE_BG_INTENSITY;
+    // Under frameloop="always" the imperatively-set scene.environment/background
+    // paints on the next frame automatically — no render poke needed.
+    return () => {
+      scene.environment = null;
+      scene.background = null;
+    };
+  }, [scene]);
+  return null;
+}
+
+/**
+ * Parent selector — renders exactly ONE of the two sibling sky components based
+ * on isMobile so each hook (useTexture on desktop, none on mobile) is called
+ * unconditionally within its component (rules-of-hooks safe across resize /
+ * orientation flips). Mirrors the BoardTiles WebGL/KTX2 split.
+ */
+function HdriSky() {
+  const isMobile = useIsMobile();
+  return isMobile ? <HdriSkyMobile /> : <HdriSkyDesktop />;
 }
 
 /**
@@ -502,27 +599,45 @@ export function GameScene() {
           to verify frustum culling. Rotate camera to watch counts drop as off-screen
           chunks are culled. Tree-shaken from production. */}
       {import.meta.env.DEV && isMobile && <RenderStatsReadout />}
-      {/* Sky/ground hemisphere fill — tints unlit sides; trimmed 0.35 → 0.25 so
-          AO + the rig shape the scene instead of a flat wash. */}
-      <hemisphereLight args={['#cbe8f5', '#8a9a5b', HEMI_INTENSITY]} />
-      {/* Ambient trimmed 0.4 → 0.15 — AO now darkens crevices the flat ambient
-          was washing out; this just lifts pure black. */}
-      <ambientLight intensity={AMBIENT_INTENSITY} />
-      {/* KEY (the sun): warm, the ONLY shadow caster (desktop). Position and ortho
-          shadow-camera bounds kept exactly as the previous light. Shadows are OFF
-          on mobile (Canvas shadows={!isMobile} + castShadow={!isMobile}) —
-          dropping the entire shadow pass is a big mobile win; shadow-mapSize
-          (1024²) is inert there since no shadow map is rendered. Desktop keeps
-          shadows + SoftShadows exactly. */}
-      <directionalLight
-        color={KEY_COLOR}
-        position={KEY_POSITION}
-        intensity={KEY_INTENSITY}
-        castShadow={!isMobile}
-        shadow-mapSize={[1024, 1024]}
-      >
-        <orthographicCamera attach="shadow-camera" args={[-8, 8, 8, -8, 0.1, 30]} />
-      </directionalLight>
+      {/* Sky/ground hemisphere fill. DESKTOP: cool sky / olive ground, trimmed
+          0.35 → 0.25 so AO + the rig shape the scene instead of a flat wash.
+          MOBILE twin: warm dusk sky over a warm-brown ground bounce (golden hour). */}
+      {!isMobile && <hemisphereLight args={['#cbe8f5', '#8a9a5b', HEMI_INTENSITY]} />}
+      {isMobile && (
+        <hemisphereLight args={[MOBILE_HEMI_SKY, MOBILE_HEMI_GROUND, MOBILE_HEMI_INTENSITY]} />
+      )}
+      {/* Ambient floor. DESKTOP: 0.15 neutral — AO now darkens crevices the flat
+          ambient was washing out; this just lifts pure black. MOBILE twin: a dim
+          WARM floor so shadow sides stay warm-brown, not black. */}
+      {!isMobile && <ambientLight intensity={AMBIENT_INTENSITY} />}
+      {isMobile && (
+        <ambientLight color={MOBILE_AMBIENT_COLOR} intensity={MOBILE_AMBIENT_INTENSITY} />
+      )}
+      {/* KEY (the sun). DESKTOP: warm, the ONLY shadow caster; position + ortho
+          shadow-camera bounds kept exactly as before. castShadow is now a bare
+          constant (true) — identical on desktop since this element renders ONLY
+          there. Desktop keeps shadows + SoftShadows exactly. */}
+      {!isMobile && (
+        <directionalLight
+          color={KEY_COLOR}
+          position={KEY_POSITION}
+          intensity={KEY_INTENSITY}
+          castShadow
+          shadow-mapSize={[1024, 1024]}
+        >
+          <orthographicCamera attach="shadow-camera" args={[-8, 8, 8, -8, 0.1, 30]} />
+        </directionalLight>
+      )}
+      {/* MOBILE KEY twin — a LOW golden/amber sun (grazing ~21° elevation) for the
+          bold golden-hour direction. LOOK commit ships it WITHOUT castShadow /
+          shadow-* (shadows are added in the follow-up shadows commit). */}
+      {isMobile && (
+        <directionalLight
+          color={MOBILE_KEY_COLOR}
+          position={MOBILE_KEY_POSITION}
+          intensity={MOBILE_KEY_INTENSITY}
+        />
+      )}
       {/* FILL: cool, low, opposite-ish angle — softens the shadow side without
           flattening the form. No shadow (perf + avoids double shadows). Dropped on
           mobile to reduce per-fragment light loops. */}
@@ -546,12 +661,16 @@ export function GameScene() {
         />
       )}
       {/*
-        HDRI sky — HdriSky uses useTexture (suspends while loading) to load
-        /images/sky.webp, sets EquirectangularReflectionMapping + SRGBColorSpace,
-        then assigns scene.environment (ENV_INTENSITY IBL) and, when
-        SHOW_HDRI_BACKGROUND is true, scene.background (BG_INTENSITY). This is
-        deterministic vs. drei <Environment files=...> which left scene.background
-        null for LDR webp paths.
+        Sky/env — HdriSky is a parent selector (isMobile) that mounts one of two
+        siblings. DESKTOP (HdriSkyDesktop): useTexture loads /images/sky.webp
+        (suspends), sets EquirectangularReflectionMapping + SRGBColorSpace, then
+        assigns scene.environment (ENV_INTENSITY IBL) and, when
+        SHOW_HDRI_BACKGROUND is true, scene.background (BG_INTENSITY) — deterministic
+        vs. drei <Environment files=...>. MOBILE (HdriSkyMobile): loads NO texture;
+        assigns the procedural warm-gradient equirect (ProceduralSky) to both
+        scene.background and scene.environment (MOBILE_*_INTENSITY) for the
+        golden-hour look with zero new asset. The outer Suspense is inert for the
+        mobile branch (it never suspends).
       */}
       <Suspense fallback={null}>
         <HdriSky />
@@ -597,22 +716,22 @@ export function GameScene() {
           MOBILE crisp-board pipeline (replaces the mobile <EffectComposer>).
           Renders the board texture at NATIVE dpr (razor-crisp text) in its own
           pass, composites it by depth over the dpr-2 forest/city/tokens/sky scene,
-          and applies the SAME mobile grade — AGX ToneMapping -> HueSaturation ->
-          BrightnessContrast -> FXAA -> Sharpen -> sRGB — ONCE over the composited
-          linear image, so board and scene are graded identically. The heavy scene
-          stays at MOBILE_SCENE_DPR (2) for framerate; only the board (a cheap
-          opaque raster) + composite + grade run at native dpr. Forest edges and
-          tokens/houses correctly occlude the board (shared camera depth), with a
-          view-Z bias at the token/board contact to kill shimmer. See
-          MobileCrispBoardPipeline. Desktop keeps its own single-pass composer
-          below (byte-identical). The grade knobs are the SAME values the mobile
-          composer used (SATURATION / BRIGHTNESS / CONTRAST /
-          MOBILE_FXAA_SUBPIXEL_QUALITY), just applied by a hand-built EffectPass.
+          and applies the golden-hour mobile grade — Bloom -> AGX ToneMapping ->
+          HueSaturation -> BrightnessContrast -> WarmGrade -> FXAA -> Sharpen ->
+          sRGB — ONCE over the composited linear image, so board and scene are
+          graded identically. The heavy scene stays at MOBILE_SCENE_DPR (2) for
+          framerate; only the board (a cheap opaque raster) + composite + grade run
+          at native dpr. Forest edges and tokens/houses correctly occlude the board
+          (shared camera depth), with a view-Z bias at the token/board contact to
+          kill shimmer. See MobileCrispBoardPipeline. Desktop keeps its own
+          single-pass composer below (byte-identical). The grade knobs are the
+          MOBILE_* values (decoupled from the frozen desktop SATURATION / BRIGHTNESS
+          / CONTRAST), applied by a hand-built EffectPass.
         */
         <MobileCrispBoardPipeline
-          saturation={SATURATION}
-          brightness={BRIGHTNESS}
-          contrast={CONTRAST}
+          saturation={MOBILE_SATURATION}
+          brightness={MOBILE_BRIGHTNESS}
+          contrast={MOBILE_CONTRAST}
           fxaaSubpixelQuality={MOBILE_FXAA_SUBPIXEL_QUALITY}
           sceneDpr={MOBILE_SCENE_DPR}
           cityDpr={MOBILE_CITY_DPR}

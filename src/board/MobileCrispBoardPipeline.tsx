@@ -3,6 +3,7 @@ import * as THREE from 'three';
 import { useFrame, useThree } from '@react-three/fiber';
 import {
   EffectPass,
+  BloomEffect,
   ToneMappingEffect,
   HueSaturationEffect,
   BrightnessContrastEffect,
@@ -10,7 +11,26 @@ import {
 } from 'postprocessing';
 import { FullScreenQuad } from 'three-stdlib';
 import { SharpenEffectImpl } from '../screens/SharpenEffect';
+import { WarmGradeEffectImpl } from '../screens/WarmGradeEffect';
 import { BOARD_LAYER, CITY_LAYER } from './positions';
+
+/**
+ * ── MOBILE-ONLY BLOOM (golden-hour glow) ─────────────────────────────────────
+ * Merged into the single grade EffectPass (BloomEffect is non-convolution, so it
+ * adds NO standalone pass; it renders its bloom RT from the pass INPUT in
+ * update() and ADDs it in mainImage). High threshold so ONLY the sun-disc skybox
+ * hot-spot, emissive city windows and the hottest warm speculars bloom — board
+ * text sits well below threshold and stays readable.
+ * - INTENSITY: bloom add strength.
+ * - THRESHOLD / SMOOTHING: luminance gate (0.85 = only bright warm sources).
+ * - RADIUS: mipmap-blur spread (wide, soft golden glow).
+ * - RESOLUTION_SCALE: half-res bloom base to trim fill on the native-dpr present.
+ */
+const MOBILE_BLOOM_INTENSITY = 0.8;
+const MOBILE_BLOOM_THRESHOLD = 0.85;
+const MOBILE_BLOOM_SMOOTHING = 0.2;
+const MOBILE_BLOOM_RADIUS = 0.7;
+const MOBILE_BLOOM_RESOLUTION_SCALE = 0.5;
 
 /**
  * ── MOBILE CRISP-BOARD PIPELINE (MOBILE ONLY) ────────────────────────────────
@@ -238,20 +258,52 @@ export function MobileCrispBoardPipeline({
     });
     const quad = new FullScreenQuad(compositeMat);
 
-    // Grade EffectPass — the SAME 5 effects, same options, same order as the old
-    // mobile <EffectComposer> (all non-convolution → one merged pass). Reusing the
-    // library effects makes the grade byte-identical: ToneMapping default is AGX,
-    // and the final sRGB OETF is EffectMaterial.encodeOutput (on by default).
+    // Grade EffectPass — all non-convolution effects, so they MERGE into ONE
+    // pass over the linear-HDR composite. sRGB OETF is applied once by
+    // EffectMaterial.encodeOutput (on by default). Golden-hour additions vs the
+    // original mobile grade: a warm split-tone (WarmGrade) after the tone/hue/BC
+    // trio, and Bloom FIRST.
+    //
+    // BLOOM is placed FIRST so its ADD lands BEFORE ToneMapping (matching the
+    // desktop composer order N8AO → Bloom → ToneMapping): BloomEffect.update()
+    // renders its bloom RT from the pass INPUT (the linear-HDR composite)
+    // regardless of chain position, then its mainImage ADDs that precomputed
+    // bloom — so ordering it first tone-maps the summed HDR, not a clamped LDR.
+    // mipmapBlur → wide soft glow; resolutionScale halves the bloom base.
+    const bloom = new BloomEffect({
+      intensity: MOBILE_BLOOM_INTENSITY,
+      luminanceThreshold: MOBILE_BLOOM_THRESHOLD,
+      luminanceSmoothing: MOBILE_BLOOM_SMOOTHING,
+      radius: MOBILE_BLOOM_RADIUS,
+      mipmapBlur: true,
+      resolutionScale: MOBILE_BLOOM_RESOLUTION_SCALE,
+    });
+    // ToneMapping default is AGX (parity with desktop). AGX desaturates
+    // highlights; if the golden reads muted on-device, the one-line alternative
+    // is `new ToneMappingEffect({ mode: ToneMappingMode.ACES_FILMIC })` (punchier
+    // warm highlights) — a tuning toggle, not the default.
     const toneMapping = new ToneMappingEffect({});
     const hueSat = new HueSaturationEffect({ saturation });
     const brightnessContrast = new BrightnessContrastEffect({ brightness, contrast });
+    // Warm split-tone (golden highlights / warm-brown shadows, mids untouched) —
+    // after the tone/hue/BC trio so it shapes the tone-mapped LDR colour.
+    const warmGrade = new WarmGradeEffectImpl();
     const fxaa = new FXAAEffect({});
     // subpixelQuality is a define-backed setter (the R3F <FXAA subpixelQuality>
     // wrapper sets it the same way, via applyProps) — set BEFORE the pass builds
     // its merged shader in initialize().
     fxaa.subpixelQuality = fxaaSubpixelQuality;
     const sharpen = new SharpenEffectImpl();
-    const gradePass = new EffectPass(camera, toneMapping, hueSat, brightnessContrast, fxaa, sharpen);
+    const gradePass = new EffectPass(
+      camera,
+      bloom,
+      toneMapping,
+      hueSat,
+      brightnessContrast,
+      warmGrade,
+      fxaa,
+      sharpen,
+    );
     // Present straight to the canvas at native dpr (outputBuffer ignored).
     gradePass.renderToScreen = true;
 
