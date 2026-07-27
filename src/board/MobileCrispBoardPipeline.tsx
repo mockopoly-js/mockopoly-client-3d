@@ -380,24 +380,37 @@ export function MobileCrispBoardPipeline({
     const prevToneMapping = gl.toneMapping;
     gl.toneMapping = THREE.NoToneMapping;
 
-    // ── STATIC SHADOWS: flip the renderer into FROZEN shadow-map mode ─────────
-    // Runs here (a layout effect, BEFORE the first frame) so it lands before
-    // ShaderWarmup's load-gated compileAsync — every shadow-receiving program
-    // then links WITH shadow sampling exactly once (no first-appearance recompile
-    // hitch). autoUpdate=false is the crux of the 3-layer composite fix: it makes
-    // all three per-frame gl.render calls (scene/board/city passes) hit the
-    // early-return inside shadowMap.render, so the ONE map baked in the useFrame
-    // below is reused every frame — never re-rendered (and never clobbered) per
-    // pass. R3F set enabled=false once at init from shadows={!isMobile} and does
-    // NOT re-assert it per frame, so flipping it here is safe and stays flipped.
-    // PCFSoftShadowMap gives a cheaply-feathered edge on RECEIVE (desktop's PCSS
-    // SoftShadows is deliberately not used on mobile). Cleanup restores every flag
-    // so a resize back to desktop hands R3F a clean renderer.
+    // ── STATIC SHADOWS: put the renderer in FROZEN shadow-map mode ────────────
+    // Sets ONLY the frozen-mode invariants here (type + autoUpdate); the enabled
+    // flag is NOT forced true globally — it is scoped PER PASS in the useFrame
+    // below (FALSE for the forest/scene pass, TRUE for the board + city passes).
+    //
+    // WHY enabled is NOT global-true: three gates USE_SHADOWMAP purely on
+    // `renderer.shadowMap.enabled && shadows.length > 0` (WebGLPrograms) — NOT on
+    // object.receiveShadow — so a global enabled=true injected the shadow struct/
+    // sampler + RGBA depth-unpack (~6e-8) constants into EVERY MeshStandardMaterial
+    // program, INCLUDING the forest's mediump fade program, whose mixed-precision
+    // shadow GLSL the iOS/Metal compiler rejects → the whole forest compiled empty
+    // and vanished. Baseline FALSE here means ShaderWarmup's load-gated
+    // compileAsync warms the forest's USE_SHADOWMAP-UNDEFINED display program (the
+    // exact pre-regression program that rendered correctly) and NEVER the rejected
+    // shadow-receive variant. The board/city receive-shadow programs link on their
+    // first (enabled=true) pass — a one-time cost, and those materials are highp so
+    // they compile fine.
+    //
+    // autoUpdate=false is the crux of the per-pass toggle being SAFE: it makes the
+    // board + city passes' enabled=true gl.render calls hit the early-return inside
+    // shadowMap.render (autoUpdate===false && needsUpdate===false), so the ONE map
+    // baked in the useFrame below is reused every frame — never re-rendered, never
+    // cleared, no per-frame recompile. PCFSoftShadowMap gives a cheaply-feathered
+    // edge on RECEIVE (desktop's PCSS SoftShadows is deliberately not used on
+    // mobile). Cleanup restores every flag so a resize back to desktop hands R3F a
+    // clean renderer.
     const prevShadowEnabled = gl.shadowMap.enabled;
     const prevShadowType = gl.shadowMap.type;
     const prevShadowAutoUpdate = gl.shadowMap.autoUpdate;
     const prevShadowNeedsUpdate = gl.shadowMap.needsUpdate;
-    gl.shadowMap.enabled = true;
+    gl.shadowMap.enabled = false;
     gl.shadowMap.type = THREE.PCFSoftShadowMap;
     gl.shadowMap.autoUpdate = false;
     gl.shadowMap.needsUpdate = false;
@@ -490,49 +503,79 @@ export function MobileCrispBoardPipeline({
 
     // ── ONE-SHOT STATIC SHADOW BAKE ───────────────────────────────────────────
     // Fires once assets have settled (load gate above) and again whenever the
-    // building signature changes (baked reset in the effect). enableAll() enables
-    // camera-layer bits 0,1,2 so the caster layer-test inside shadowMap.render
-    // (`object.layers.test(camera.layers)`) passes for casters on ALL display
-    // layers simultaneously — the board slab (BOARD_LAYER), city (CITY_LAYER),
-    // buildings + near forest (layer 0) are ALL captured into the KEY light's
-    // single frozen depth map from the light's POV. (Tokens are excluded via
-    // castShadow=false so the frozen map never pins a stuck token shadow — they
-    // use blob decals instead; far forest is frustum-culled by the light's ±14
-    // ortho frame.) needsUpdate=true drives exactly one shadowMap.render this
-    // frame; it auto-resets to false and the render target is restored inside
-    // shadowMap.render, so every subsequent frame reuses the frozen map. The
-    // throwaway beauty render targets sceneFBO — pass 1 below overwrites it this
-    // same frame, so nothing flashes on screen.
+    // building signature changes (baked reset in the effect). enabled=true +
+    // needsUpdate=true drives exactly one shadowMap.render this frame; it
+    // auto-resets needsUpdate to false and restores the render target inside
+    // shadowMap.render, so every subsequent frame reuses the frozen map.
+    //
+    // enableAll() enables camera-layer bits 0,1,2 so the caster layer-test inside
+    // shadowMap.render (`object.layers.test(camera.layers)`) passes for casters on
+    // ALL display layers at once — the board slab (BOARD_LAYER), city (CITY_LAYER)
+    // and buildings (layer 0) are captured into the KEY light's single frozen
+    // depth map. Tokens are excluded via castShadow=false (no stuck token shadow —
+    // they use blob decals); the FOREST is also castShadow=false now (its ground
+    // shadows are deferred), so it is not a caster.
+    //
+    // The one gl.render also does a THROWAWAY beauty pass into sceneFBO (pass 1
+    // overwrites it this same frame). We HIDE the forest for it so its beauty
+    // material is never compiled under enabled=true — that mixed-precision
+    // shadow-receive program is exactly the one the iOS/Metal compiler rejects, so
+    // we keep it from ever being built even in the throwaway. Buildings share the
+    // forest's layer 0, so we cannot exclude the forest via camera.layers without
+    // losing the building casters — hide the group by name instead, restoring it
+    // immediately (before pass 1 draws it with enabled=false). If the name ever
+    // changes the lookup no-ops and the fix degrades only to the still-correct
+    // enabled=false display path.
     if (!baked.current && !progressActive && progressTotal > 0) {
       const prevMask = camera.layers.mask;
       camera.layers.enableAll();
+      const forest = scene.getObjectByName('forest-environment');
+      const forestPrevVisible = forest?.visible ?? true;
+      if (forest) forest.visible = false;
+      gl.shadowMap.enabled = true;
       gl.shadowMap.needsUpdate = true;
       gl.setRenderTarget(rig.sceneFBO);
       gl.render(scene, camera);
+      if (forest) forest.visible = forestPrevVisible;
       camera.layers.mask = prevMask;
       baked.current = true;
     }
 
     // 1. SCENE pass — everything on layer 0 (board + city EXCLUDED), at scene dpr.
-    //    Keeps scene.background (HDRI sky) so the sky renders here at the cheap dpr.
+    //    shadowMap.enabled = FALSE: every layer-0 material — critically the forest
+    //    — compiles/selects the USE_SHADOWMAP-UNDEFINED program, i.e. the exact
+    //    pre-regression program (no shadow struct/sampler, no mediump-underflowing
+    //    depth-unpack constants for the iOS compiler to reject). This is what makes
+    //    the terrain deterministically VISIBLE again. autoUpdate=false means this
+    //    enabled toggle never re-renders/clears the frozen map. Keeps
+    //    scene.background (HDRI sky) so the sky renders here at the cheap dpr.
+    gl.shadowMap.enabled = false;
     camera.layers.set(0);
     gl.setRenderTarget(rig.sceneFBO);
     gl.render(scene, camera);
 
-    // 2. BOARD pass — ONLY the board layer, at native dpr. Suppress the HDRI sky
-    //    background so this stays a cheap opaque raster (the board slab) instead of
-    //    a full-screen equirect fill at native res. Depth clears to 1.0 → the
-    //    composite reads boardDepth == 1.0 as "no board here". scene.environment
-    //    (IBL) is untouched, so the board is lit identically.
+    // 2. BOARD pass — ONLY the board layer, at native dpr. shadowMap.enabled = TRUE
+    //    (kept true through the CITY pass below) so the board + city SAMPLE the
+    //    frozen baked map and keep their long golden shadows. Because autoUpdate is
+    //    false AND needsUpdate is false (reset after the one-shot bake),
+    //    shadowMap.render early-returns — enabling here NEVER re-renders or clears
+    //    the frozen map. Suppress the HDRI sky background so this stays a cheap
+    //    opaque raster (the board slab) instead of a full-screen equirect fill at
+    //    native res. Depth clears to 1.0 → the composite reads boardDepth == 1.0 as
+    //    "no board here". scene.environment (IBL) is untouched, so the board is lit
+    //    identically.
+    gl.shadowMap.enabled = true;
     scene.background = null;
     camera.layers.set(BOARD_LAYER);
     gl.setRenderTarget(rig.boardFBO);
     gl.render(scene, camera);
 
-    // 3. CITY pass — ONLY the city layer, at dpr 1.5. Keep the sky suppressed (a
-    //    sparse layer; depth clears to 1.0 outside the city footprint). scene.fog
-    //    stays live so the city is fogged exactly as before, and scene.environment
-    //    (IBL) is untouched so its lighting is identical.
+    // 3. CITY pass — ONLY the city layer, at dpr 1.5. shadowMap.enabled stays TRUE
+    //    (set above) so the city also samples the frozen baked map. Keep the sky
+    //    suppressed (a sparse layer; depth clears to 1.0 outside the city
+    //    footprint). scene.fog stays live so the city is fogged exactly as before,
+    //    and scene.environment (IBL) is untouched so its lighting is identical.
+    gl.shadowMap.enabled = true;
     camera.layers.set(CITY_LAYER);
     gl.setRenderTarget(rig.cityFBO);
     gl.render(scene, camera);

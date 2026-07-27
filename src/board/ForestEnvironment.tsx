@@ -528,6 +528,15 @@ function buildMobileForestFadeMaterial(base: THREE.Material): THREE.Material {
   const mat = base.clone();
   applyForestFade(mat); // same fade + board-clip discard program as desktop
   injectMobileMediump(mat);
+  // DISTINCT program cache key. three's DEFAULT customProgramCacheKey returns
+  // onBeforeCompile.toString(), which is IDENTICAL for the fade and opaque
+  // variants (both end in the SAME injectMobileMediump arrow) — so they collided
+  // on ONE cached WebGLProgram, making the opaque↔fade swap a silent no-op. The
+  // fade program has the near-camera dither + board-clip discard and the opaque
+  // one has neither, so they are genuinely different programs and MUST key apart.
+  // three APPENDS this to its own key (instancing / lights / shadowMap.enabled
+  // still vary independently), so the enabled=false display variant is unaffected.
+  mat.customProgramCacheKey = () => 'mobile-forest-fade-mediump';
   mat.needsUpdate = true;
   return mat;
 }
@@ -543,6 +552,10 @@ function buildMobileForestFadeMaterial(base: THREE.Material): THREE.Material {
 function buildMobileForestOpaqueMaterial(base: THREE.Material): THREE.Material {
   const mat = base.clone();
   injectMobileMediump(mat);
+  // DISTINCT program cache key (see buildMobileForestFadeMaterial) so the opaque
+  // variant no longer shares the fade variant's cached program — this is what
+  // un-breaks the opaque/fade swap. Different string from the fade key.
+  mat.customProgramCacheKey = () => 'mobile-forest-opaque-mediump';
   mat.needsUpdate = true;
   return mat;
 }
@@ -784,14 +797,17 @@ export function ForestEnvironment({ isMobile = false }: { isMobile?: boolean }):
       // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- runtime narrowing: o is Object3D; only actual meshes have isMesh===true
       if (m.isMesh) {
         m.receiveShadow = true; // ground/foliage takes the board's shadow
-        // MOBILE: the near forest ring CASTS into the frozen shadow bake (see
-        // MobileCrispBoardPipeline) so the low golden sun throws long tree shadows
-        // across the ground. Set on the source meshes BEFORE the chunker runs —
-        // rebuildForestAsChunks copies castShadow/receiveShadow onto every rebuilt
-        // chunk (forestChunking). Far chunks fall outside the light's ±14 ortho
-        // frustum (skipped at bake) and are fog-hazed anyway. DESKTOP stays false
-        // (three's default) → byte-identical.
-        m.castShadow = isMobile;
+        // The forest does NOT cast into the frozen shadow bake. Forest-ground tree
+        // shadows are DEFERRED: the mobile forest renders in the SCENE pass with
+        // shadowMap.enabled=false (see MobileCrispBoardPipeline) so its material
+        // keeps the pre-regression USE_SHADOWMAP-undefined program the iOS/Metal
+        // compiler accepts; keeping it out of the bake as a caster (board / city /
+        // buildings remain the casters) keeps the fix deterministic. castShadow is
+        // now a bare `false` — identical to the desktop default (three's default is
+        // false), so DESKTOP stays byte-identical; only mobile changes (was
+        // `isMobile`). rebuildForestAsChunks copies castShadow onto every rebuilt
+        // chunk (forestChunking), so the chunks inherit false.
+        m.castShadow = false;
         m.frustumCulled = false;
         // Per-fragment near-camera dither-fade + board-footprint clip so trees
         // close to the camera dissolve out of the way of the board and no terrain
