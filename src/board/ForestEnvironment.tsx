@@ -150,7 +150,7 @@ const FOREST_SWAP_INTERVAL = 0.05;                   // s: throttle the per-chun
 
 /**
  * ── MOBILE-ONLY: DYNAMIC MULTI-TIER LOD BY CAMERA DISTANCE ────────────────────
- * Each eligible relief chunk (trees / flowers / mushrooms / grass / rocks) carries
+ * Each eligible relief chunk (trees / flowers / mushrooms / grass) carries
  * three pre-created, pre-uploaded geometry tiers — full, LOD1 (~30%), LOD2 (~5%)
  * — stashed on `chunk.userData.forestLod` by the chunker. The SAME throttled
  * per-frame loop that runs the opaque/fade swap picks each chunk's tier by the
@@ -218,7 +218,7 @@ const LOD_HYSTERESIS = 1.5; // world units: anti-flicker dead-band around each t
  * distance band and set `chunk.count = round(fullCount * keep)` — rendering that
  * spatially-even prefix. `chunk.count` is written ONLY when the band (tier)
  * changes (tracked per-chunk like the LOD `tier`) to avoid per-frame churn, and
- * restored to the full count when a chunk returns to the near band.
+ * set to the near-band keep fraction (DENSITY_BAND_KEEPS[0] = 0.65, a 35% reduction) when a chunk returns to the near band.
  * {@link selectForestDensityTier} applies ±DENSITY_HYSTERESIS so the count never
  * flickers at a band edge. Non-foliage chunks (`meta.lod === null`) are never
  * truncated.
@@ -603,9 +603,10 @@ interface ForestChunkMeta {
   /**
    * FULL instance count the chunk was BORN with (before any density truncation),
    * captured once at meta build. The per-frame density pass sets `mesh.count =
-   * round(instanceCount * keep)` and restores it to this when the chunk returns to
-   * the near band. Only FOLIAGE chunks (`lod != null`) are ever truncated;
-   * non-foliage chunks keep `mesh.count === instanceCount` forever.
+   * round(instanceCount * keep)` and applies the near-band keep fraction
+   * (DENSITY_BAND_KEEPS[0] = 0.65) when the chunk returns to the near band.
+   * Only FOLIAGE chunks (`lod != null`) are ever truncated; non-foliage chunks
+   * keep `mesh.count === instanceCount` forever.
    */
   instanceCount: number;
   /**
@@ -1075,7 +1076,7 @@ export function ForestEnvironment({ isMobile = false }: { isMobile?: boolean }):
         // 42% / 22% / 10%, stepping down as fog opacity rises — see DENSITY_BAND_*).
         // Camera-relative, so the thinned fog ring tracks the free-roam camera as
         // it pans. Written only when the band CHANGES (no per-frame churn); the
-        // near band restores the full instanceCount.
+        // near band applies the 0.65 near keep (a 35% reduction, not full).
         const nextDensity = selectForestDensityTier(
           meta.densityTier, // sentinel -1 (not-yet-applied) → treated as band 0 inside
           centerDist,
