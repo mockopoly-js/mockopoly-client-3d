@@ -174,7 +174,7 @@ const HEMI_INTENSITY = 0.25;
 const MOBILE_DPR_MOVING = 1.3;
 const MOBILE_DPR_STILL = Math.min(
   typeof window !== 'undefined' ? window.devicePixelRatio || 2 : 2,
-  2,
+  2.5,
 );
 const MOBILE_SETTLE_MS = 120;
 
