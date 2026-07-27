@@ -19,6 +19,7 @@ import { ForestEnvironment } from '../board/ForestEnvironment';
 import { Dice3D } from '../board/Dice3D';
 import { CameraRig } from '../board/CameraRig';
 import { BoardClickTargets } from '../board/BoardClickTargets';
+import { ShaderWarmup } from '../board/ShaderWarmup';
 import { MobileRenderController, type ComposerHandle } from '../board/MobileRenderController';
 import { RenderStatsReadout } from '../board/RenderStatsReadout';
 import { BOARD_ROTATION } from '../board/positions';
@@ -513,6 +514,10 @@ export function GameScene() {
             stays fixed as the board turns within its clearing. */}
         <ForestEnvironment isMobile={isMobile} />
       </Suspense>
+      {/* Shader precompile warmup — compiles every scene material at LOAD (once
+          all async assets have settled) so first-appearance shader links don't
+          hitch the main thread. Invisible; compiles programs only. */}
+      <ShaderWarmup />
       {isMobile ? (
         /*
           MOBILE composer (light). The full-screen fill hogs — N8AO's depth /

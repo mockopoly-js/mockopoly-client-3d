@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import {
   SPACE_POSITIONS,
   tileToWorld,
+  tileToWorldXZInto,
   tileToWorldRotated,
   buildTilePath,
   BOARD_WORLD_SIZE,
@@ -42,6 +43,23 @@ describe('SPACE_POSITIONS', () => {
     expect(y).toBe(0);
     expect(x).toBeCloseTo((SPACE_POSITIONS[20].x - 0.5) * BOARD_WORLD_SIZE, 6);
     expect(z).toBeCloseTo((SPACE_POSITIONS[20].y - 0.5) * BOARD_WORLD_SIZE, 6);
+  });
+});
+
+describe('tileToWorldXZInto (zero-allocation tile reader)', () => {
+  it('matches tileToWorld x/z for every tile', () => {
+    const out = { x: 0, z: 0 };
+    for (let i = 0; i < 40; i++) {
+      const [x, , z] = tileToWorld(i);
+      tileToWorldXZInto(i, out);
+      expect(out.x).toBeCloseTo(x, 9);
+      expect(out.z).toBeCloseTo(z, 9);
+    }
+  });
+  it('writes into and returns the SAME object (no allocation)', () => {
+    const out = { x: 0, z: 0 };
+    const ret = tileToWorldXZInto(7, out);
+    expect(ret).toBe(out); // same reference — nothing new allocated
   });
 });
 

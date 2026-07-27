@@ -69,8 +69,17 @@ const BOARD_SATURATION = 1.6;
 
 /**
  * Shared slab renderer. Takes a fully-configured board `texture` (webp on
- * desktop, KTX2 on mobile) and builds the 6-material box + saturation patch.
- * Identical for both paths so the board renders the same regardless of source.
+ * desktop, KTX2 on mobile) and builds the slab + saturation patch. Identical for
+ * both paths so the board renders the same regardless of source.
+ *
+ * DRAW-CALL SHAPE: this used to be ONE BoxGeometry with a 6-material array —
+ * which the renderer draws as 6 separate calls (one per box face group), even
+ * though 5 of those faces (sides + bottom) share the identical edge material,
+ * wasting ~4 draws. It is now split into TWO meshes that render in ~2 draws:
+ *   1. a single-material edge box (all 6 faces one material → 1 draw), and
+ *   2. a thin board-artwork PLANE on top (1 draw).
+ * See the render block for why the plane samples the texture pixel-identically
+ * to the old box top face.
  */
 function BoardSlab({ texture }: { texture: THREE.Texture }) {
   // DEV-ONLY: board debug-visibility toggle (see src/dev/debugVisibility.ts).
@@ -78,11 +87,21 @@ function BoardSlab({ texture }: { texture: THREE.Texture }) {
   // cost on the FPS/RenderStatsReadout panels. Ref-only; gated below.
   const groupRef = useRef<THREE.Group>(null);
 
-  // 6-material array; BoxGeometry face order = [px, nx, py, ny, pz, nz].
-  // Index 2 (py = top) gets the board artwork; the rest get the edge color.
-  const materials = useMemo(() => {
+  // TWO materials (was a 6-material box). `edge` covers the whole slab body in a
+  // single draw; `top` carries the board artwork on a separate top plane. Same
+  // colors/textures/roughness as before — only the mesh decomposition changed.
+  const { edge, top } = useMemo(() => {
     const edge = new THREE.MeshStandardMaterial({ color: EDGE_COLOR, roughness: 0.85 });
-    const top = new THREE.MeshStandardMaterial({ map: texture, roughness: 0.7 });
+    // polygonOffset pulls the coplanar top plane just in front of the box's top
+    // face in the depth buffer so the plane always wins (no z-fighting) while
+    // both stay at exactly TOP_Y — the board sits at the identical height.
+    const top = new THREE.MeshStandardMaterial({
+      map: texture,
+      roughness: 0.7,
+      polygonOffset: true,
+      polygonOffsetFactor: -1,
+      polygonOffsetUnits: -1,
+    });
 
     // Inject a saturation boost into the TOP face shader only — applied AFTER
     // tonemapping_fragment, operating directly on gl_FragColor.rgb so that
@@ -109,7 +128,7 @@ function BoardSlab({ texture }: { texture: THREE.Texture }) {
       );
     };
 
-    return [edge, edge, top, edge, edge, edge];
+    return { edge, top };
   }, [texture]);
 
   // DEV-ONLY: subscribe to the shared debug flags and flip the slab group's
@@ -126,9 +145,22 @@ function BoardSlab({ texture }: { texture: THREE.Texture }) {
 
   return (
     <group ref={groupRef}>
-      {/* Board slab: 10 (x) × DEPTH (y) × 10 (z); top face pinned to TOP_Y. */}
-      <mesh position={[0, TOP_Y - DEPTH / 2, 0]} material={materials} receiveShadow castShadow>
+      {/* Slab body: 10 (x) × DEPTH (y) × 10 (z), top pinned to TOP_Y. ONE edge
+          material for all 6 faces → a single draw call for the whole box. Its
+          top face is edge-colored but hidden under the board plane below.
+          Keeps cast+receive shadow so the slab's downward shadow is unchanged. */}
+      <mesh position={[0, TOP_Y - DEPTH / 2, 0]} material={edge} receiveShadow castShadow>
         <boxGeometry args={[BOARD_WORLD_SIZE, DEPTH, BOARD_WORLD_SIZE]} />
+      </mesh>
+      {/* Board artwork top face — a flat 10×10 plane at exactly TOP_Y, laid
+          horizontal (−90° about X). After that rotation the plane's default UVs
+          match the BoxGeometry +Y face UVs 1:1 (u grows with +x, v grows with
+          −z), so the SAME configured texture samples pixel-identically to the
+          old box top. Carries the saturation patch (top material) and receives
+          shadows so tokens/buildings still cast onto the board. Sits on top of
+          the coplanar box face via the material's polygonOffset. */}
+      <mesh position={[0, TOP_Y, 0]} rotation={[-Math.PI / 2, 0, 0]} material={top} receiveShadow>
+        <planeGeometry args={[BOARD_WORLD_SIZE, BOARD_WORLD_SIZE]} />
       </mesh>
     </group>
   );

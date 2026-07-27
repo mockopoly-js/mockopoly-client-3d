@@ -52,6 +52,23 @@ export function tileToWorld(index: number): [number, number, number] {
   return [(pos.x - 0.5) * BOARD_WORLD_SIZE, 0, (pos.y - 0.5) * BOARD_WORLD_SIZE];
 }
 
+/** Mutable planar (x, z) pair — the board plane is at y=0 so y is never stored. */
+export interface WorldXZ { x: number; z: number }
+
+/**
+ * Zero-allocation variant of {@link tileToWorld}: writes the tile's world (x, z)
+ * into the provided `out` and returns it. Identical math to tileToWorld (y is
+ * always 0 on the board plane, so it is omitted). Use in hot per-frame paths
+ * (e.g. the PlayerTokens idle reconcile) to avoid the fresh tuple tileToWorld
+ * allocates on every call.
+ */
+export function tileToWorldXZInto(index: number, out: WorldXZ): WorldXZ {
+  const pos = SPACE_POSITIONS[index];
+  out.x = (pos.x - 0.5) * BOARD_WORLD_SIZE;
+  out.z = (pos.y - 0.5) * BOARD_WORLD_SIZE;
+  return out;
+}
+
 /**
  * Ordered list of tile indices a token WALKS through moving `from` → `to`,
  * INCLUSIVE of both endpoints and following the ring, wrapping around 39↔0 so

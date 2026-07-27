@@ -3,7 +3,7 @@ import { useFrame } from '@react-three/fiber';
 import * as THREE from 'three';
 import { useGameStore } from '../state/gameStore';
 import { useGameBusEvent } from '../state/useGameBus';
-import { tileToWorld, buildTilePath } from './positions';
+import { tileToWorld, tileToWorldXZInto, buildTilePath, type WorldXZ } from './positions';
 import { setLiveTokenPosition } from './liveTokenPositions';
 import { stackOffset } from './hopPath';
 import { TOKEN_HEX } from '../constants/theme';
@@ -73,14 +73,47 @@ function stepYaw(cur: number, target: number, frac: number): number {
 }
 
 /**
- * Rest offset for a token: its planar (x,z) nudge based on its index among the
- * players currently sharing its tile, so up to 4 co-located tokens don't overlap.
+ * Zero-allocation rest offset: writes the token's planar (x,z) nudge into `out`
+ * (based on its index among the players currently sharing its tile, so up to 4
+ * co-located tokens don't overlap) and returns `out`.
+ *
+ * Computes the co-located count and this player's ordinal among them with a
+ * single plain loop — NO `players.filter()` / intermediate array — so it can run
+ * in the per-frame idle path without allocating. `stackOffset` returns a shared
+ * constant tuple (no allocation), so this whole call allocates nothing.
+ * Behavior-identical to the old filter+findIndex: the ordinal is the number of
+ * co-located, non-bankrupt players ahead of `player` in `players` order.
+ */
+function restOffsetInto(
+  player: Player,
+  players: Player[],
+  out: [number, number],
+): [number, number] {
+  let count = 0;
+  let idx = -1;
+  for (const q of players) {
+    if (q.isBankrupt || q.position !== player.position) continue;
+    if (q.id === player.id) idx = count;
+    count++;
+  }
+  if (count <= 1) {
+    out[0] = 0;
+    out[1] = 0;
+    return out;
+  }
+  const [sx, sz] = stackOffset(idx < 0 ? 0 : idx);
+  out[0] = sx;
+  out[1] = sz;
+  return out;
+}
+
+/**
+ * Rest offset for a token — allocating convenience wrapper over
+ * {@link restOffsetInto} for the (non-per-frame) initial-render path. Returns a
+ * fresh tuple; hot paths should use restOffsetInto with a reused scratch array.
  */
 function restOffset(player: Player, players: Player[]): [number, number] {
-  const coLocated = players.filter((p) => p.position === player.position && !p.isBankrupt);
-  if (coLocated.length <= 1) return [0, 0];
-  const idx = coLocated.findIndex((p) => p.id === player.id);
-  return stackOffset(idx < 0 ? 0 : idx);
+  return restOffsetInto(player, players, [0, 0]);
 }
 
 /**
@@ -201,6 +234,11 @@ export function PlayerTokens() {
   // Reused scratch for reading each token's live world position each frame (fed
   // to the live-position bus for the follow cam) — allocates nothing per frame.
   const scratchWorld = useRef(new THREE.Vector3());
+  // Reused scratch for the idle reconcile so the per-frame path allocates
+  // NOTHING (tile world x/z + stack offset). Each is written then read within
+  // the same loop iteration, so a single shared instance is safe.
+  const scratchTile = useRef<WorldXZ>({ x: 0, z: 0 });
+  const scratchOffset = useRef<[number, number]>([0, 0]);
   // Value types carry `| undefined` because these are sparse, id-keyed maps:
   // a key is absent until that token first walks / is seeded, so reads must be
   // (and are) guarded. Typing them honestly keeps the runtime guards meaningful.
@@ -533,9 +571,11 @@ export function PlayerTokens() {
         }
       } else {
         // Reconcile to the authoritative tile + stack offset (world space).
-        const [x, , z] = tileToWorld(p.position);
-        const [ox, oz] = restOffset(p, current);
-        group.position.set(x + ox, BASE_Y, z + oz);
+        // Zero-allocation: reuse scratch for the tile world (x,z) and the stack
+        // offset so this per-frame idle path never allocates (no GC dips).
+        const tile = tileToWorldXZInto(p.position, scratchTile.current);
+        const off = restOffsetInto(p, current, scratchOffset.current);
+        group.position.set(tile.x + off[0], BASE_Y, tile.z + off[1]);
         seeded.current[p.id] = true;
 
         // Continue lerping toward targetYaw even while idle — the token pivots
