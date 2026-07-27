@@ -3,6 +3,7 @@ import * as THREE from 'three';
 import { useTexture, useKTX2 } from '@react-three/drei';
 import { useThree } from '@react-three/fiber';
 import { BOARD_WORLD_SIZE } from './positions';
+// eslint-disable-next-line @typescript-eslint/no-unused-vars -- TEST: isMobile unused while testing webp on mobile; uncomment to revert
 import { useIsMobile } from '../ui/useIsMobile';
 import { getDebugVisibility, subscribeDebugVisibility } from '../dev/debugVisibility';
 
@@ -223,7 +224,10 @@ function BoardTilesWebGL() {
  * we instead fold the vertical flip into the UV transform (repeat.y = -1 about
  * center 0.5 mirrors v -> 1-v, identical to flipY=true). This keeps the
  * GO-corner alignment contract intact on mobile.
+ *
+ * TEST: Unused while testing webp on mobile. Kept intact for easy revert.
  */
+// eslint-disable-next-line @typescript-eslint/no-unused-vars -- TEST: kept for easy revert to mobile KTX2
 function BoardTilesKTX2() {
   const texture = useKTX2('/images/board.mobile.ktx2', '/basis/');
   const maxAniso = useThree((s) => s.gl.capabilities.getMaxAnisotropy());
@@ -256,8 +260,13 @@ function BoardTilesKTX2() {
  * Parent selector. Renders exactly ONE of the two sibling loaders based on
  * isMobile so each loader hook is called unconditionally within its component
  * (rules-of-hooks safe across resize/orientation changes).
+ *
+ * TEST: temporarily route mobile to BoardTilesWebGL (crisp board.webp) to
+ * isolate whether KTX2 texture compression is causing board text softness.
  */
 export function BoardTiles() {
-  const isMobile = useIsMobile();
-  return isMobile ? <BoardTilesKTX2 /> : <BoardTilesWebGL />;
+  // const isMobile = useIsMobile();
+  // TEST: both mobile and desktop use webp (bypass KTX2) to test text softness.
+  // Revert by uncommenting isMobile branch and return `isMobile ? <BoardTilesKTX2 /> : <BoardTilesWebGL />`.
+  return <BoardTilesWebGL />;
 }
