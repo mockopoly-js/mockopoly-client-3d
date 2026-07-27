@@ -3,7 +3,13 @@ import * as THREE from 'three';
 import { useGLTF } from '@react-three/drei';
 import { useFrame } from '@react-three/fiber';
 import { BOARD_WORLD_SIZE } from './positions';
-import { rebuildForestAsChunks, isForestGroundMesh } from './forestChunking';
+import {
+  rebuildForestAsChunks,
+  isForestGroundMesh,
+  selectForestLodTier,
+  type ForestChunkLod,
+  type ForestLodTier,
+} from './forestChunking';
 
 /**
  * The low-poly FOREST environment (`public/models/forest.glb`, ~1.7 MB,
@@ -131,6 +137,34 @@ const FOREST_FADE_FAR = 4.5;  // world units: fully solid (unchanged) at/beyond 
 const FOREST_OPAQUE_ENTER = FOREST_FADE_FAR + 2.0;  // 6.5: go opaque once the nearest fragment is beyond this
 const FOREST_OPAQUE_EXIT = FOREST_FADE_FAR + 1.0;   // 5.5: revert to fade well ABOVE FADE_FAR (fast-zoom margin → no pop)
 const FOREST_SWAP_INTERVAL = 0.05;                   // s: throttle the per-chunk distance recheck (~20x/s)
+
+/**
+ * ── MOBILE-ONLY: DYNAMIC MULTI-TIER LOD BY CAMERA DISTANCE ────────────────────
+ * Each eligible relief chunk (trees / flowers / mushrooms / grass / rocks) carries
+ * three pre-created, pre-uploaded geometry tiers — full, LOD1 (~50%), LOD2 (~25%)
+ * — stashed on `chunk.userData.forestLod` by the chunker. The SAME throttled
+ * per-frame loop that runs the opaque/fade swap picks each chunk's tier by its
+ * distance to the CAMERA (NOT distance-from-board): near → full, mid → LOD1, far →
+ * LOD2. Because the selector is camera-relative, the free-roam camera ALWAYS sees
+ * full detail on the chunks nearest it and low-poly only far away — flying out to
+ * the far ring now shows full detail there (the old static distance-from-board
+ * LOD left the far ring permanently low-poly, which looked bad up close).
+ *
+ * The swap is just `chunk.geometry = tier` (the InstancedMesh instances /
+ * instanceMatrix are untouched — the geometry is only a ref swap between already-
+ * resident buffers, so it is cheap with no GPU re-upload). We only reassign when
+ * the tier actually CHANGES. {@link selectForestLodTier} applies ±LOD_HYSTERESIS
+ * around each threshold so a chunk hovering at a boundary never flickers. Chunks
+ * of NON-eligible types (mountains/ground — no tiers) are skipped and stay full.
+ *
+ * Tunable (world units from the camera):
+ *   LOD_DIST_1 — below this a chunk renders FULL detail.
+ *   LOD_DIST_2 — above this a chunk renders LOD2 (~25%); between the two, LOD1.
+ *   LOD_HYSTERESIS — dead-band added on each side of both thresholds.
+ */
+const LOD_DIST_1 = 12;      // world units: nearer than this → full geometry
+const LOD_DIST_2 = 26;      // world units: farther than this → LOD2; between → LOD1
+const LOD_HYSTERESIS = 1.5; // world units: anti-flicker dead-band around each threshold
 
 /**
  * ── MOBILE-ONLY FOREST CHUNKING + DISTANCE THINNING (revertable experiment) ──
@@ -377,6 +411,14 @@ interface ForestChunkMeta {
   needsBoardClip: boolean;
   /** Current material state (which variant `mesh.material` points at). */
   isOpaque: boolean;
+  /**
+   * Pre-created geometry tiers for the dynamic camera-distance LOD swap, or null
+   * for NON-eligible types (mountains/ground — no `_LOD1`/`_LOD2`), which stay on
+   * full geometry forever. Harvested from `mesh.userData.forestLod`.
+   */
+  lod: ForestChunkLod | null;
+  /** Current LOD tier `mesh.geometry` points at (0 full / 1 LOD1 / 2 LOD2). */
+  tier: ForestLodTier;
 }
 
 /**
@@ -422,7 +464,11 @@ function buildForestChunkMetas(chunks: THREE.InstancedMesh[]): ForestChunkMeta[]
     const needsBoardClip =
       Math.abs(worldCenter.x) - worldRadius < BOARD_CLIP_HALF &&
       Math.abs(worldCenter.z) - worldRadius < BOARD_CLIP_HALF;
-    metas.push({ mesh, worldCenter, worldRadius, needsBoardClip, isOpaque: false });
+
+    // LOD tiers for the dynamic camera-distance swap (null → non-eligible, stays
+    // full). The chunk is born full-detail, so it starts at tier 0.
+    const lod = (mesh.userData as { forestLod?: ForestChunkLod }).forestLod ?? null;
+    metas.push({ mesh, worldCenter, worldRadius, needsBoardClip, isOpaque: false, lod, tier: 0 });
   }
   return metas;
 }
@@ -433,20 +479,23 @@ const FOREST_URL = '/models/forest.glb';
  * MOBILE-ONLY variant of the forest (`scripts/gen-forest-mobile.mjs`): the same
  * diorama with (A) EXT_meshopt_compression (smaller download, zero visual change;
  * the decoder is bundled in three-stdlib and auto-installed by drei's useGLTF, so
- * NO draco/decoder wiring is needed here), (B) the flat ground tiles decimated
- * ~90%, and (C) a decimated `<name>_LOD` sibling mesh for every relief type that
- * the chunker points FAR chunks at. Desktop keeps `forest.glb` byte-identical.
+ * NO draco/decoder wiring is needed here) and (B) TWO decimated sibling meshes —
+ * `<name>_LOD1` (~50%) and `<name>_LOD2` (~25%) — for every eligible relief type,
+ * which this component harvests into per-type geometry tiers for the runtime
+ * dynamic camera-distance LOD swap. Desktop keeps `forest.glb` byte-identical.
  */
 const FOREST_URL_MOBILE = '/models/forest.mobile.glb';
 
-/** Suffix marking the decimated far-LOD sibling meshes inside forest.mobile.glb. */
-const LOD_SUFFIX = '_LOD';
+/** Suffixes marking the two decimated LOD-tier sibling meshes in forest.mobile.glb. */
+const LOD1_SUFFIX = '_LOD1';
+const LOD2_SUFFIX = '_LOD2';
 
 /**
  * @param isMobile When true, the forest is rebuilt into frustum-cullable spatial
- *   chunks, the far ring is statically thinned, and FAR chunks of relief types
- *   use their decimated `_LOD` geometry (see forestChunking.ts). When
- *   false/absent, the forest is byte-identical to the pre-experiment behavior.
+ *   chunks, the far ring is statically thinned, and eligible relief chunks carry
+ *   `_LOD1`/`_LOD2` geometry tiers swapped DYNAMICALLY by camera distance at
+ *   runtime (see forestChunking.ts + the per-frame loop below). When false/absent,
+ *   the forest is byte-identical to the pre-experiment behavior.
  */
 export function ForestEnvironment({ isMobile = false }: { isMobile?: boolean }): React.JSX.Element {
   // Mobile loads the meshopt-compressed + decimated variant (decoder is auto-
@@ -458,23 +507,42 @@ export function ForestEnvironment({ isMobile = false }: { isMobile?: boolean }):
   const { object, groupScale, mobileChunks, forestFadeMat, forestOpaqueMat } = useMemo(() => {
     const scene = gltf.scene.clone(true);
 
-    // MOBILE-ONLY: harvest the decimated `_LOD` sibling meshes into a lookup
-    // keyed by their base (full) mesh name, then REMOVE them from the scene graph
-    // so they never render. They exist in forest.mobile.glb solely to supply
-    // far-chunk LOD geometry to rebuildForestAsChunks (below). Done before the
+    // MOBILE-ONLY: harvest BOTH decimated LOD-tier sibling meshes (`_LOD1` ~50%,
+    // `_LOD2` ~25%) into a per-type lookup keyed by their base (full) mesh name,
+    // then REMOVE them from the scene graph so they never render. They exist in
+    // forest.mobile.glb solely to supply the chunker with the geometry tiers for
+    // the runtime dynamic camera-distance LOD swap (below). Done before the
     // Box3/anchor computation so the (origin-placed) LOD meshes never skew bounds.
-    const lodGeometry = new Map<string, THREE.BufferGeometry>();
+    const lodGeometry = new Map<
+      string,
+      { lod1?: THREE.BufferGeometry; lod2?: THREE.BufferGeometry }
+    >();
     if (isMobile) {
       const lodObjects: THREE.Object3D[] = [];
       scene.traverse((o) => {
-        if (o.name.endsWith(LOD_SUFFIX)) lodObjects.push(o);
+        if (o.name.endsWith(LOD1_SUFFIX) || o.name.endsWith(LOD2_SUFFIX)) lodObjects.push(o);
       });
       for (const o of lodObjects) {
         const mesh = o as THREE.Mesh;
+        const isLod1 = o.name.endsWith(LOD1_SUFFIX);
+        const base = o.name.slice(0, -(isLod1 ? LOD1_SUFFIX : LOD2_SUFFIX).length);
+        const entry = lodGeometry.get(base) ?? {};
         // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- runtime narrowing: only actual meshes carry geometry
-        if (mesh.geometry) lodGeometry.set(o.name.slice(0, -LOD_SUFFIX.length), mesh.geometry);
+        if (mesh.geometry) {
+          if (isLod1) entry.lod1 = mesh.geometry;
+          else entry.lod2 = mesh.geometry;
+          lodGeometry.set(base, entry);
+        }
         o.removeFromParent();
       }
+    }
+
+    // Keep only types that carry BOTH tiers (every eligible relief type does; a
+    // half-populated entry would be a generator bug — drop it so the chunker only
+    // ever tags chunks with a complete {lod1, lod2} pair).
+    const lodTiers = new Map<string, { lod1: THREE.BufferGeometry; lod2: THREE.BufferGeometry }>();
+    for (const [name, e] of lodGeometry) {
+      if (e.lod1 && e.lod2) lodTiers.set(name, { lod1: e.lod1, lod2: e.lod2 });
     }
 
     scene.traverse((o) => {
@@ -576,7 +644,7 @@ export function ForestEnvironment({ isMobile = false }: { isMobile?: boolean }):
         keepFraction: FOREST_THIN_KEEP,
         minChunkInstances: FOREST_MIN_CHUNK_INSTANCES,
         mergeCellMin: FOREST_MERGE_CELL_MIN,
-        lodGeometry,
+        lodGeometry: lodTiers,
       });
 
       // Collect the freshly-built chunk InstancedMeshes and build the two swap
@@ -609,15 +677,22 @@ export function ForestEnvironment({ isMobile = false }: { isMobile?: boolean }):
     return { object: scene, groupScale, mobileChunks, forestFadeMat, forestOpaqueMat };
   }, [gltf, isMobile]);
 
-  // ── MOBILE-ONLY per-frame opaque/fade chunk material swap ─────────────────────
-  // Throttled (~20x/s) camera-distance pass that flips each non-board chunk to the
-  // discard-free opaque material once its nearest fragment is beyond the fade range
-  // (early-Z can then cull it) and back to the fade material when it re-enters.
+  // ── MOBILE-ONLY per-frame chunk pass: DYNAMIC LOD + opaque/fade material swap ──
+  // ONE throttled (~20x/s) camera-distance loop drives two independent per-chunk
+  // decisions off a single computed distance (no second loop, no allocation):
+  //   (1) DYNAMIC LOD — for eligible relief chunks, pick full/LOD1/LOD2 by the
+  //       chunk's distance to the CAMERA (with hysteresis, so no boundary flicker)
+  //       and swap `chunk.geometry` only when the tier changes. Camera-relative,
+  //       so near chunks are always full detail and far ones low-poly wherever the
+  //       free-roam camera flies. Non-eligible chunks (no tiers) are left full.
+  //   (2) OPAQUE/FADE material swap (non-board chunks only) — flip to the
+  //       discard-free opaque material once the nearest fragment is beyond the fade
+  //       range (early-Z can then cull it) and back when it re-enters.
   // Off-screen chunks are handled by three's frustum culling (frustumCulled=true on
   // every chunk); there is no render-distance cull, so no chunk is ever hidden here.
   // Desktop early-returns (no chunks). Chunk world bounds are static, so they are
   // cached on the first valid frame; the loop does only a distanceTo + compares (no
-  // allocation). See the swap threshold notes above.
+  // allocation). See the swap/LOD threshold notes above.
   const chunkMetaRef = useRef<{ chunks: THREE.InstancedMesh[]; metas: ForestChunkMeta[] } | null>(
     null,
   );
@@ -641,11 +716,35 @@ export function ForestEnvironment({ isMobile = false }: { isMobile?: boolean }):
     const camPos = state.camera.position;
     const metas = store.metas;
     for (const meta of metas) {
-      if (meta.needsBoardClip) continue; // near-board chunks stay on fade+clip forever
-      // Opaque/fade swap — UNCHANGED: distance to the chunk's nearest possible
-      // fragment via the bounding sphere (kept so the swap boundary/look is exactly
-      // as before; no pop).
-      const nearest = camPos.distanceTo(meta.worldCenter) - meta.worldRadius;
+      // Distance camera → chunk center, computed ONCE and reused by both passes.
+      const centerDist = camPos.distanceTo(meta.worldCenter);
+
+      // (1) DYNAMIC LOD tier swap (eligible relief chunks only). By CAMERA
+      // distance with hysteresis; only reassign `geometry` when the tier actually
+      // changes. The InstancedMesh instances/instanceMatrix are untouched — this
+      // is a ref swap between already-uploaded geometries (no GPU re-upload).
+      // Applies to needsBoardClip chunks too (LOD is independent of the material /
+      // board-clip discard, which every tier's shader still performs).
+      if (meta.lod) {
+        const next = selectForestLodTier(
+          meta.tier,
+          centerDist,
+          LOD_DIST_1,
+          LOD_DIST_2,
+          LOD_HYSTERESIS,
+        );
+        if (next !== meta.tier) {
+          meta.tier = next;
+          meta.mesh.geometry =
+            next === 0 ? meta.lod.full : next === 1 ? meta.lod.lod1 : meta.lod.lod2;
+        }
+      }
+
+      // (2) Opaque/fade material swap — UNCHANGED: distance to the chunk's nearest
+      // possible fragment via the bounding sphere (kept so the swap boundary/look
+      // is exactly as before; no pop). Near-board chunks stay on fade+clip forever.
+      if (meta.needsBoardClip) continue;
+      const nearest = centerDist - meta.worldRadius;
       if (!meta.isOpaque) {
         if (nearest > FOREST_OPAQUE_ENTER) {
           meta.mesh.material = forestOpaqueMat;

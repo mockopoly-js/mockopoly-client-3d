@@ -72,6 +72,60 @@ export function isForestGroundMesh(name: string): boolean {
   return FOREST_GROUND_NAME_RE.test(name);
 }
 
+/**
+ * The pre-created LOD geometry TIERS for one eligible relief type, stashed on
+ * each chunk's `userData.forestLod` by {@link rebuildForestAsChunks} so the
+ * per-frame camera-distance LOD swap (in ForestEnvironment) can flip a chunk's
+ * `geometry` between them with zero allocation and zero GPU re-upload (all three
+ * geometries are already uploaded). `full` is the source geometry the chunk is
+ * born with; `lod1`/`lod2` are the ~50% / ~25% decimated siblings. Non-eligible
+ * types (mountains/ground) get NO `forestLod` and stay on `full` forever.
+ */
+export interface ForestChunkLod {
+  full: THREE.BufferGeometry;
+  lod1: THREE.BufferGeometry;
+  lod2: THREE.BufferGeometry;
+}
+
+/** LOD tier index: 0 = full detail, 1 = LOD1 (~50%), 2 = LOD2 (~25%). */
+export type ForestLodTier = 0 | 1 | 2;
+
+/**
+ * DYNAMIC camera-distance LOD tier selection with HYSTERESIS. Given a chunk's
+ * CURRENT tier and its distance to the camera, returns the tier it should render
+ * at: `< dist1` → full (0), `dist1..dist2` → LOD1 (1), `> dist2` → LOD2 (2).
+ *
+ * Each threshold carries a ±`hysteresis` dead-band: a boundary is only crossed
+ * once the distance is `hysteresis` PAST it in the direction of travel, so a
+ * chunk parked right on a boundary (as the free-roam camera drifts) never
+ * flip-flops between tiers frame to frame. Multi-tier jumps (a teleporting
+ * camera) resolve in a single call. Pure + allocation-free — safe to call every
+ * throttled frame per chunk.
+ */
+export function selectForestLodTier(
+  current: ForestLodTier,
+  camDist: number,
+  dist1: number,
+  dist2: number,
+  hysteresis: number,
+): ForestLodTier {
+  let tier: number = current;
+  // Upgrade toward lower-detail tiers as the camera pulls away. Only cross a
+  // boundary once we are `hysteresis` BEYOND it.
+  while (tier < 2) {
+    const edge = tier === 0 ? dist1 : dist2;
+    if (camDist > edge + hysteresis) tier += 1;
+    else break;
+  }
+  // Downgrade toward higher-detail tiers as the camera closes in.
+  while (tier > 0) {
+    const edge = tier === 2 ? dist2 : dist1;
+    if (camDist < edge - hysteresis) tier -= 1;
+    else break;
+  }
+  return tier as ForestLodTier;
+}
+
 export interface ForestChunkParams {
   /** The cloned forest scene whose InstancedMeshes will be replaced in place. */
   scene: THREE.Object3D;
@@ -102,17 +156,19 @@ export interface ForestChunkParams {
    */
   mergeCellMin: number;
   /**
-   * OPTIONAL far-chunk LOD geometry, keyed by source InstancedMesh name (== the
-   * full mesh name). A chunk of a type present in this map uses the decimated
-   * `_LOD` geometry when it is FAR (every instance it holds lies beyond
-   * `thinDistance` from the board center) and the full geometry otherwise. Types
-   * absent from the map (e.g. the already-decimated ground/flat tiles) always
-   * use their single full geometry. The decision is STATIC (build-time, from the
-   * fixed instance positions), so nothing pops as the camera orbits. Omit to
-   * disable LOD swapping entirely (every chunk uses full geometry — the
-   * pre-LOD behavior, byte-identical for the existing tests).
+   * OPTIONAL per-type LOD geometry TIERS, keyed by source InstancedMesh name
+   * (== the full mesh name). For every eligible relief type (trees / flowers /
+   * mushrooms / grass / rocks) this supplies the `_LOD1` (~50%) and `_LOD2`
+   * (~25%) decimated siblings. A chunk of a type present in this map is BORN with
+   * full geometry but is tagged with `userData.forestLod = {full, lod1, lod2}` so
+   * ForestEnvironment's throttled per-frame loop can DYNAMICALLY swap
+   * `chunk.geometry` by CAMERA distance (near→full, mid→LOD1, far→LOD2). Types
+   * absent from the map (e.g. the un-decimated ground/flat tiles and mountains,
+   * which tear when simplified) get NO tag and keep full geometry forever. Omit
+   * the whole map to disable LOD entirely (every chunk full, no tag — the pre-LOD
+   * behavior).
    */
-  lodGeometry?: Map<string, THREE.BufferGeometry>;
+  lodGeometry?: Map<string, { lod1: THREE.BufferGeometry; lod2: THREE.BufferGeometry }>;
 }
 
 /**
@@ -121,10 +177,11 @@ export interface ForestChunkParams {
  * low-count / too-sparse types become ONE local-bounded cullable chunk (never left
  * island-wide). NON-ground types have their far ring statically thinned; GROUND/FLOOR
  * types (see {@link isForestGroundMesh}) are chunked but NEVER thinned. When a
- * `lodGeometry` map is supplied, FAR chunks of relief types (every instance beyond
- * `thinDistance`) render the decimated `_LOD` geometry while near chunks keep full
- * detail — a static, non-popping LOD that stacks with the far-thinning. Mutates the
- * scene graph; reuses geometry + material.
+ * `lodGeometry` map is supplied, every eligible relief chunk is tagged with its
+ * `{full, lod1, lod2}` geometry tiers (`userData.forestLod`) so ForestEnvironment
+ * can DYNAMICALLY swap `chunk.geometry` by camera distance at runtime; the chunks
+ * are all BORN full-detail here (the swap is per-frame, not build-time). Mutates
+ * the scene graph; reuses geometry + material.
  */
 export function rebuildForestAsChunks(params: ForestChunkParams): void {
   const {
@@ -182,31 +239,23 @@ export function rebuildForestAsChunks(params: ForestChunkParams): void {
     const parent = im.parent;
     if (!parent) return;
 
-    // FAR-CHUNK LOD SELECTION. A chunk uses the type's decimated `_LOD` geometry
-    // ONLY when EVERY instance it holds sits beyond `thinDistance` from the board
-    // center — so any chunk that reaches into the near ring keeps FULL detail and
-    // the near view is visually unchanged. The far view is near-identical (a ~50%
-    // decimation of already-distant props). Ground/flat types have no `_LOD`
-    // entry and fall back to their single (already-decimated) geometry. The test
-    // is on the SAME world-unit distance the far-thinning uses, computed from the
-    // fixed instance positions → a static decision with no mid-motion popping.
-    let geometry = im.geometry;
+    // Every chunk is BORN with the FULL source geometry. DYNAMIC LOD selection
+    // (by CAMERA distance, with hysteresis) happens per-frame at runtime in
+    // ForestEnvironment — NOT here at build time. For eligible relief types we
+    // stash the pre-created {full, lod1, lod2} tiers on `userData.forestLod` so
+    // that per-frame loop can flip `chunk.geometry` between them with no
+    // allocation and no GPU re-upload (all three are already uploaded). Types
+    // absent from `lodGeometry` (ground/flat + mountains — they tear when
+    // decimated) get NO tag and stay full-detail forever (fallback).
+    const chunk = new THREE.InstancedMesh(im.geometry, im.material, indices.length);
     const lod = lodGeometry?.get(im.name);
     if (lod) {
-      let minDistSq = Infinity;
-      for (const idx of indices) {
-        im.getMatrixAt(idx, m4);
-        worldM.multiplyMatrices(im.matrixWorld, m4);
-        pos.setFromMatrixPosition(worldM);
-        const wdx = (pos.x - center.x) * groupScale;
-        const wdz = (pos.z - center.z) * groupScale;
-        const dsq = wdx * wdx + wdz * wdz;
-        if (dsq < minDistSq) minDistSq = dsq;
-      }
-      if (minDistSq > thinDistSq) geometry = lod;
+      (chunk.userData as { forestLod?: ForestChunkLod }).forestLod = {
+        full: im.geometry,
+        lod1: lod.lod1,
+        lod2: lod.lod2,
+      };
     }
-
-    const chunk = new THREE.InstancedMesh(geometry, im.material, indices.length);
     chunk.name = name;
     chunk.receiveShadow = im.receiveShadow;
     chunk.castShadow = im.castShadow;

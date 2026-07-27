@@ -1,6 +1,16 @@
 import { describe, it, expect } from 'vitest';
 import * as THREE from 'three';
-import { rebuildForestAsChunks, isForestGroundMesh } from './forestChunking';
+import {
+  rebuildForestAsChunks,
+  isForestGroundMesh,
+  selectForestLodTier,
+  type ForestChunkLod,
+} from './forestChunking';
+
+/** Read the LOD tiers the chunker stashed on a chunk (null for non-eligible types). */
+function chunkLod(im: THREE.InstancedMesh): ForestChunkLod | null {
+  return (im.userData as { forestLod?: ForestChunkLod }).forestLod ?? null;
+}
 
 /** Build an InstancedMesh named `name` with instances at the given XZ positions. */
 function makeMesh(name: string, positions: [number, number][]): THREE.InstancedMesh {
@@ -214,23 +224,24 @@ describe('rebuildForestAsChunks', () => {
     expect(countInstances(scene)).toBe(spread.length); // all 9 preserved
   });
 
-  it('(g) FAR relief chunks use the *_LOD geometry while NEAR chunks keep full geometry', () => {
-    // A near cluster (within thinDistance, at the center cell) and a far cluster
-    // (beyond thinDistance, at a corner cell) of the SAME relief type. With a
-    // lodGeometry entry for that type, the near chunk must keep the source
-    // (full) geometry and the far chunk must swap to the decimated LOD geometry.
-    const near: [number, number][] = [[0, 0], [1, 0], [0, 1], [1, 1]]; // dist ~0-1.4 (< 5)
-    const far: [number, number][] = [[-10, -10], [-9, -9], [-10, -9], [-9, -10]]; // dist ~13 (> 5)
+  it('(g) eligible relief chunks are born FULL-detail and tagged with {full, lod1, lod2} tiers', () => {
+    // The chunker no longer picks an LOD geometry statically — the tier is chosen
+    // per-frame by camera distance at runtime. So every chunk starts on the FULL
+    // source geometry, and eligible relief chunks carry the pre-created tiers in
+    // userData.forestLod for the runtime swap. Near/far no longer matters here.
+    const near: [number, number][] = [[0, 0], [1, 0], [0, 1], [1, 1]];
+    const far: [number, number][] = [[-10, -10], [-9, -9], [-10, -9], [-9, -10]];
     const tree = makeMesh('PP_Tree_10', [...near, ...far]);
     const fullGeom = tree.geometry;
-    const lodGeom = new THREE.BoxGeometry(2, 2, 2); // distinct geometry reference
+    const lod1 = new THREE.BoxGeometry(2, 2, 2); // distinct references
+    const lod2 = new THREE.BoxGeometry(3, 3, 3);
     const scene = makeScene(tree);
     rebuildForestAsChunks(
       params({
         scene,
         thinDistance: 5,
-        keepFraction: 1, // no thinning → all 8 survive; isolate the LOD-geometry choice
-        lodGeometry: new Map([['PP_Tree_10', lodGeom]]),
+        keepFraction: 1, // no thinning → all 8 survive
+        lodGeometry: new Map([['PP_Tree_10', { lod1, lod2 }]]),
       }),
     );
 
@@ -238,35 +249,27 @@ describe('rebuildForestAsChunks', () => {
     expect(chunks.length).toBeGreaterThan(1); // near + far land in different cells
     expect(countInstances(scene)).toBe(8); // nothing lost
 
-    const m = new THREE.Matrix4();
-    const p = new THREE.Vector3();
-    let sawNearFull = false;
-    let sawFarLod = false;
     for (const c of chunks) {
-      c.getMatrixAt(0, m);
-      p.setFromMatrixPosition(m);
-      const isFar = p.x * p.x + p.z * p.z > 25; // thinDistance^2 = 25
-      if (isFar) {
-        expect(c.geometry).toBe(lodGeom); // FAR → decimated LOD geometry
-        sawFarLod = true;
-      } else {
-        expect(c.geometry).toBe(fullGeom); // NEAR → full geometry
-        sawNearFull = true;
-      }
+      expect(c.geometry).toBe(fullGeom); // BORN full-detail (runtime swaps the tier)
+      const lod = chunkLod(c);
+      expect(lod).not.toBeNull();
+      expect(lod?.full).toBe(fullGeom);
+      expect(lod?.lod1).toBe(lod1);
+      expect(lod?.lod2).toBe(lod2);
     }
-    expect(sawNearFull).toBe(true);
-    expect(sawFarLod).toBe(true);
   });
 
-  it('(g2) a type with NO *_LOD entry (e.g. decimated ground) uses full geometry even when far', () => {
-    // Ground is decimated to a single geometry in forest.mobile.glb and has no
-    // LOD sibling → its far chunks must fall back to the source geometry, never
-    // a missing/other LOD. Also re-confirms ground is never thinned.
+  it('(g2) a type with NO LOD entry (e.g. ground/mountain) uses full geometry and carries no tiers', () => {
+    // Ground/mountains are kept full and have no LOD siblings in forest.mobile.glb
+    // → absent from the map → chunks must keep the source geometry and carry NO
+    // forestLod tag (so the runtime loop leaves them full forever). Also re-confirms
+    // ground is never thinned.
     const spread: [number, number][] = [];
     for (let x = -10; x <= 10; x += 4) for (let z = -10; z <= 10; z += 4) spread.push([x, z]);
     const ground = makeMesh('PP_Meadow_08', spread);
     const fullGeom = ground.geometry;
-    const lodGeom = new THREE.BoxGeometry(2, 2, 2);
+    const lod1 = new THREE.BoxGeometry(2, 2, 2);
+    const lod2 = new THREE.BoxGeometry(3, 3, 3);
     const scene = makeScene(ground);
     rebuildForestAsChunks(
       params({
@@ -274,7 +277,7 @@ describe('rebuildForestAsChunks', () => {
         thinDistance: 3,
         keepFraction: 0.1,
         // Map has an entry for a DIFFERENT type; ground ("PP_Meadow_08") is absent.
-        lodGeometry: new Map([['PP_Tree_10', lodGeom]]),
+        lodGeometry: new Map([['PP_Tree_10', { lod1, lod2 }]]),
       }),
     );
 
@@ -282,15 +285,19 @@ describe('rebuildForestAsChunks', () => {
     expect(countInstances(scene)).toBe(spread.length); // ground never thinned
     for (const c of chunks) {
       expect(c.geometry).toBe(fullGeom); // no LOD entry → source geometry everywhere
+      expect(chunkLod(c)).toBeNull(); // and NO tiers tagged → stays full at runtime
     }
   });
 
-  it('(g3) with NO lodGeometry map, every chunk uses full geometry (pre-LOD parity)', () => {
+  it('(g3) with NO lodGeometry map, every chunk uses full geometry and carries no tiers (pre-LOD parity)', () => {
     const tree = makeMesh('PP_Tree_02', DENSE_CLUSTERS);
     const fullGeom = tree.geometry;
     const scene = makeScene(tree);
     rebuildForestAsChunks(params({ scene })); // no lodGeometry provided
-    for (const c of allInstanced(scene)) expect(c.geometry).toBe(fullGeom);
+    for (const c of allInstanced(scene)) {
+      expect(c.geometry).toBe(fullGeom);
+      expect(chunkLod(c)).toBeNull();
+    }
   });
 
   it('(f2) the underlying "no cell clears the threshold" fallback still works with an explicit high mergeCellMin', () => {
@@ -315,5 +322,38 @@ describe('rebuildForestAsChunks', () => {
     expect(meshes[0].frustumCulled).toBe(true); // local bound → cullable when off-screen
     expect(meshes[0].boundingSphere).not.toBeNull();
     expect(countInstances(scene)).toBe(spread.length); // all 9 preserved — unthinned
+  });
+});
+
+describe('selectForestLodTier (dynamic camera-distance LOD)', () => {
+  const D1 = 12; // full <-> LOD1 threshold
+  const D2 = 26; // LOD1 <-> LOD2 threshold
+  const H = 1.5; // hysteresis dead-band
+
+  it('picks near→full, mid→LOD1, far→LOD2 from a cold start (current tier 0)', () => {
+    expect(selectForestLodTier(0, 5, D1, D2, H)).toBe(0); // well inside near band
+    expect(selectForestLodTier(0, 20, D1, D2, H)).toBe(1); // between the thresholds
+    expect(selectForestLodTier(0, 40, D1, D2, H)).toBe(2); // beyond the far threshold
+  });
+
+  it('applies hysteresis at the full<->LOD1 boundary (no flicker)', () => {
+    // Sitting at full: must travel PAST D1 + H before upgrading to LOD1.
+    expect(selectForestLodTier(0, 13, D1, D2, H)).toBe(0); // 13 < 13.5 → stays full
+    expect(selectForestLodTier(0, 14, D1, D2, H)).toBe(1); // 14 > 13.5 → LOD1
+    // Sitting at LOD1: must travel PAST D1 - H before downgrading to full.
+    expect(selectForestLodTier(1, 11, D1, D2, H)).toBe(1); // 11 > 10.5 → stays LOD1
+    expect(selectForestLodTier(1, 10, D1, D2, H)).toBe(0); // 10 < 10.5 → full
+  });
+
+  it('applies hysteresis at the LOD1<->LOD2 boundary (no flicker)', () => {
+    expect(selectForestLodTier(1, 27, D1, D2, H)).toBe(1); // 27 < 27.5 → stays LOD1
+    expect(selectForestLodTier(1, 28, D1, D2, H)).toBe(2); // 28 > 27.5 → LOD2
+    expect(selectForestLodTier(2, 25, D1, D2, H)).toBe(2); // 25 > 24.5 → stays LOD2
+    expect(selectForestLodTier(2, 24, D1, D2, H)).toBe(1); // 24 < 24.5 → LOD1
+  });
+
+  it('resolves multi-tier jumps in a single call (teleporting camera)', () => {
+    expect(selectForestLodTier(0, 100, D1, D2, H)).toBe(2); // full → LOD2 directly
+    expect(selectForestLodTier(2, 0, D1, D2, H)).toBe(0); // LOD2 → full directly
   });
 });
