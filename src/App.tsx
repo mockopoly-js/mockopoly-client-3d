@@ -31,6 +31,7 @@ import { FullscreenButton } from './ui/FullscreenButton';
 import { RotateHint } from './ui/RotateHint';
 import { PropertyCardModal } from './ui/PropertyCardModal';
 import { CameraDebugOverlay } from './ui/CameraDebugOverlay';
+import { DebugTogglePanel } from './dev/DebugTogglePanel';
 import { useSfx } from './audio/useSfx';
 import { initAudioOnGesture } from './audio/sfx';
 import type { S_GameOver } from './types/SocketEvents';
@@ -163,6 +164,9 @@ export default function App() {
           <CameraDebugOverlay />
           <CameraViewButton />
           <FullscreenButton />
+          {/* DEV-only scene-layer visibility toggle panel — see debugVisibility.ts.
+              Gated so it's tree-shaken out of production builds. */}
+          {import.meta.env.DEV && <DebugTogglePanel />}
         </>
       )}
       {screen === 'game-over' && <GameOverScreen />}

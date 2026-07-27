@@ -10,6 +10,7 @@ import { TOKEN_HEX } from '../constants/theme';
 import { CharacterToken, type CharacterTokenHandle } from './CharacterToken';
 import { resolveCharacter, DEFAULT_CHARACTER, toMobileCharacterUrl } from '../constants/characters';
 import { useIsMobile } from '../ui/useIsMobile';
+import { getDebugVisibility, subscribeDebugVisibility } from '../dev/debugVisibility';
 import type { Player } from '../types/GameState';
 
 const BASE_Y = 0.15;
@@ -213,6 +214,21 @@ export function PlayerTokens() {
   const targetYaw = useRef<Record<string, number | undefined>>({});
   // Imperative handles to each character, for one-shot Victory/Defeat clips.
   const chars = useRef<Record<string, CharacterTokenHandle | null>>({});
+
+  // DEV-ONLY: tokens debug-visibility toggle (see src/dev/debugVisibility.ts).
+  // Ref on the outer wrapper group (a sibling of the per-player animated
+  // groups below) so toggling it off/on hides/shows every token at once
+  // without touching the per-frame walk/facing logic (which only ever writes
+  // to the per-player groups, never to this wrapper).
+  const tokensGroupRef = useRef<THREE.Group>(null);
+  useEffect(() => {
+    if (!import.meta.env.DEV) return;
+    const apply = () => {
+      if (tokensGroupRef.current) tokensGroupRef.current.visible = getDebugVisibility().tokens;
+    };
+    apply();
+    return subscribeDebugVisibility(apply);
+  }, []);
 
   // ── Victory-on-gain detection ─────────────────────────────────────────────
   // Previous snapshot values keyed by player id. Null until the first snapshot
@@ -560,7 +576,7 @@ export function PlayerTokens() {
   });
 
   return (
-    <group>
+    <group ref={tokensGroupRef}>
       {players.map((p) => {
         // Initial placement only (before the first useFrame tick paints it).
         const [x, , z] = tileToWorld(p.position);

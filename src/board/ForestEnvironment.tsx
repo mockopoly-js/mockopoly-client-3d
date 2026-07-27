@@ -1,4 +1,4 @@
-import { useMemo, useRef } from 'react';
+import { useEffect, useMemo, useRef } from 'react';
 import * as THREE from 'three';
 import { useGLTF } from '@react-three/drei';
 import { useFrame } from '@react-three/fiber';
@@ -10,6 +10,11 @@ import {
   type ForestChunkLod,
   type ForestLodTier,
 } from './forestChunking';
+import {
+  getDebugVisibility,
+  subscribeDebugVisibility,
+  type ForestDebugCategory,
+} from '../dev/debugVisibility';
 
 /**
  * The low-poly FOREST environment (`public/models/forest.glb`, ~1.7 MB,
@@ -226,6 +231,36 @@ const FOREST_MIN_CHUNK_INSTANCES = 4;
 const FOREST_MERGE_CELL_MIN = 1;
 const FOREST_THIN_DISTANCE = 30;
 const FOREST_THIN_KEEP = 0.5;
+
+/**
+ * ── DEV-ONLY: forest chunk category classifier for the debug visibility panel ──
+ * Maps a forest InstancedMesh's `.name` to one of the debug-toggle categories
+ * via substring regex. The name is the RELIABLE identifier here: on mobile a
+ * chunk's name is `${sourceTypeName}-chunkN` (set by `emitChunk` in
+ * forestChunking.ts, derived straight from the source InstancedMesh's own
+ * `.name`); on desktop the forest is never chunked, so the mesh keeps its bare
+ * source name. Either way the regex still matches (the "-chunkN" suffix is
+ * just extra trailing text a substring match ignores), so no chunker/userData
+ * change is needed. Referenced ONLY from the DEV-gated effect below, so this
+ * whole block is dead code (and tree-shaken) in production builds.
+ */
+const FOREST_DEBUG_CATEGORY_PATTERNS: readonly [ForestDebugCategory, RegExp][] = [
+  ['trees', /tree|birch/i],
+  ['mountains', /mountain/i],
+  ['flowers', /hyacinth|daffodil|sunflower|flower/i],
+  ['mushrooms', /mushroom/i],
+  ['grass', /grass/i],
+  ['rocks', /rock/i],
+  ['ground', /meadow|path|lake/i],
+];
+
+/** Returns the matched debug category for a forest mesh name, or null if none match. */
+function classifyForestDebugCategory(name: string): ForestDebugCategory | null {
+  for (const [category, pattern] of FOREST_DEBUG_CATEGORY_PATTERNS) {
+    if (pattern.test(name)) return category;
+  }
+  return null;
+}
 
 /**
  * ── BOARD-FOOTPRINT CLIP (poke-through removal) ───────────────────────────────
@@ -676,6 +711,44 @@ export function ForestEnvironment({ isMobile = false }: { isMobile?: boolean }):
 
     return { object: scene, groupScale, mobileChunks, forestFadeMat, forestOpaqueMat };
   }, [gltf, isMobile]);
+
+  // ── DEV-ONLY: debug visibility wiring (see src/dev/debugVisibility.ts) ────────
+  // Applies the master `wholeForest` flag AND each mesh's classified
+  // sub-category flag as a `.visible` override. Runs ONCE per `object` (this
+  // covers BOTH desktop — one island-wide InstancedMesh per source type — and
+  // mobile — many `${type}-chunkN` meshes; classification works identically on
+  // either since it only substring-matches the name), then re-applies on every
+  // flag toggle via `subscribeDebugVisibility`. No per-frame cost — only fires
+  // on tap. `.visible` is otherwise ALWAYS true for these meshes (the far-opaque
+  // swap only reassigns `.material`, never `.visible`), so this is the sole
+  // writer and never fights the existing per-frame LOD/material logic. Entirely
+  // gated behind `import.meta.env.DEV`; tree-shaken out of production builds.
+  useEffect(() => {
+    if (!import.meta.env.DEV) return;
+
+    const entries: { mesh: THREE.Mesh; category: ForestDebugCategory | null }[] = [];
+    object.traverse((o) => {
+      const im = o as THREE.InstancedMesh;
+      // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- runtime narrowing: o is Object3D; only actual InstancedMeshes have isInstancedMesh===true
+      if (!im.isInstancedMesh) return;
+      entries.push({ mesh: im, category: classifyForestDebugCategory(im.name) });
+    });
+
+    const apply = () => {
+      const flags = getDebugVisibility();
+      for (const { mesh, category } of entries) {
+        mesh.visible = flags.wholeForest && (category === null || flags[category]);
+      }
+    };
+    apply();
+    const unsubscribe = subscribeDebugVisibility(apply);
+    return () => {
+      unsubscribe();
+      // Defensive: restore full visibility so a stale hidden flag can never
+      // linger if `object` is reused/unmounted mid-toggle (HMR safety net).
+      for (const { mesh } of entries) mesh.visible = true;
+    };
+  }, [object]);
 
   // ── MOBILE-ONLY per-frame chunk pass: DYNAMIC LOD + opaque/fade material swap ──
   // ONE throttled (~20x/s) camera-distance loop drives two independent per-chunk

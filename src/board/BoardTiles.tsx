@@ -1,9 +1,10 @@
-import { useMemo } from 'react';
+import { useEffect, useMemo, useRef } from 'react';
 import * as THREE from 'three';
 import { useTexture, useKTX2 } from '@react-three/drei';
 import { useThree } from '@react-three/fiber';
 import { BOARD_WORLD_SIZE } from './positions';
 import { useIsMobile } from '../ui/useIsMobile';
+import { getDebugVisibility, subscribeDebugVisibility } from '../dev/debugVisibility';
 
 /**
  * The real 2D Monopoly board (board.webp, the printed square that fills the
@@ -72,6 +73,11 @@ const BOARD_SATURATION = 1.6;
  * Identical for both paths so the board renders the same regardless of source.
  */
 function BoardSlab({ texture }: { texture: THREE.Texture }) {
+  // DEV-ONLY: board debug-visibility toggle (see src/dev/debugVisibility.ts).
+  // Wraps the slab so the whole board can be hidden to isolate its render
+  // cost on the FPS/RenderStatsReadout panels. Ref-only; gated below.
+  const groupRef = useRef<THREE.Group>(null);
+
   // 6-material array; BoxGeometry face order = [px, nx, py, ny, pz, nz].
   // Index 2 (py = top) gets the board artwork; the rest get the edge color.
   const materials = useMemo(() => {
@@ -106,8 +112,20 @@ function BoardSlab({ texture }: { texture: THREE.Texture }) {
     return [edge, edge, top, edge, edge, edge];
   }, [texture]);
 
+  // DEV-ONLY: subscribe to the shared debug flags and flip the slab group's
+  // `.visible` on toggle. No per-frame cost — only fires on tap. Entirely
+  // gated behind `import.meta.env.DEV`; tree-shaken out of production builds.
+  useEffect(() => {
+    if (!import.meta.env.DEV) return;
+    const apply = () => {
+      if (groupRef.current) groupRef.current.visible = getDebugVisibility().board;
+    };
+    apply();
+    return subscribeDebugVisibility(apply);
+  }, []);
+
   return (
-    <group>
+    <group ref={groupRef}>
       {/* Board slab: 10 (x) × DEPTH (y) × 10 (z); top face pinned to TOP_Y. */}
       <mesh position={[0, TOP_Y - DEPTH / 2, 0]} material={materials} receiveShadow castShadow>
         <boxGeometry args={[BOARD_WORLD_SIZE, DEPTH, BOARD_WORLD_SIZE]} />

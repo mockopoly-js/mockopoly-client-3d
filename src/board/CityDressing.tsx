@@ -1,6 +1,7 @@
-import { useMemo } from 'react';
+import { useEffect, useMemo, useRef } from 'react';
 import * as THREE from 'three';
 import { useGLTF } from '@react-three/drei';
+import { getDebugVisibility, subscribeDebugVisibility } from '../dev/debugVisibility';
 
 /**
  * The real low-poly city (SimplePoly City → `public/models/city.glb`, ~5.5 MB,
@@ -146,8 +147,23 @@ export function CityDressing({ isMobile = false }: { isMobile?: boolean }): Reac
     return { object: scene, groupScale: [scaleX, scaleY, scaleZ] };
   }, [gltf, isMobile]);
 
+  // DEV-ONLY: city debug-visibility toggle (see src/dev/debugVisibility.ts).
+  // Subscribes to the shared debug flags and flips the outer group's
+  // `.visible` on toggle. No per-frame cost — only fires on tap. Entirely
+  // gated behind `import.meta.env.DEV`; tree-shaken out of production builds.
+  const groupRef = useRef<THREE.Group>(null);
+  useEffect(() => {
+    if (!import.meta.env.DEV) return;
+    const apply = () => {
+      if (groupRef.current) groupRef.current.visible = getDebugVisibility().city;
+    };
+    apply();
+    return subscribeDebugVisibility(apply);
+  }, [object]);
+
   return (
     <group
+      ref={groupRef}
       name="city-center"
       position={[CITY_PAN_X, CITY_Y, CITY_PAN_Z]}
       rotation={[0, CITY_ROT, 0]}
