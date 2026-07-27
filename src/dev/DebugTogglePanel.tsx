@@ -117,8 +117,9 @@ const listStyle: React.CSSProperties = {
   border: '1px solid rgba(255,255,255,0.15)',
   borderRadius: 6,
   padding: 6,
-  maxHeight: '50vh',
+  maxHeight: 'calc(100dvh - env(safe-area-inset-top) - env(safe-area-inset-bottom) - 40px)',
   overflowY: 'auto',
+  WebkitOverflowScrolling: 'touch',
   minWidth: 190,
 };
 
