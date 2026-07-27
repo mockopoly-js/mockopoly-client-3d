@@ -362,35 +362,65 @@ describe('rebuildForestAsChunks', () => {
 });
 
 describe('selectForestLodTier (dynamic camera-distance LOD)', () => {
-  const D1 = 12; // full <-> LOD1 threshold
-  const D2 = 26; // LOD1 <-> LOD2 threshold
+  // Mirrors the SHIPPED thresholds (ForestEnvironment LOD_DIST_1 / LOD_DIST_2 /
+  // LOD_HYSTERESIS), CRANKED IN from 12/26 to 7/14 so the mid/far LOD tiers land in
+  // the band the mobile camera (~10.3u from board center) actually looks at.
+  const D1 = 7; // full <-> LOD1 threshold
+  const D2 = 14; // LOD1 <-> LOD2 threshold
   const H = 1.5; // hysteresis dead-band
 
   it('picks near→full, mid→LOD1, far→LOD2 from a cold start (current tier 0)', () => {
-    expect(selectForestLodTier(0, 5, D1, D2, H)).toBe(0); // well inside near band
-    expect(selectForestLodTier(0, 20, D1, D2, H)).toBe(1); // between the thresholds
-    expect(selectForestLodTier(0, 40, D1, D2, H)).toBe(2); // beyond the far threshold
+    expect(selectForestLodTier(0, 4, D1, D2, H)).toBe(0); // well inside near band
+    expect(selectForestLodTier(0, 10, D1, D2, H)).toBe(1); // between the thresholds
+    expect(selectForestLodTier(0, 30, D1, D2, H)).toBe(2); // beyond the far threshold
   });
 
   it('applies hysteresis at the full<->LOD1 boundary (no flicker)', () => {
-    // Sitting at full: must travel PAST D1 + H before upgrading to LOD1.
-    expect(selectForestLodTier(0, 13, D1, D2, H)).toBe(0); // 13 < 13.5 → stays full
-    expect(selectForestLodTier(0, 14, D1, D2, H)).toBe(1); // 14 > 13.5 → LOD1
-    // Sitting at LOD1: must travel PAST D1 - H before downgrading to full.
-    expect(selectForestLodTier(1, 11, D1, D2, H)).toBe(1); // 11 > 10.5 → stays LOD1
-    expect(selectForestLodTier(1, 10, D1, D2, H)).toBe(0); // 10 < 10.5 → full
+    // Sitting at full: must travel PAST D1 + H (8.5) before upgrading to LOD1.
+    expect(selectForestLodTier(0, 8, D1, D2, H)).toBe(0); // 8 < 8.5 → stays full
+    expect(selectForestLodTier(0, 9, D1, D2, H)).toBe(1); // 9 > 8.5 → LOD1
+    // Sitting at LOD1: must travel PAST D1 - H (5.5) before downgrading to full.
+    expect(selectForestLodTier(1, 6, D1, D2, H)).toBe(1); // 6 > 5.5 → stays LOD1
+    expect(selectForestLodTier(1, 5, D1, D2, H)).toBe(0); // 5 < 5.5 → full
   });
 
   it('applies hysteresis at the LOD1<->LOD2 boundary (no flicker)', () => {
-    expect(selectForestLodTier(1, 27, D1, D2, H)).toBe(1); // 27 < 27.5 → stays LOD1
-    expect(selectForestLodTier(1, 28, D1, D2, H)).toBe(2); // 28 > 27.5 → LOD2
-    expect(selectForestLodTier(2, 25, D1, D2, H)).toBe(2); // 25 > 24.5 → stays LOD2
-    expect(selectForestLodTier(2, 24, D1, D2, H)).toBe(1); // 24 < 24.5 → LOD1
+    expect(selectForestLodTier(1, 15, D1, D2, H)).toBe(1); // 15 < 15.5 → stays LOD1
+    expect(selectForestLodTier(1, 16, D1, D2, H)).toBe(2); // 16 > 15.5 → LOD2
+    expect(selectForestLodTier(2, 13, D1, D2, H)).toBe(2); // 13 > 12.5 → stays LOD2
+    expect(selectForestLodTier(2, 12, D1, D2, H)).toBe(1); // 12 < 12.5 → LOD1
   });
 
   it('resolves multi-tier jumps in a single call (teleporting camera)', () => {
     expect(selectForestLodTier(0, 100, D1, D2, H)).toBe(2); // full → LOD2 directly
     expect(selectForestLodTier(2, 0, D1, D2, H)).toBe(0); // LOD2 → full directly
+  });
+
+  it('end-to-end: a tagged relief chunk resolves its geometry to the decimated tier at range', () => {
+    // Reproduces the ForestEnvironment per-frame swap WITHOUT the React component:
+    // the chunker tags `userData.forestLod = {full, lod1, lod2}`, the selector picks
+    // a tier by camera distance, and the loop swaps `mesh.geometry` to that tier's
+    // buffer. This asserts the whole wired pipeline reduces geometry at range — the
+    // "hard proof it is NOT a no-op" the audit established, pinned as a regression.
+    const tree = makeMesh('PP_Tree_10', [[-9, -9], [-8, -8], [-9, -8], [-8, -9]]);
+    const lod1 = new THREE.BoxGeometry(2, 2, 2);
+    const lod2 = new THREE.BoxGeometry(3, 3, 3);
+    const scene = makeScene(tree);
+    rebuildForestAsChunks(
+      params({ scene, keepFraction: 1, lodGeometry: new Map([['PP_Tree_10', { lod1, lod2 }]]) }),
+    );
+    const chunk = allInstanced(scene)[0];
+    const lod = chunkLod(chunk);
+    if (!lod) throw new Error('expected the tree chunk to carry LOD tiers'); // narrows below
+
+    // The exact tier→geometry expression the loop uses, at three camera distances.
+    const geomForDist = (camDist: number): THREE.BufferGeometry => {
+      const tier = selectForestLodTier(0, camDist, D1, D2, H);
+      return tier === 0 ? lod.full : tier === 1 ? lod.lod1 : lod.lod2;
+    };
+    expect(geomForDist(4)).toBe(lod.full); // near → full detail
+    expect(geomForDist(10)).toBe(lod1); // mid → LOD1 (~30%)
+    expect(geomForDist(30)).toBe(lod2); // far → LOD2 (~5%), decimated buffer
   });
 });
 

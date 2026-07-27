@@ -26,8 +26,9 @@
  *
  *   (B) TRUE multi-tier LOD: every SMALL-PROP relief type (trees, birch, flowers,
  *       mushrooms, grass) keeps its FULL geometry AND gains TWO decimated
- *       sibling meshes — `<name>_LOD1` (kept ~50%) and `<name>_LOD2` (kept ~12%,
- *       super-low far tier). MOUNTAINS **and ROCKS** are EXCLUDED — mountains are
+ *       sibling meshes — `<name>_LOD1` (kept ~30%, mid) and `<name>_LOD2` (kept
+ *       ~5%, ULTRA-low far tier — near-zero geometry, deliberately visible as
+ *       decimated). MOUNTAINS **and ROCKS** are EXCLUDED — mountains are
  *       large relief surfaces like the ground and their decimation tore the ridge
  *       on device; rocks' hard low-poly facets tear into gashed silhouettes when
  *       simplified — so both keep full geometry with NO `_LOD*` (see below). At
@@ -118,14 +119,20 @@ const MOUNTAIN_RE = /mountain/i;
  */
 const ROCK_RE = /rock/i;
 
-// Multi-tier relief LOD. LOD1 = mid distance, LOD2 = far distance (super-low).
-//   LOD1 keeps ~50% of triangles at a TIGHT error bound so mid silhouettes hold.
-//   LOD2 keeps ~12% (far, tiny on screen); the tight LOD1 error can't reach 12%,
-//   so LOD2 uses a LOOSER error to let the simplifier actually collapse that far.
-const LOD1_RATIO = 0.5;
-const LOD2_RATIO = 0.12;
-const LOD_ERROR = 0.05; // LOD1 (and the tight bound LOD1 needs)
-const LOD2_ERROR = 0.15; // LOD2 only — looser so the simplifier reaches ~12%
+// Multi-tier relief LOD — CRANKED for VISIBLE far decimation (see DO #2). LOD1 =
+// mid distance, LOD2 = far distance (ULTRA-low, near-zero geometry past the fog).
+//   LOD1 keeps ~30% of triangles at a moderate error bound so the MID band thins
+//     VISIBLY (was ~50% — the old mid tier was perceptually invisible on already
+//     low-poly foliage). Loosened LOD_ERROR (0.05 -> 0.12) so the simplifier can
+//     actually reach 30% on these hard-edged props.
+//   LOD2 keeps ~5% (far, tiny on screen; hidden further by fog+cull). The tight
+//     LOD1 error can't reach 5%, so LOD2 uses a MUCH LOOSER error to let the
+//     simplifier collapse silhouettes down to near-nothing — which is the point:
+//     the far ring should read as unambiguously decimated, not a full-detail blob.
+const LOD1_RATIO = 0.3;
+const LOD2_RATIO = 0.05;
+const LOD_ERROR = 0.12; // LOD1 — moderate bound so it reaches ~30%
+const LOD2_ERROR = 0.6; // LOD2 only — very loose so the simplifier reaches ~5%
 
 const MB = (n) => (n / 1024 / 1024).toFixed(3) + ' MB';
 const triOf = (prim) => {

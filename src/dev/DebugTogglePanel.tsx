@@ -6,6 +6,7 @@ import {
   toggleDebugVisibility,
   type DebugVisibilityCategory,
 } from './debugVisibility';
+import { getLodTintEnabled, subscribeLodTint, toggleLodTint } from './lodTint';
 
 const CATEGORY_LABELS: Record<DebugVisibilityCategory, string> = {
   wholeForest: 'Whole Forest (master)',
@@ -49,6 +50,7 @@ export function DebugTogglePanel() {
     getDebugVisibility,
     getDebugVisibility,
   );
+  const lodTintOn = useSyncExternalStore(subscribeLodTint, getLodTintEnabled, getLodTintEnabled);
   const [open, setOpen] = useState(false);
 
   const stopScrollPropagation = (e: { stopPropagation: () => void }) => e.stopPropagation();
@@ -100,6 +102,25 @@ export function DebugTogglePanel() {
                 </button>
               );
             })}
+            {/* Forest LOD-tier tint (mobile-only effect): paints each relief chunk
+                by its CURRENT geometry tier — full=normal, LOD1(~30%)=green,
+                LOD2(~5%)=red — so a dev can confirm on-device that the dynamic
+                camera-distance LOD is swapping geometry and see which chunks are
+                decimated. Separated by a divider (it toggles a MATERIAL tint, not
+                a .visible flag). Default OFF. */}
+            <div style={dividerStyle} aria-hidden="true" />
+            <button
+              type="button"
+              onClick={() => toggleLodTint()}
+              style={{ ...rowStyle, opacity: lodTintOn ? 1 : 0.55 }}
+            >
+              <span
+                style={{ ...dotStyle, background: lodTintOn ? '#f87171' : '#7a7a90' }}
+                aria-hidden="true"
+              />
+              <span>Forest LOD tint</span>
+              <span style={stateStyle}>{lodTintOn ? 'ON' : 'OFF'}</span>
+            </button>
           </div>
         </div>
       )}
@@ -211,6 +232,13 @@ const dotStyle: React.CSSProperties = {
   width: 8,
   height: 8,
   borderRadius: '50%',
+  flexShrink: 0,
+};
+
+const dividerStyle: React.CSSProperties = {
+  height: 1,
+  background: 'rgba(255,255,255,0.15)',
+  margin: '4px 2px',
   flexShrink: 0,
 };
 

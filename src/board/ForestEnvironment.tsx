@@ -17,6 +17,7 @@ import {
   subscribeDebugVisibility,
   type ForestDebugCategory,
 } from '../dev/debugVisibility';
+import { getLodTintEnabled } from '../dev/lodTint';
 
 /**
  * The low-poly FOREST environment (`public/models/forest.glb`, ~1.7 MB,
@@ -148,7 +149,7 @@ const FOREST_SWAP_INTERVAL = 0.05;                   // s: throttle the per-chun
 /**
  * ── MOBILE-ONLY: DYNAMIC MULTI-TIER LOD BY CAMERA DISTANCE ────────────────────
  * Each eligible relief chunk (trees / flowers / mushrooms / grass / rocks) carries
- * three pre-created, pre-uploaded geometry tiers — full, LOD1 (~50%), LOD2 (~25%)
+ * three pre-created, pre-uploaded geometry tiers — full, LOD1 (~30%), LOD2 (~5%)
  * — stashed on `chunk.userData.forestLod` by the chunker. The SAME throttled
  * per-frame loop that runs the opaque/fade swap picks each chunk's tier by its
  * distance to the CAMERA (NOT distance-from-board): near → full, mid → LOD1, far →
@@ -166,11 +167,21 @@ const FOREST_SWAP_INTERVAL = 0.05;                   // s: throttle the per-chun
  *
  * Tunable (world units from the camera):
  *   LOD_DIST_1 — below this a chunk renders FULL detail.
- *   LOD_DIST_2 — above this a chunk renders LOD2 (~25%); between the two, LOD1.
+ *   LOD_DIST_2 — above this a chunk renders LOD2 (~5%); between the two, LOD1 (~30%).
  *   LOD_HYSTERESIS — dead-band added on each side of both thresholds.
+ *
+ * CRANKED (see DO #2): the thresholds were PULLED IN hard — 12/26 → 7/14 — so the
+ * mid/far LOD tiers land in the band the mobile camera actually looks at. The
+ * mobile camera sits ~10.3 units from board center, so at the OLD 12/26 the entire
+ * on-screen forest stayed full or the barely-perceptible ~50% tier and the
+ * aggressive tier only reached props >26u away (small + fogged). At 7/14 the near
+ * board rim stays full, the near forest ring drops to LOD1 (~30%), and everything
+ * past ~14u — most of the visible mid/far field, well inside the FOG_NEAR=24 clear
+ * air — renders the ultra-low LOD2 (~5%). Result: visibly fewer tris across the
+ * frame, then hidden further out by fog (24-52) and the ring cull (66).
  */
-const LOD_DIST_1 = 12;      // world units: nearer than this → full geometry
-const LOD_DIST_2 = 26;      // world units: farther than this → LOD2; between → LOD1
+const LOD_DIST_1 = 7;       // world units: nearer than this → full geometry
+const LOD_DIST_2 = 14;      // world units: farther than this → LOD2; between → LOD1
 const LOD_HYSTERESIS = 1.5; // world units: anti-flicker dead-band around each threshold
 
 /**
@@ -463,6 +474,25 @@ function buildMobileForestOpaqueMaterial(base: THREE.Material): THREE.Material {
   return mat;
 }
 
+/**
+ * DEV-ONLY LOD-tier tint material: the exact mobile fade+clip+mediump program
+ * (so the near-tree see-through look and board clip still hold under the tint)
+ * plus a solid `emissive` glow keyed to the geometry tier — used by the per-frame
+ * loop when the debug "Forest LOD tint" toggle is ON so a dev can SEE which chunks
+ * render which tier (green = LOD1 ~30%, red = LOD2 ~5%; full uses the untinted
+ * fade material). Built ONLY under `import.meta.env.DEV` (see the useMemo), so this
+ * helper and its two clones are tree-shaken out of production.
+ */
+function buildMobileForestTintMaterial(base: THREE.Material, emissive: THREE.ColorRepresentation): THREE.Material {
+  const mat = buildMobileForestFadeMaterial(base) as THREE.MeshStandardMaterial;
+  // emissive is added on top of lit color → an unambiguous flat tier color that
+  // survives the low-poly shading. Own Color instance per clone (clone copies by
+  // value), so setting one tint never bleeds into the other materials.
+  mat.emissive = new THREE.Color(emissive);
+  mat.needsUpdate = true;
+  return mat;
+}
+
 /** Per-chunk cache for the mobile opaque/fade material swap (built once). */
 interface ForestChunkMeta {
   mesh: THREE.InstancedMesh;
@@ -497,6 +527,13 @@ interface ForestChunkMeta {
   lod: ForestChunkLod | null;
   /** Current LOD tier `mesh.geometry` points at (0 full / 1 LOD1 / 2 LOD2). */
   tier: ForestLodTier;
+  /**
+   * DEV-ONLY: true while this chunk's material is the LOD-tier debug tint (green/
+   * red), so the per-frame loop can RESTORE the normal fade/opaque material the
+   * tick the tint toggle turns off. Always false (and never read) in production —
+   * the tint branch that sets it is behind `import.meta.env.DEV`.
+   */
+  wasTinted: boolean;
 }
 
 /**
@@ -570,6 +607,7 @@ function buildForestChunkMetas(chunks: THREE.InstancedMesh[]): ForestChunkMeta[]
       isOpaque: false,
       lod,
       tier: 0,
+      wasTinted: false,
     });
   }
   return metas;
@@ -582,9 +620,9 @@ const FOREST_URL = '/models/forest.glb';
  * diorama with (A) EXT_meshopt_compression (smaller download, zero visual change;
  * the decoder is bundled in three-stdlib and auto-installed by drei's useGLTF, so
  * NO draco/decoder wiring is needed here) and (B) TWO decimated sibling meshes —
- * `<name>_LOD1` (~50%) and `<name>_LOD2` (~25%) — for every eligible relief type,
- * which this component harvests into per-type geometry tiers for the runtime
- * dynamic camera-distance LOD swap. Desktop keeps `forest.glb` byte-identical.
+ * `<name>_LOD1` (~30%) and `<name>_LOD2` (~5%, ultra-low) — for every eligible
+ * relief type, which this component harvests into per-type geometry tiers for the
+ * runtime dynamic camera-distance LOD swap. Desktop keeps `forest.glb` byte-identical.
  */
 const FOREST_URL_MOBILE = '/models/forest.mobile.glb';
 
@@ -606,11 +644,12 @@ export function ForestEnvironment({ isMobile = false }: { isMobile?: boolean }):
   const url = isMobile ? FOREST_URL_MOBILE : FOREST_URL;
   const gltf = useGLTF(url);
 
-  const { object, groupScale, mobileChunks, forestFadeMat, forestOpaqueMat } = useMemo(() => {
+  const { object, groupScale, mobileChunks, forestFadeMat, forestOpaqueMat, forestLodTintMats } =
+    useMemo(() => {
     const scene = gltf.scene.clone(true);
 
-    // MOBILE-ONLY: harvest BOTH decimated LOD-tier sibling meshes (`_LOD1` ~50%,
-    // `_LOD2` ~25%) into a per-type lookup keyed by their base (full) mesh name,
+    // MOBILE-ONLY: harvest BOTH decimated LOD-tier sibling meshes (`_LOD1` ~30%,
+    // `_LOD2` ~5%) into a per-type lookup keyed by their base (full) mesh name,
     // then REMOVE them from the scene graph so they never render. They exist in
     // forest.mobile.glb solely to supply the chunker with the geometry tiers for
     // the runtime dynamic camera-distance LOD swap (below). Done before the
@@ -734,6 +773,9 @@ export function ForestEnvironment({ isMobile = false }: { isMobile?: boolean }):
     let mobileChunks: THREE.InstancedMesh[] | null = null;
     let forestFadeMat: THREE.Material | null = null;
     let forestOpaqueMat: THREE.Material | null = null;
+    // DEV-ONLY: the two LOD-tier tint materials (green LOD1 / red LOD2). Built
+    // below only under import.meta.env.DEV → null (and tree-shaken) in production.
+    let forestLodTintMats: { lod1: THREE.Material; lod2: THREE.Material } | null = null;
     if (isMobile) {
       rebuildForestAsChunks({
         scene,
@@ -765,6 +807,15 @@ export function ForestEnvironment({ isMobile = false }: { isMobile?: boolean }):
         forestOpaqueMat = buildMobileForestOpaqueMaterial(base);
         for (const c of chunks) c.material = forestFadeMat;
         mobileChunks = chunks;
+        // DEV-ONLY LOD-tier tint materials (green LOD1 / red LOD2), built once
+        // from the pristine base. Behind import.meta.env.DEV so this block and
+        // buildMobileForestTintMaterial are tree-shaken out of production.
+        if (import.meta.env.DEV) {
+          forestLodTintMats = {
+            lod1: buildMobileForestTintMaterial(base, 0x00b000), // green = LOD1 (~30%)
+            lod2: buildMobileForestTintMaterial(base, 0xc00000), // red = LOD2 (~5%)
+          };
+        }
       }
     }
 
@@ -776,7 +827,7 @@ export function ForestEnvironment({ isMobile = false }: { isMobile?: boolean }):
       -center.z + FOREST_PAN_Z / groupScale,
     );
 
-    return { object: scene, groupScale, mobileChunks, forestFadeMat, forestOpaqueMat };
+    return { object: scene, groupScale, mobileChunks, forestFadeMat, forestOpaqueMat, forestLodTintMats };
   }, [gltf, isMobile]);
 
   // ── DEV-ONLY: debug visibility wiring (see src/dev/debugVisibility.ts) ────────
@@ -862,6 +913,11 @@ export function ForestEnvironment({ isMobile = false }: { isMobile?: boolean }):
     if (swapAccumRef.current < FOREST_SWAP_INTERVAL) return;
     swapAccumRef.current = 0;
 
+    // DEV-ONLY: is the LOD-tier tint toggle on? Short-circuits on the compile-time
+    // `false` in production, so getLodTintEnabled is never called and the import is
+    // tree-shaken. Read once per throttled tick (cheap) and reused for every chunk.
+    const lodTintOn = import.meta.env.DEV && forestLodTintMats !== null && getLodTintEnabled();
+
     const camPos = state.camera.position;
     const metas = store.metas;
     for (const meta of metas) {
@@ -909,6 +965,34 @@ export function ForestEnvironment({ isMobile = false }: { isMobile?: boolean }):
           meta.tier = next;
           meta.mesh.geometry =
             next === 0 ? meta.lod.full : next === 1 ? meta.lod.lod1 : meta.lod.lod2;
+        }
+      }
+
+      // (1b) DEV-ONLY LOD-tier TINT overlay. When the debug toggle is ON, paint the
+      // chunk by the tier it's rendering (full = untinted fade, LOD1 = green, LOD2 =
+      // red) so a dev can SEE the dynamic LOD tracking the camera. Non-LOD chunks
+      // (meta.lod === null → mountains/ground/rocks) stay untinted (they ARE always
+      // full). This REPLACES the opaque/fade swap while on, so `continue` past it;
+      // the tick the toggle turns off, restore the fade material (board chunks keep
+      // it; others fall through to re-evaluate opaque/fade). Entirely behind
+      // import.meta.env.DEV → tree-shaken (with forestLodTintMats) in production.
+      if (import.meta.env.DEV && forestLodTintMats) {
+        if (lodTintOn) {
+          const tintTier = meta.lod ? meta.tier : 0;
+          meta.mesh.material =
+            tintTier === 0
+              ? forestFadeMat
+              : tintTier === 1
+                ? forestLodTintMats.lod1
+                : forestLodTintMats.lod2;
+          meta.isOpaque = false;
+          meta.wasTinted = true;
+          continue;
+        } else if (meta.wasTinted) {
+          meta.mesh.material = forestFadeMat;
+          meta.isOpaque = false;
+          meta.wasTinted = false;
+          // fall through to the normal opaque/fade swap below
         }
       }
 

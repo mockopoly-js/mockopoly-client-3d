@@ -78,7 +78,7 @@ export function isForestGroundMesh(name: string): boolean {
  * per-frame camera-distance LOD swap (in ForestEnvironment) can flip a chunk's
  * `geometry` between them with zero allocation and zero GPU re-upload (all three
  * geometries are already uploaded). `full` is the source geometry the chunk is
- * born with; `lod1`/`lod2` are the ~50% / ~25% decimated siblings. Non-eligible
+ * born with; `lod1`/`lod2` are the ~30% / ~5% decimated siblings. Non-eligible
  * types (mountains/ground) get NO `forestLod` and stay on `full` forever.
  */
 export interface ForestChunkLod {
@@ -87,7 +87,7 @@ export interface ForestChunkLod {
   lod2: THREE.BufferGeometry;
 }
 
-/** LOD tier index: 0 = full detail, 1 = LOD1 (~50%), 2 = LOD2 (~25%). */
+/** LOD tier index: 0 = full detail, 1 = LOD1 (~30%), 2 = LOD2 (~5%). */
 export type ForestLodTier = 0 | 1 | 2;
 
 /**
@@ -191,8 +191,8 @@ export interface ForestChunkParams {
   /**
    * OPTIONAL per-type LOD geometry TIERS, keyed by source InstancedMesh name
    * (== the full mesh name). For every eligible relief type (trees / flowers /
-   * mushrooms / grass / rocks) this supplies the `_LOD1` (~50%) and `_LOD2`
-   * (~25%) decimated siblings. A chunk of a type present in this map is BORN with
+   * mushrooms / grass / rocks) this supplies the `_LOD1` (~30%) and `_LOD2`
+   * (~5%) decimated siblings. A chunk of a type present in this map is BORN with
    * full geometry but is tagged with `userData.forestLod = {full, lod1, lod2}` so
    * ForestEnvironment's throttled per-frame loop can DYNAMICALLY swap
    * `chunk.geometry` by CAMERA distance (near→full, mid→LOD1, far→LOD2). Types
