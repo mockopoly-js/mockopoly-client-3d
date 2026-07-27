@@ -106,10 +106,10 @@ const handleStyle: React.CSSProperties = {
 };
 
 const listStyle: React.CSSProperties = {
-  position: 'absolute',
-  bottom: '100%',
-  left: 0,
-  marginBottom: 6,
+  position: 'fixed',
+  left: 'max(8px, env(safe-area-inset-left))',
+  top: '50%',
+  transform: 'translateY(-50%)',
   display: 'flex',
   flexDirection: 'column',
   gap: 2,
@@ -117,10 +117,11 @@ const listStyle: React.CSSProperties = {
   border: '1px solid rgba(255,255,255,0.15)',
   borderRadius: 6,
   padding: 6,
-  maxHeight: 'calc(100dvh - env(safe-area-inset-top) - env(safe-area-inset-bottom) - 40px)',
+  maxHeight: 'calc(100dvh - 16px)',
   overflowY: 'auto',
   WebkitOverflowScrolling: 'touch',
   minWidth: 190,
+  zIndex: 9998,
 };
 
 const rowStyle: React.CSSProperties = {
