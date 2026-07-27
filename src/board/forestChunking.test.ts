@@ -453,37 +453,57 @@ describe('rebuildForestAsChunks', () => {
 
 describe('selectForestLodTier (dynamic camera-distance LOD)', () => {
   // Mirrors the SHIPPED thresholds (ForestEnvironment LOD_DIST_1 / LOD_DIST_2 /
-  // LOD_HYSTERESIS), CRANKED IN from 12/26 to 7/14 so the mid/far LOD tiers land in
-  // the band the mobile camera (~10.3u from board center) actually looks at.
-  const D1 = 7; // full <-> LOD1 threshold
-  const D2 = 14; // LOD1 <-> LOD2 threshold
+  // LOD_HYSTERESIS). RETUNED 7/14 → 6/20 for the NEAREST-EDGE metric: the call site
+  // now feeds the camera→chunk-NEAREST-edge distance (max(0, centerDist − radius)),
+  // not the CENTER, so a chunk stays MEDIUM (LOD1) while its nearest tree is within
+  // 20u and drops to ultra-low LOD2 only once its NEAR edge passes 20u (deep in
+  // fog). The selector itself is UNCHANGED — pure on the scalar `dist` (see the
+  // metric-agnostic case below) — only the thresholds and the metric fed to it moved.
+  const D1 = 6; // full <-> LOD1 threshold (nearest-edge units)
+  const D2 = 20; // LOD1 <-> LOD2 threshold (nearest-edge units)
   const H = 1.5; // hysteresis dead-band
 
   it('picks near→full, mid→LOD1, far→LOD2 from a cold start (current tier 0)', () => {
     expect(selectForestLodTier(0, 4, D1, D2, H)).toBe(0); // well inside near band
-    expect(selectForestLodTier(0, 10, D1, D2, H)).toBe(1); // between the thresholds
+    expect(selectForestLodTier(0, 13, D1, D2, H)).toBe(1); // between the thresholds
     expect(selectForestLodTier(0, 30, D1, D2, H)).toBe(2); // beyond the far threshold
   });
 
   it('applies hysteresis at the full<->LOD1 boundary (no flicker)', () => {
-    // Sitting at full: must travel PAST D1 + H (8.5) before upgrading to LOD1.
-    expect(selectForestLodTier(0, 8, D1, D2, H)).toBe(0); // 8 < 8.5 → stays full
-    expect(selectForestLodTier(0, 9, D1, D2, H)).toBe(1); // 9 > 8.5 → LOD1
-    // Sitting at LOD1: must travel PAST D1 - H (5.5) before downgrading to full.
-    expect(selectForestLodTier(1, 6, D1, D2, H)).toBe(1); // 6 > 5.5 → stays LOD1
-    expect(selectForestLodTier(1, 5, D1, D2, H)).toBe(0); // 5 < 5.5 → full
+    // Sitting at full: must travel PAST D1 + H (7.5) before upgrading to LOD1.
+    expect(selectForestLodTier(0, 7, D1, D2, H)).toBe(0); // 7 < 7.5 → stays full
+    expect(selectForestLodTier(0, 8, D1, D2, H)).toBe(1); // 8 > 7.5 → LOD1
+    // Sitting at LOD1: must travel PAST D1 - H (4.5) before downgrading to full.
+    expect(selectForestLodTier(1, 5, D1, D2, H)).toBe(1); // 5 > 4.5 → stays LOD1
+    expect(selectForestLodTier(1, 4, D1, D2, H)).toBe(0); // 4 < 4.5 → full
   });
 
   it('applies hysteresis at the LOD1<->LOD2 boundary (no flicker)', () => {
-    expect(selectForestLodTier(1, 15, D1, D2, H)).toBe(1); // 15 < 15.5 → stays LOD1
-    expect(selectForestLodTier(1, 16, D1, D2, H)).toBe(2); // 16 > 15.5 → LOD2
-    expect(selectForestLodTier(2, 13, D1, D2, H)).toBe(2); // 13 > 12.5 → stays LOD2
-    expect(selectForestLodTier(2, 12, D1, D2, H)).toBe(1); // 12 < 12.5 → LOD1
+    // Edge D2 = 20, dead-band ±H → upgrade past 21.5, downgrade below 18.5.
+    expect(selectForestLodTier(1, 21, D1, D2, H)).toBe(1); // 21 < 21.5 → stays LOD1
+    expect(selectForestLodTier(1, 22, D1, D2, H)).toBe(2); // 22 > 21.5 → LOD2
+    expect(selectForestLodTier(2, 19, D1, D2, H)).toBe(2); // 19 > 18.5 → stays LOD2
+    expect(selectForestLodTier(2, 18, D1, D2, H)).toBe(1); // 18 < 18.5 → LOD1
   });
 
   it('resolves multi-tier jumps in a single call (teleporting camera)', () => {
     expect(selectForestLodTier(0, 100, D1, D2, H)).toBe(2); // full → LOD2 directly
     expect(selectForestLodTier(2, 0, D1, D2, H)).toBe(0); // LOD2 → full directly
+  });
+
+  it('is metric-agnostic (pure on `dist`) — the CALL SITE feeds NEAREST-EDGE, fixing faceted foreground', () => {
+    // The selector never knew whether `dist` is a CENTER or an EDGE distance — it
+    // is pure on the scalar. The ForestEnvironment call site changed from passing
+    // centerDist to passing the chunk's NEAREST-edge distance
+    // (max(0, centerDist − worldRadius)). This pins the exact behavioural gain for
+    // one large chunk with near trees — the bug the user reported.
+    const centerDist = 30; //   a big chunk whose CENTER is far …
+    const worldRadius = 12; //  … but whose NEAREST edge is close (foreground trees!)
+    const nearestEdge = Math.max(0, centerDist - worldRadius); // 18
+    // OLD metric (centerDist) collapsed the ENTIRE chunk to faceted ultra-low LOD2:
+    expect(selectForestLodTier(0, centerDist, D1, D2, H)).toBe(2);
+    // NEW metric (nearest edge) keeps those near trees at MEDIUM LOD1 (~30%):
+    expect(selectForestLodTier(0, nearestEdge, D1, D2, H)).toBe(1);
   });
 
   it('end-to-end: a tagged relief chunk resolves its geometry to the decimated tier at range', () => {

@@ -153,8 +153,9 @@ const FOREST_SWAP_INTERVAL = 0.05;                   // s: throttle the per-chun
  * Each eligible relief chunk (trees / flowers / mushrooms / grass / rocks) carries
  * three pre-created, pre-uploaded geometry tiers — full, LOD1 (~30%), LOD2 (~5%)
  * — stashed on `chunk.userData.forestLod` by the chunker. The SAME throttled
- * per-frame loop that runs the opaque/fade swap picks each chunk's tier by its
- * distance to the CAMERA (NOT distance-from-board): near → full, mid → LOD1, far →
+ * per-frame loop that runs the opaque/fade swap picks each chunk's tier by the
+ * distance from the CAMERA to the chunk's NEAREST edge (its bounding-sphere near
+ * point — NOT its center, NOT distance-from-board): near → full, mid → LOD1, far →
  * LOD2. Because the selector is camera-relative, the free-roam camera ALWAYS sees
  * full detail on the chunks nearest it and low-poly only far away — flying out to
  * the far ring now shows full detail there (the old static distance-from-board
@@ -167,23 +168,30 @@ const FOREST_SWAP_INTERVAL = 0.05;                   // s: throttle the per-chun
  * around each threshold so a chunk hovering at a boundary never flickers. Chunks
  * of NON-eligible types (mountains/ground — no tiers) are skipped and stay full.
  *
- * Tunable (world units from the camera):
- *   LOD_DIST_1 — below this a chunk renders FULL detail.
- *   LOD_DIST_2 — above this a chunk renders LOD2 (~5%); between the two, LOD1 (~30%).
+ * Tunable (world units — distance from the camera to the chunk's NEAREST edge):
+ *   LOD_DIST_1 — when the chunk's nearest edge is closer than this it renders FULL.
+ *   LOD_DIST_2 — when the nearest edge is farther than this it renders LOD2 (~5%);
+ *                between the two, LOD1 (~30%).
  *   LOD_HYSTERESIS — dead-band added on each side of both thresholds.
  *
- * CRANKED (see DO #2): the thresholds were PULLED IN hard — 12/26 → 7/14 — so the
- * mid/far LOD tiers land in the band the mobile camera actually looks at. The
- * mobile camera sits ~10.3 units from board center, so at the OLD 12/26 the entire
- * on-screen forest stayed full or the barely-perceptible ~50% tier and the
- * aggressive tier only reached props >26u away (small + fogged). At 7/14 the near
- * board rim stays full, the near forest ring drops to LOD1 (~30%), and everything
- * past ~14u — most of the visible mid/far field, well inside the FOG_NEAR=24 clear
- * air — renders the ultra-low LOD2 (~5%). Result: visibly fewer tris across the
- * frame, then hidden further out by fog (24-52) and the ring cull (66).
+ * NEAREST-EDGE METRIC (foreground-faceting bug fix): the tier is chosen from the
+ * distance to the chunk's NEAREST edge (`centerDist − worldRadius`, clamped ≥ 0),
+ * NOT its CENTER. Tiering by the center made a big chunk whose CENTER sat past
+ * LOD_DIST_2 collapse its ENTIRE instance set — including trees only a few units
+ * from the camera — to the faceted ultra-low LOD2 (the reported foreground bug).
+ * With the near-edge metric a chunk stays MEDIUM (LOD1) as long as ANY of its trees
+ * is near, and drops to ultra-low only once its NEAR edge is genuinely far.
+ *
+ * RETUNED for the near-edge metric: 7/14 (center) → 6/20 (nearest edge). A chunk
+ * whose nearest tree is within LOD_DIST_2 = 20u renders LOD1 (medium); ultra-low
+ * LOD2 (~5%) appears only once the chunk's near edge passes 20u — deep in the
+ * FOG_NEAR=24…FOG_FAR=52 haze — then culled entirely at the ring (66). This RAISES
+ * near/mid triangle count vs. the old center metric (more LOD1, less LOD2) — the
+ * intended quality tradeoff; LOD_DIST_2 is the on-device fine-tune knob. Density
+ * (centerDist) and the ring cull (nearestH) are SEPARATE and unchanged.
  */
-const LOD_DIST_1 = 7;       // world units: nearer than this → full geometry
-const LOD_DIST_2 = 14;      // world units: farther than this → LOD2; between → LOD1
+const LOD_DIST_1 = 6;       // world units (nearest edge): nearer than this → full geometry
+const LOD_DIST_2 = 20;      // world units (nearest edge): farther than this → LOD2; between → LOD1
 const LOD_HYSTERESIS = 1.5; // world units: anti-flicker dead-band around each threshold
 
 /**
@@ -195,8 +203,9 @@ const LOD_HYSTERESIS = 1.5; // world units: anti-flicker dead-band around each t
  * `lodGeometry`). Rocks / mountains / ground carry no LOD tiers and are UNTOUCHED.
  *
  * CRITICAL — the camera pans/translates FREELY, so density is driven by the LIVE
- * per-frame distance from the CAMERA to each chunk (`centerDist`, already computed
- * above for the LOD swap), NEVER a build-time / board-center distance. That makes
+ * per-frame distance from the CAMERA to each chunk CENTER (`centerDist`, computed
+ * once per chunk in the loop — the LOD swap tiers by the NEAREST edge instead),
+ * NEVER a build-time / board-center distance. That makes
  * the fog-ring thinning CAMERA-RELATIVE: the thinned band tracks the camera as it
  * pans, so it always coincides with where the fog actually is. A build-time thin
  * would freeze the thin ring at a fixed world location and expose it the instant
@@ -234,7 +243,7 @@ const LOD_HYSTERESIS = 1.5; // world units: anti-flicker dead-band around each t
  *   • 48 → fogDepth≈38, fog opacity≈0.51 — 0.42→0.22 (1.9×)
  *   • 58 → fogDepth≈46, fog opacity≈0.80 — LARGEST cut 0.22→0.10 (2.2×), well hazed
  * Keeping more foreground foliage at full count out to 36 barely costs anything:
- * everything past LOD_DIST_2 (14) is already the ~5%-detail LOD2 geometry.
+ * any chunk whose NEAR edge is past LOD_DIST_2 (20) is already ~5%-detail LOD2.
  *
  * Tunable (the user live-tunes these):
  *   DENSITY_BAND_DISTS — ASCENDING euclidean camera-distance band edges (one per
@@ -1027,19 +1036,29 @@ export function ForestEnvironment({ isMobile = false }: { isMobile?: boolean }):
       }
       if (!meta.ringVisible) continue;
 
-      // Distance camera → chunk center, computed ONCE and reused by both passes.
+      // Distance camera → chunk CENTER, computed ONCE. Used by the DENSITY band
+      // (which classifies by center) and as the basis for `nearest` below.
       const centerDist = camPos.distanceTo(meta.worldCenter);
+      // Distance camera → the chunk's NEAREST possible fragment (its bounding-
+      // sphere near edge), computed ONCE and reused by BOTH the LOD tier swap and
+      // the opaque/fade swap. Clamped ≥ 0 so a camera INSIDE the sphere reads 0
+      // (never negative). LOD is tiered by THIS, not centerDist: a large chunk
+      // whose center is far but whose near edge is close keeps its near trees at
+      // MEDIUM detail instead of collapsing them to faceted ultra-low LOD2.
+      const nearest = Math.max(0, centerDist - meta.worldRadius);
 
-      // (1) DYNAMIC LOD tier swap (eligible relief chunks only). By CAMERA
-      // distance with hysteresis; only reassign `geometry` when the tier actually
-      // changes. The InstancedMesh instances/instanceMatrix are untouched — this
-      // is a ref swap between already-uploaded geometries (no GPU re-upload).
-      // Applies to needsBoardClip chunks too (LOD is independent of the material /
-      // board-clip discard, which every tier's shader still performs).
+      // (1) DYNAMIC LOD tier swap (eligible relief chunks only). By the camera →
+      // NEAREST-EDGE distance with hysteresis (NOT the chunk center — see the
+      // LOD_DIST_* note above; center-tiering faceted foreground trees inside big
+      // chunks); only reassign `geometry` when the tier actually changes. The
+      // InstancedMesh instances/instanceMatrix are untouched — this is a ref swap
+      // between already-uploaded geometries (no GPU re-upload). Applies to
+      // needsBoardClip chunks too (LOD is independent of the material / board-clip
+      // discard, which every tier's shader still performs).
       if (meta.lod) {
         const next = selectForestLodTier(
           meta.tier,
-          centerDist,
+          nearest,
           LOD_DIST_1,
           LOD_DIST_2,
           LOD_HYSTERESIS,
@@ -1098,11 +1117,14 @@ export function ForestEnvironment({ isMobile = false }: { isMobile?: boolean }):
         }
       }
 
-      // (2) Opaque/fade material swap — UNCHANGED: distance to the chunk's nearest
-      // possible fragment via the bounding sphere (kept so the swap boundary/look
-      // is exactly as before; no pop). Near-board chunks stay on fade+clip forever.
+      // (2) Opaque/fade material swap — UNCHANGED: reuses the `nearest` edge
+      // distance computed once above (distance to the chunk's nearest possible
+      // fragment via the bounding sphere), so the swap boundary/look is exactly as
+      // before; no pop. The ≥ 0 clamp on `nearest` leaves this identical:
+      // FOREST_OPAQUE_ENTER/EXIT are both positive, so a formerly-negative value
+      // (camera inside the sphere) and a clamped 0 take the same branches. Near-
+      // board chunks stay on fade+clip forever.
       if (meta.needsBoardClip) continue;
-      const nearest = centerDist - meta.worldRadius;
       if (!meta.isOpaque) {
         if (nearest > FOREST_OPAQUE_ENTER) {
           meta.mesh.material = forestOpaqueMat;
