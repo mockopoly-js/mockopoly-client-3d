@@ -25,6 +25,7 @@ import { MobileRenderController, type ComposerHandle } from '../board/MobileRend
 import { RenderStatsReadout } from '../board/RenderStatsReadout';
 import { BOARD_ROTATION } from '../board/positions';
 import { useIsMobile } from '../ui/useIsMobile';
+import { Sharpen } from './SharpenEffect';
 
 /**
  * Game screen: renders the static 3D board in a daylight diorama scene.
@@ -86,6 +87,19 @@ const SHOW_HDRI_BACKGROUND = true;
 const SATURATION = 0.28;
 const BRIGHTNESS = 0.0;
 const CONTRAST = 0.12;
+
+/**
+ * MOBILE FXAA subpixel-blend quality (postprocessing FXAAEffect `subpixelQuality`
+ * → SUBPIXEL_QUALITY define; default 0.75, range 0..1). This is the component of
+ * FXAA that blurs small high-contrast features (thin board-text glyph edges) to
+ * hide sub-pixel shimmer — and it is a big part of why the dpr-2 board text
+ * reads SOFT. Dialled down to 0.4 so edges stay anti-aliased (the edge search /
+ * gradient step is untouched) while the softening blur is cut, letting the
+ * SharpenEffect below land on crisper text. Not so low that thin edges shimmer.
+ * MOBILE ONLY — desktop uses SMAA, not FXAA, so this does not touch the frozen
+ * desktop chain.
+ */
+const MOBILE_FXAA_SUBPIXEL_QUALITY = 0.4;
 
 /**
  * Ambient Occlusion tunables (N8AO — the FIRST effect in the composer, before
@@ -553,8 +567,16 @@ export function GameScene() {
           {/* Brightness/contrast trim (both 0 = unchanged); slight contrast punch. */}
           <BrightnessContrast brightness={BRIGHTNESS} contrast={CONTRAST} />
           {/* Edge AA: FXAA merges into the grade EffectPass (no standalone
-              full-screen pass like SMAA) — the fill win over SMAA on mobile. */}
-          <FXAA />
+              full-screen pass like SMAA) — the fill win over SMAA on mobile.
+              subpixelQuality trimmed below default (0.75 -> 0.4) so its edge
+              blur softens the board text less; see MOBILE_FXAA_SUBPIXEL_QUALITY. */}
+          <FXAA subpixelQuality={MOBILE_FXAA_SUBPIXEL_QUALITY} />
+          {/* Sharpen (unsharp mask) — LAST, after the grade + FXAA, so it
+              sharpens the final upscaled image and counters the dpr-2 + FXAA
+              softness on the board text. A per-fragment Effect, so it MERGES
+              into the same EffectPass as ToneMapping/grade/FXAA (no standalone
+              full-screen pass, ~4 texel taps of added cost). Mobile only. */}
+          <Sharpen />
         </EffectComposer>
       ) : (
         <EffectComposer multisampling={0} stencilBuffer={false}>
