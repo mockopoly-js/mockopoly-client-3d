@@ -17,19 +17,21 @@ import { useGameStore } from '../state/gameStore';
 import { BOARD_LAYER, CITY_LAYER } from './positions';
 
 /**
- * ── MOBILE-ONLY BLOOM (golden-hour glow) ─────────────────────────────────────
+ * ── MOBILE-ONLY BLOOM (subtle bright-daylight glow) ──────────────────────────
  * Merged into the single grade EffectPass (BloomEffect is non-convolution, so it
  * adds NO standalone pass; it renders its bloom RT from the pass INPUT in
- * update() and ADDs it in mainImage). High threshold so ONLY the sun-disc skybox
- * hot-spot, emissive city windows and the hottest warm speculars bloom — board
- * text sits well below threshold and stays readable.
- * - INTENSITY: bloom add strength.
- * - THRESHOLD / SMOOTHING: luminance gate (0.85 = only bright warm sources).
- * - RADIUS: mipmap-blur spread (wide, soft golden glow).
+ * update() and ADDs it in mainImage). SUBTLE + high threshold so ONLY the
+ * sun-glow skybox hot-spot, emissive city windows and the hottest speculars
+ * bloom — board text sits well below threshold and stays crisp/readable, and the
+ * high-key cream buildings do NOT wash out.
+ * - INTENSITY: bloom add strength (0.4 = subtle, clean, not blown out).
+ * - THRESHOLD / SMOOTHING: luminance gate (0.9 = only the sun-glow + hottest
+ *   speculars/emissive windows, well above board text).
+ * - RADIUS: mipmap-blur spread (soft clean glow).
  * - RESOLUTION_SCALE: half-res bloom base to trim fill on the native-dpr present.
  */
-const MOBILE_BLOOM_INTENSITY = 0.8;
-const MOBILE_BLOOM_THRESHOLD = 0.85;
+const MOBILE_BLOOM_INTENSITY = 0.4;
+const MOBILE_BLOOM_THRESHOLD = 0.9;
 const MOBILE_BLOOM_SMOOTHING = 0.2;
 const MOBILE_BLOOM_RADIUS = 0.7;
 const MOBILE_BLOOM_RESOLUTION_SCALE = 0.5;
@@ -298,9 +300,9 @@ export function MobileCrispBoardPipeline({
 
     // Grade EffectPass — all non-convolution effects, so they MERGE into ONE
     // pass over the linear-HDR composite. sRGB OETF is applied once by
-    // EffectMaterial.encodeOutput (on by default). Golden-hour additions vs the
-    // original mobile grade: a warm split-tone (WarmGrade) after the tone/hue/BC
-    // trio, and Bloom FIRST.
+    // EffectMaterial.encodeOutput (on by default). Chain shape: a (now
+    // NEUTRALIZED) split-tone (WarmGrade) after the tone/hue/BC trio, and Bloom
+    // FIRST.
     //
     // BLOOM is placed FIRST so its ADD lands BEFORE ToneMapping (matching the
     // desktop composer order N8AO → Bloom → ToneMapping): BloomEffect.update()
@@ -316,15 +318,18 @@ export function MobileCrispBoardPipeline({
       mipmapBlur: true,
       resolutionScale: MOBILE_BLOOM_RESOLUTION_SCALE,
     });
-    // ToneMapping default is AGX (parity with desktop). AGX desaturates
-    // highlights; if the golden reads muted on-device, the one-line alternative
-    // is `new ToneMappingEffect({ mode: ToneMappingMode.ACES_FILMIC })` (punchier
-    // warm highlights) — a tuning toggle, not the default.
+    // ToneMapping default is AGX (parity with desktop). AGX gives clean, gently
+    // desaturated highlights — well suited to the high-key pastel daylight look;
+    // if more punch is ever wanted the one-line alternative is
+    // `new ToneMappingEffect({ mode: ToneMappingMode.ACES_FILMIC })` — a tuning
+    // toggle, not the default.
     const toneMapping = new ToneMappingEffect({});
     const hueSat = new HueSaturationEffect({ saturation });
     const brightnessContrast = new BrightnessContrastEffect({ brightness, contrast });
-    // Warm split-tone (golden highlights / warm-brown shadows, mids untouched) —
-    // after the tone/hue/BC trio so it shapes the tone-mapped LDR colour.
+    // Split-tone — NEUTRALIZED to a near-identity pass-through for the daylight
+    // look (all knobs zeroed in WarmGradeEffect). Kept in the chain, after the
+    // tone/hue/BC trio, so a gentle grade can be dialled back in without
+    // re-plumbing the merged pass.
     const warmGrade = new WarmGradeEffectImpl();
     const fxaa = new FXAAEffect({});
     // subpixelQuality is a define-backed setter (the R3F <FXAA subpixelQuality>
@@ -556,7 +561,7 @@ export function MobileCrispBoardPipeline({
 
     // 2. BOARD pass — ONLY the board layer, at native dpr. shadowMap.enabled = TRUE
     //    (kept true through the CITY pass below) so the board + city SAMPLE the
-    //    frozen baked map and keep their long golden shadows. Because autoUpdate is
+    //    frozen baked map and keep their short soft daylight shadows. Because autoUpdate is
     //    false AND needsUpdate is false (reset after the one-shot bake),
     //    shadowMap.render early-returns — enabling here NEVER re-renders or clears
     //    the frozen map. Suppress the HDRI sky background so this stays a cheap

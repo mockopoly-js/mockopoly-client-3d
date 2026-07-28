@@ -2,14 +2,17 @@ import { Effect, BlendFunction } from 'postprocessing';
 import { wrapEffect } from '@react-three/postprocessing';
 
 /**
- * Mobile-only warm split-tone grade (golden-hour push).
+ * Mobile-only split-tone grade — NEUTRALIZED to a near-identity pass-through for
+ * the bright-daylight look.
  *
- * WHY: the mobile golden-hour look wants highlights pushed GOLDEN and shadows
- * pushed WARM-BROWN without muddying the mid-tones — the board text and token
- * colours live in the mids and must stay READABLE. A global hue rotate or a flat
- * temperature multiply would tint everything (including the board glyphs); a
- * luminance-keyed SPLIT TONE only grades the darks and brights, leaving the mids
- * essentially untouched.
+ * WHY IT STILL EXISTS: the bright-daylight art direction is near-neutral (no
+ * warm/orange push), so every knob below is zeroed → this effect is a clean
+ * IDENTITY (no-op multiplies/mixes). It is deliberately RETAINED (not deleted)
+ * so it stays merged in the single mobile grade EffectPass wiring: the user can
+ * dial a gentle look back later by nudging the strengths + tints without
+ * re-plumbing the pipeline. The luminance-keyed SPLIT TONE structure only grades
+ * darks/brights and leaves the mid-tones (board text / token faces) READABLE, so
+ * any future push stays board-safe.
  *
  * HOW / COST: like SharpenEffect this is a per-fragment `postprocessing` Effect
  * (a `mainImage` function, NOT a convolution effect), so it MERGES into the
@@ -19,18 +22,19 @@ import { wrapEffect } from '@react-three/postprocessing';
  * shapes the already-tone-mapped LDR colour.
  *
  * TUNING KNOBS (compile-time float literals, like SHARPEN_STRENGTH → zero
- * uniform cost; edit + rebuild to retune):
+ * uniform cost; edit + rebuild to retune). ALL zeroed → neutral identity:
  * - WARM_TEMP: colour-temperature push. Reds up by WARM_TEMP, blues down by
- *   0.8·WARM_TEMP so the whole frame leans warm without a green cast.
- * - HIGH_TINT / HIGH_STRENGTH: multiply applied to HIGHLIGHTS (golden push).
- * - SHADOW_TINT / SHADOW_STRENGTH: multiply applied to SHADOWS (warm-brown push;
- *   ×1.6 so the low-key tint has enough bite against the dim ambient floor).
+ *   0.8·WARM_TEMP. 0.0 = no temperature push (neutral daylight).
+ * - HIGH_TINT / HIGH_STRENGTH: multiply applied to HIGHLIGHTS. Identity tint
+ *   [1,1,1] + strength 0 = highlights untouched.
+ * - SHADOW_TINT / SHADOW_STRENGTH: multiply applied to SHADOWS. Identity tint
+ *   [1,1,1] + strength 0 = shadows stay neutral gray (no warm-brown push).
  */
-const WARM_TEMP = 0.06;
-const HIGH_TINT: readonly [number, number, number] = [1.0, 0.82, 0.52];
-const HIGH_STRENGTH = 0.22;
-const SHADOW_TINT: readonly [number, number, number] = [0.45, 0.32, 0.22];
-const SHADOW_STRENGTH = 0.16;
+const WARM_TEMP = 0.0;
+const HIGH_TINT: readonly [number, number, number] = [1.0, 1.0, 1.0];
+const HIGH_STRENGTH = 0.0;
+const SHADOW_TINT: readonly [number, number, number] = [1.0, 1.0, 1.0];
+const SHADOW_STRENGTH = 0.0;
 
 /** Bakes a numeric vec3 const into a GLSL literal (no uniform cost). */
 const glslVec3 = (c: readonly [number, number, number]): string =>
@@ -44,12 +48,14 @@ void mainImage(const in vec4 inputColor, const in vec2 uv, out vec4 outputColor)
   // the split tone below.
   float l = dot(c, vec3(0.2126, 0.7152, 0.0722));
 
-  // Colour-temperature push: warm reds up, cool blues down (golden hour).
+  // Colour-temperature push: warm reds up, cool blues down. WARM_TEMP=0 →
+  // both multipliers are 1.0 (neutral, no temperature shift).
   c.r *= ${(1.0 + WARM_TEMP).toFixed(4)};
   c.b *= ${(1.0 - 0.8 * WARM_TEMP).toFixed(4)};
 
-  // Split tone keyed off the original luma: golden highlights, warm-brown
-  // shadows, mids (board text / token faces) left alone for readability.
+  // Split tone keyed off the original luma. With identity tints + zero
+  // strengths these mixes are no-ops (neutral); mids stay readable. Retained so
+  // a gentle look can be dialled back in by nudging the tints/strengths.
   float hi = smoothstep(0.5, 1.0, l);
   float lo = 1.0 - smoothstep(0.0, 0.5, l);
   c = mix(c, c * ${glslVec3(HIGH_TINT)}, hi * ${HIGH_STRENGTH.toFixed(4)});

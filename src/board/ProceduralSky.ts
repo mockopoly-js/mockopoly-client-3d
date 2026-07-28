@@ -1,13 +1,13 @@
 import * as THREE from 'three';
 
 /**
- * ── PROCEDURAL GOLDEN-HOUR SKY (MOBILE ONLY) ─────────────────────────────────
+ * ── PROCEDURAL BRIGHT-DAYLIGHT SKY (MOBILE ONLY) ─────────────────────────────
  *
  * A tiny code-built equirectangular sky used by HdriSkyMobile as BOTH
  * scene.background (visible sky) AND scene.environment (IBL) so the mobile scene
- * is coherently WARM with zero new light rig and — crucially — ZERO new asset
- * (mobile-asset-variants discipline: prefer procedural, never touch the shared
- * desktop sky.webp). Desktop keeps loading sky.webp untouched.
+ * is coherently BRIGHT / high-key daylit with zero new light rig and — crucially
+ * — ZERO new asset (mobile-asset-variants discipline: prefer procedural, never
+ * touch the shared desktop sky.webp). Desktop keeps loading sky.webp untouched.
  *
  * WHY A CANVAS EQUIRECT (not a shader dome): assigning the CanvasTexture to
  * scene.background/environment reuses three's built-in equirect background +
@@ -17,29 +17,31 @@ import * as THREE from 'three';
  *
  * WHY 16×512: the gradient is purely VERTICAL (zenith → horizon), so only height
  * carries detail; 16px width keeps the texture microscopic. The optional sun
- * hot-spot is a warm horizon glow (not an azimuth-localised disc at this width),
- * which the mobile Bloom pass glows as the "sun disc" — correct for every pose.
+ * hot-spot is a soft near-white high-key glow (not an azimuth-localised disc at
+ * this width), which the mobile Bloom pass glows as the "sun disc" — correct for
+ * every pose.
  *
  * MODULE SINGLETON: getProceduralSky() builds the CanvasTexture once and caches
  * it, so every HdriSkyMobile mount/remount (e.g. a resize that re-selects the
  * mobile branch) shares one GPU texture instead of reallocating.
  */
 
-/** Warm-gradient stops (sRGB), zenith → horizon. Tunable art-direction knobs. */
-const SKY_ZENITH = '#f0b060'; // deep-warm amber overhead
-const SKY_MID = '#e8845a'; // amber mid-sky
-const SKY_HORIZON = '#d05a4a'; // warm-red horizon
-/** Warm sun-glow tint painted as the bloom seed near the horizon. */
-const SUN_TINT = '#ffe6b0';
+/** Bright-daylight gradient stops (sRGB), zenith → horizon. Tunable art knobs. */
+const SKY_ZENITH = '#cfe6f7'; // soft light blue overhead
+const SKY_MID = '#e4f0f7'; // airy pale near-white blue at the horizon line (v=0.5)
+const SKY_HORIZON = '#f4ecda'; // soft warm-cream — warm-neutral ground bounce at nadir (v=0)
+/** Soft near-white sun-glow tint painted as the bloom seed toward the high sun. */
+const SUN_TINT = '#fff5ea';
 /** Same tint at zero alpha for a clean radial fade. */
-const SUN_TINT_TRANSPARENT = 'rgba(255, 230, 176, 0)';
+const SUN_TINT_TRANSPARENT = 'rgba(255, 245, 234, 0)';
 
 // Sun hot-spot placement in equirect UV. u = azimuth of MOBILE_KEY_POSITION
-// [11,5,7] → atan2(z, x) / 2π + 0.5 ≈ 0.59; v ≈ 0.62 sits just above the
-// horizon. With CanvasTexture flipY=true, canvas-y = (1 - v) * H.
-const SUN_U = 0.59;
-const SUN_V = 0.62;
-const SUN_RADIUS_PX = 90;
+// [7,11,6] → atan2(z, x) / 2π + 0.5 ≈ 0.61 (~41° azimuth). v = (elev + 90)/180 =
+// (50 + 90)/180 ≈ 0.78 lifts the glow band up toward the higher ~50° sun (short
+// shadows). With CanvasTexture flipY=true, canvas-y = (1 - v) * H.
+const SUN_U = 0.61;
+const SUN_V = 0.78;
+const SUN_RADIUS_PX = 120;
 
 const CANVAS_W = 16;
 const CANVAS_H = 512;
@@ -47,8 +49,8 @@ const CANVAS_H = 512;
 let cached: THREE.CanvasTexture | null = null;
 
 /**
- * Returns the shared procedural golden-hour equirect texture, building it on the
- * first call. Safe to call repeatedly (module-cached).
+ * Returns the shared procedural bright-daylight equirect texture, building it on
+ * the first call. Safe to call repeatedly (module-cached).
  */
 export function getProceduralSky(): THREE.CanvasTexture {
   if (cached) return cached;
@@ -68,10 +70,11 @@ export function getProceduralSky(): THREE.CanvasTexture {
     ctx.fillStyle = grad;
     ctx.fillRect(0, 0, CANVAS_W, CANVAS_H);
 
-    // Warm sun hot-spot, painted ON TOP of the gradient (source-over) so it is
-    // visible above the bloom threshold — painting it first would be fully
-    // overwritten by the opaque vertical gradient. Inner SUN_TINT → transparent
-    // so it composites as a soft glow the mobile Bloom pass reads as the sun.
+    // Soft near-white sun hot-spot, painted ON TOP of the gradient (source-over)
+    // so it is visible above the bloom threshold — painting it first would be
+    // fully overwritten by the opaque vertical gradient. Inner SUN_TINT →
+    // transparent so it composites as a soft high-key glow the mobile Bloom pass
+    // reads as the sun.
     const cx = SUN_U * CANVAS_W;
     const cy = (1 - SUN_V) * CANVAS_H;
     const radial = ctx.createRadialGradient(cx, cy, 0, cx, cy, SUN_RADIUS_PX);
