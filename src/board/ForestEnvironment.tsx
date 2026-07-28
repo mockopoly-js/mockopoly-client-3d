@@ -501,6 +501,73 @@ function applyForestFade(material: THREE.Material): void {
 }
 
 /**
+ * MOBILE GROUND-ONLY: inject ONLY the board-footprint poke-through clip — NO
+ * near-camera dither-fade. Used for the forest GROUND/floor chunks so terrain that
+ * humps up INSIDE the board's XZ footprint (above the board top) is discarded,
+ * keeping the board slab clean, while the ground stays fully SOLID/opaque
+ * everywhere else (no see-through fade). Mirrors {@link applyForestFade}'s
+ * instancing-aware world-position computation but omits the Bayer fade discard.
+ * Idempotent per material via its OWN guard flag (distinct from forestFadeApplied
+ * so a ground clone is never mistaken for a fade clone).
+ */
+function applyForestBoardClip(material: THREE.Material): void {
+  const mat = material as THREE.Material & { userData: { forestBoardClipApplied?: boolean } };
+  if (mat.userData.forestBoardClipApplied) return;
+  mat.userData.forestBoardClipApplied = true;
+
+  const prevOnBeforeCompile = mat.onBeforeCompile.bind(mat);
+  mat.onBeforeCompile = (shader, renderer) => {
+    prevOnBeforeCompile(shader, renderer);
+
+    // VERTEX: instancing-aware world position → vWorldPos (see applyForestFade).
+    shader.vertexShader = shader.vertexShader.replace(
+      '#include <common>',
+      /* glsl */ `#include <common>
+        varying vec3 vWorldPos;
+      `,
+    );
+    shader.vertexShader = shader.vertexShader.replace(
+      '#include <project_vertex>',
+      /* glsl */ `#include <project_vertex>
+        vec4 forestWorldPos = vec4(transformed, 1.0);
+        #ifdef USE_INSTANCING
+          forestWorldPos = instanceMatrix * forestWorldPos;
+        #endif
+        forestWorldPos = modelMatrix * forestWorldPos;
+        vWorldPos = forestWorldPos.xyz;
+      `,
+    );
+
+    // FRAGMENT header: varying + board-clip constants (NO Bayer — no fade here).
+    shader.fragmentShader = shader.fragmentShader.replace(
+      '#include <common>',
+      /* glsl */ `#include <common>
+        varying vec3 vWorldPos;
+        const float BOARD_CLIP_HALF  = ${BOARD_CLIP_HALF.toFixed(2)};
+        const float BOARD_CLIP_TOP_Y = ${BOARD_CLIP_TOP_Y.toFixed(2)};
+      `,
+    );
+
+    // Board-footprint poke-through clip ONLY (no near-camera fade discard).
+    shader.fragmentShader = shader.fragmentShader.replace(
+      '#include <dithering_fragment>',
+      /* glsl */ `
+        {
+          if (
+            vWorldPos.x > -BOARD_CLIP_HALF && vWorldPos.x < BOARD_CLIP_HALF &&
+            vWorldPos.z > -BOARD_CLIP_HALF && vWorldPos.z < BOARD_CLIP_HALF &&
+            vWorldPos.y > BOARD_CLIP_TOP_Y
+          ) discard;
+        }
+        #include <dithering_fragment>
+      `,
+    );
+  };
+
+  mat.needsUpdate = true;
+}
+
+/**
  * MOBILE-ONLY: prepend a FRAGMENT-only `precision mediump float;` override.
  * three prepends `precision highp float;` to the fragment prefix; redeclaring the
  * default float precision at the top of the material's own fragment source drops
@@ -567,6 +634,30 @@ function buildMobileForestOpaqueMaterial(base: THREE.Material): THREE.Material {
   // variant no longer shares the fade variant's cached program — this is what
   // un-breaks the opaque/fade swap. Different string from the fade key.
   mat.customProgramCacheKey = () => 'mobile-forest-opaque-mediump';
+  mat.needsUpdate = true;
+  return mat;
+}
+
+/**
+ * MOBILE GROUND-ONLY material: OPAQUE + board-footprint clip ONLY (no near-camera
+ * fade). Solid/depth-writing everywhere EXCEPT where terrain would poke up through
+ * the board slab, where it discards. The clip IS a `discard`, so early-Z is defeated
+ * for the ground program — but the discard only fires inside the small board
+ * footprint and ground is low-overdraw floor geometry, so this is the accepted
+ * trade to keep the board clean without making the ground see-through. Assigned
+ * PERMANENTLY to ground chunks (never swapped by the per-frame loop, which only
+ * manages foliage). Distinct program cache key from the fade + plain-opaque
+ * variants so their compiled programs never collide.
+ */
+function buildMobileForestGroundClipMaterial(base: THREE.Material): THREE.Material {
+  const mat = base.clone();
+  applyForestBoardClip(mat); // board-clip discard ONLY — no fade
+  injectMobileMediump(mat);
+  mat.transparent = false;
+  mat.depthWrite = true;
+  mat.depthTest = true;
+  mat.polygonOffset = false;
+  mat.customProgramCacheKey = () => 'mobile-forest-ground-clip-mediump';
   mat.needsUpdate = true;
   return mat;
 }
@@ -931,25 +1022,41 @@ export function ForestEnvironment({ isMobile = false }: { isMobile?: boolean }):
       if (base && !Array.isArray(base)) {
         forestFadeMat = buildMobileForestFadeMaterial(base);
         forestOpaqueMat = buildMobileForestOpaqueMaterial(base);
-        // Assign the chunk material PER CHUNK BY TYPE — the mobile see-through /
-        // dissolve is FOLIAGE-ONLY:
+        // GROUND-ONLY clip material (opaque + board-clip, no fade). Local to this
+        // build — only the assignment loop below uses it; the per-frame loop never
+        // touches ground (non-foliage), so the material lives on via the chunk in
+        // the scene graph and needs no return/ref.
+        const forestGroundClipMat = buildMobileForestGroundClipMaterial(base);
+        // Assign the chunk material PER CHUNK BY TYPE — three-way split so the
+        // mobile see-through / dissolve is FOLIAGE-ONLY and the board stays clean:
         //   FOLIAGE (carries LOD tiers → trees/birch/flowers/mushrooms/grass) →
         //     the fade+clip material (near-camera dither-fade + board-footprint
-        //     clip). These behave EXACTLY as before: the per-frame loop still
-        //     swaps them to the opaque variant once they are provably beyond the
-        //     fade range (early-Z win) and back to fade when they re-enter.
-        //   NON-FOLIAGE (ground/meadow, mountains, rocks — NO LOD tiers) → the
-        //     discard-free OPAQUE material PERMANENTLY. Solid, depth-writing, so
-        //     the camera can NEVER see through terrain and early-Z culls their
-        //     hidden fragments. The per-frame loop NEVER reassigns these (guarded
-        //     by `!meta.lod`), so no code path can put a `discard` shader back on
-        //     ground/mountains/rocks.
+        //     clip). Behaves EXACTLY as before: the per-frame loop still swaps
+        //     these to the plain-opaque variant beyond the fade range (early-Z
+        //     win) and back to fade when they re-enter.
+        //   GROUND/FLOOR (isForestGroundMesh: meadow/path/lake — NON-foliage) →
+        //     the OPAQUE + board-CLIP material PERMANENTLY. Solid everywhere,
+        //     except it discards terrain that pokes up inside the board footprint
+        //     so no ground hump shows through the board. No near-camera fade →
+        //     never see-through.
+        //   MOUNTAINS + ROCKS (non-ground, non-foliage) → the discard-free plain
+        //     OPAQUE material PERMANENTLY: fully solid, early-Z restored, no clip
+        //     (they ring the terrain far outside the board footprint).
+        // The per-frame loop NEVER reassigns any NON-foliage chunk (guarded by
+        // `!meta.lod`), so ground keeps its clip material and mountains/rocks keep
+        // the plain opaque material regardless of camera distance.
         // Foliage predicate = `userData.forestLod != null` (set by the chunker only
         // for types present in `lodTiers`), the SAME source of truth `meta.lod`
-        // uses below and `lodGeometry.has(name)` uses in the chunker.
+        // uses below; the grass FOLIAGE type carries LOD, so the isFoliage check
+        // FIRST correctly routes it to fade even though isForestGroundMesh also
+        // matches "grass" — only meadow/path/lake reach the ground branch.
         for (const c of chunks) {
           const isFoliage = (c.userData as { forestLod?: ForestChunkLod }).forestLod != null;
-          c.material = isFoliage ? forestFadeMat : forestOpaqueMat;
+          c.material = isFoliage
+            ? forestFadeMat
+            : isForestGroundMesh(c.name)
+              ? forestGroundClipMat
+              : forestOpaqueMat;
         }
         mobileChunks = chunks;
         // DEV-ONLY LOD-tier tint materials (green LOD1 / red LOD2), built once
