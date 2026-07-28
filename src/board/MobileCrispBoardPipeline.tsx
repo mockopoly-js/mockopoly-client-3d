@@ -4,7 +4,6 @@ import { useFrame, useThree } from '@react-three/fiber';
 import { useProgress } from '@react-three/drei';
 import {
   EffectPass,
-  BloomEffect,
   ToneMappingEffect,
   HueSaturationEffect,
   BrightnessContrastEffect,
@@ -17,24 +16,15 @@ import { useGameStore } from '../state/gameStore';
 import { BOARD_LAYER, CITY_LAYER } from './positions';
 
 /**
- * ── MOBILE-ONLY BLOOM (subtle bright-daylight glow) ──────────────────────────
- * Merged into the single grade EffectPass (BloomEffect is non-convolution, so it
- * adds NO standalone pass; it renders its bloom RT from the pass INPUT in
- * update() and ADDs it in mainImage). SUBTLE + high threshold so ONLY the
- * sun-glow skybox hot-spot, emissive city windows and the hottest speculars
- * bloom — board text sits well below threshold and stays crisp/readable, and the
- * high-key cream buildings do NOT wash out.
- * - INTENSITY: bloom add strength (0.4 = subtle, clean, not blown out).
- * - THRESHOLD / SMOOTHING: luminance gate (0.9 = only the sun-glow + hottest
- *   speculars/emissive windows, well above board text).
- * - RADIUS: mipmap-blur spread (soft clean glow).
- * - RESOLUTION_SCALE: half-res bloom base to trim fill on the native-dpr present.
+ * ── MOBILE BLOOM REMOVED (perf) ──────────────────────────────────────────────
+ * The mobile grade pass previously merged a subtle BloomEffect. Although a
+ * non-convolution effect adds no *standalone* EffectPass, BloomEffect's internal
+ * mipmap-blur RT ignores resolutionScale and renders at native present dpr — i.e.
+ * ~1.5-2 wasted full-screen passes for a very subtle glow. It is dropped on the
+ * fill-bound mobile path. The sun-glow already lives baked in the procedural sky
+ * texture, so the only visible loss is the faint emissive city-window glow —
+ * acceptable. (Desktop keeps its own EffectComposer bloom, untouched.)
  */
-const MOBILE_BLOOM_INTENSITY = 0.4;
-const MOBILE_BLOOM_THRESHOLD = 0.9;
-const MOBILE_BLOOM_SMOOTHING = 0.2;
-const MOBILE_BLOOM_RADIUS = 0.7;
-const MOBILE_BLOOM_RESOLUTION_SCALE = 0.5;
 
 /**
  * ── MOBILE CRISP-BOARD PIPELINE (MOBILE ONLY) ────────────────────────────────
@@ -300,24 +290,10 @@ export function MobileCrispBoardPipeline({
 
     // Grade EffectPass — all non-convolution effects, so they MERGE into ONE
     // pass over the linear-HDR composite. sRGB OETF is applied once by
-    // EffectMaterial.encodeOutput (on by default). Chain shape: a (now
-    // NEUTRALIZED) split-tone (WarmGrade) after the tone/hue/BC trio, and Bloom
-    // FIRST.
+    // EffectMaterial.encodeOutput (on by default). Chain shape: tone/hue/BC trio
+    // then a (now NEUTRALIZED) split-tone (WarmGrade), then FXAA + Sharpen.
+    // (Bloom was removed from this pass for fill-rate — see note above.)
     //
-    // BLOOM is placed FIRST so its ADD lands BEFORE ToneMapping (matching the
-    // desktop composer order N8AO → Bloom → ToneMapping): BloomEffect.update()
-    // renders its bloom RT from the pass INPUT (the linear-HDR composite)
-    // regardless of chain position, then its mainImage ADDs that precomputed
-    // bloom — so ordering it first tone-maps the summed HDR, not a clamped LDR.
-    // mipmapBlur → wide soft glow; resolutionScale halves the bloom base.
-    const bloom = new BloomEffect({
-      intensity: MOBILE_BLOOM_INTENSITY,
-      luminanceThreshold: MOBILE_BLOOM_THRESHOLD,
-      luminanceSmoothing: MOBILE_BLOOM_SMOOTHING,
-      radius: MOBILE_BLOOM_RADIUS,
-      mipmapBlur: true,
-      resolutionScale: MOBILE_BLOOM_RESOLUTION_SCALE,
-    });
     // ToneMapping default is AGX (parity with desktop). AGX gives clean, gently
     // desaturated highlights — well suited to the high-key pastel daylight look;
     // if more punch is ever wanted the one-line alternative is
@@ -339,7 +315,6 @@ export function MobileCrispBoardPipeline({
     const sharpen = new SharpenEffectImpl();
     const gradePass = new EffectPass(
       camera,
-      bloom,
       toneMapping,
       hueSat,
       brightnessContrast,

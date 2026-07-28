@@ -231,13 +231,13 @@ const MOBILE_SHADOW_MAP_SIZE = 2048;
  *  - MOBILE_DPR_MOVING — the cheap dpr held while the camera ORBITS / zooms /
  *    pans, so the interaction stays fast and smooth. Token walk, dice roll and
  *    character animation deliberately DO NOT change dpr — only camera movement.
- *  - MOBILE_DPR_STILL — the phone's NATIVE dpr (capped at 3 for thermal headroom).
- *    The renderer's pixel ratio at rest, i.e. the resolution of the FINAL present.
+ *  - MOBILE_DPR_STILL — the phone's NATIVE dpr, CAPPED AT 2 (see below). The
+ *    renderer's pixel ratio at rest, i.e. the resolution of the FINAL present.
  *    The board must present at native dpr to be crisp, so the renderer runs native
- *    at rest. The EXPENSIVE scene (forest/city/tokens/sky) does NOT pay for this:
- *    MobileCrispBoardPipeline renders it into a dpr-2 buffer (MOBILE_SCENE_DPR) and
- *    only the board + composite + grade run at native — so the dominant empty-board
- *    fill (HDRI sky + geometry + postFX-heavy scene) stays at dpr 2, while the board
+ *    (up to the cap) at rest. The EXPENSIVE scene (forest/city/tokens/sky) does NOT pay for this:
+ *    MobileCrispBoardPipeline renders it into a reduced-dpr buffer (MOBILE_SCENE_DPR)
+ *    and only the board + composite + grade run at native — so the dominant empty-board
+ *    fill (HDRI sky + geometry + postFX-heavy scene) stays at MOBILE_SCENE_DPR, while the board
  *    text is razor-crisp. Also the initial `dpr` prop so the first paint is native.
  * MOBILE_SETTLE_MS is the no-camera-motion debounce before the crisp dpr is
  * restored. Kept short (120ms) so the crisp resolution lands quickly after the
@@ -246,9 +246,15 @@ const MOBILE_SHADOW_MAP_SIZE = 2048;
  * debounce for ~1s after release.
  */
 const MOBILE_DPR_MOVING = 1.3;
+// MOBILE-ONLY fps/crispness knob. Cap the native present dpr at 2 (was 3): this is
+// the multiplier on EVERY native full-screen pass (board raster + composite 6-tap +
+// grade), so it is the single biggest fill-rate lever on the mobile path. Sharpen +
+// FXAA already run in the grade pass and counter the slight softening of dpr 2, so
+// the board stays acceptably crisp. If board-text crispness ever regresses on a
+// high-dpr device this is a one-line revert (bump the cap back to 3).
 const MOBILE_DPR_STILL = Math.min(
   typeof window !== 'undefined' ? window.devicePixelRatio || 2 : 2,
-  3,
+  2,
 );
 const MOBILE_SETTLE_MS = 120;
 
@@ -256,7 +262,7 @@ const MOBILE_SETTLE_MS = 120;
  * MOBILE-ONLY crisp-board pipeline tunables (see MobileCrispBoardPipeline).
  * - MOBILE_SCENE_DPR: the FIXED dpr the expensive scene (forest / city / tokens /
  *   HDRI sky) renders at. The board + composite + present run at native dpr; this
- *   keeps the heavy scene at dpr 2 so framerate is preserved while the board goes
+ *   keeps the heavy scene at dpr 1.5 so framerate is preserved while the board goes
  *   native-crisp. (At rest the renderer is native; the scene FBO is sized
  *   css × min(nativeDpr, MOBILE_SCENE_DPR).)
  * - MOBILE_BOARD_DEPTH_BIAS: view-space-Z bias biasing the board/scene depth
@@ -269,7 +275,11 @@ const MOBILE_SETTLE_MS = 120;
  *   composite toward the CITY at its contact base (the city is the foreground
  *   object there, so it wins near-ties; a tree genuinely in front still occludes it).
  */
-const MOBILE_SCENE_DPR = 2;
+// TUNABLE (MOBILE-ONLY): dpr of the expensive scene/forest pass. Dropped 2 → 1.5
+// to cut that pass's pixel count by ~44%, directly targeting the low-angle
+// 3rd-person forest overdraw that pushes the phone below 30fps. Raise back toward 2
+// if distant foliage aliasing becomes objectionable.
+const MOBILE_SCENE_DPR = 1.5;
 const MOBILE_BOARD_DEPTH_BIAS = 0.03;
 const MOBILE_CITY_DPR = 1.5;
 const MOBILE_CITY_DEPTH_BIAS = 0.03;
@@ -758,11 +768,11 @@ export function GameScene() {
         /*
           MOBILE crisp-board pipeline (replaces the mobile <EffectComposer>).
           Renders the board texture at NATIVE dpr (razor-crisp text) in its own
-          pass, composites it by depth over the dpr-2 forest/city/tokens/sky scene,
-          and applies the bright-daylight mobile grade — Bloom -> AGX ToneMapping ->
+          pass, composites it by depth over the reduced-dpr forest/city/tokens/sky
+          scene, and applies the bright-daylight mobile grade — AGX ToneMapping ->
           HueSaturation -> BrightnessContrast -> WarmGrade (neutralized) -> FXAA ->
           Sharpen -> sRGB — ONCE over the composited linear image, so board and scene are
-          graded identically. The heavy scene stays at MOBILE_SCENE_DPR (2) for
+          graded identically. The heavy scene stays at MOBILE_SCENE_DPR (1.5) for
           framerate; only the board (a cheap opaque raster) + composite + grade run
           at native dpr. Forest edges and tokens/houses correctly occlude the board
           (shared camera depth), with a view-Z bias at the token/board contact to
