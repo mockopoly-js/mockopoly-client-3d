@@ -25,6 +25,31 @@ const FOLLOW_LERP_RATE = 6;
 const DESKTOP_DAMPING_FACTOR = 0.08;
 const MOBILE_DAMPING_FACTOR = 0.25;
 
+// ── MOBILE-ONLY camera-collision clamps (desktop FROZEN) ──────────────────────
+// The free/Blender-style camera has NO scene collision, so on mobile the user
+// could orbit/pan/zoom the camera BELOW the terrain floor or INTO the rocks/city.
+// From inside a mesh, its backface-culled far side reads as see-through ("clip
+// through the floor and rocks"). These clamps keep the camera above the ground
+// plane and out of the props. They are all MOBILE-gated — desktop keeps the
+// original relaxed clamps (the DESKTOP_* values below) so the desktop
+// OrbitControls props AND runtime behavior stay byte-identical (no clamp listener
+// ever mutates the desktop camera; see the isMobileRef guard in handleMount).
+//
+// The hard GUARANTEE against going under the floor is the per-'change' Y clamp
+// (MOBILE_MIN_CAM_Y / MOBILE_MIN_TARGET_Y): polar/distance limits shape the feel
+// but panning the pivot could still drag the camera down, so we also clamp world
+// Y directly after every OrbitControls move. Terrain floor near the board sits at
+// FOREST_Y ≈ -0.48 (board bottom) with the board top at y ≈ 0.02.
+const MOBILE_MAX_POLAR_ANGLE = 1.35; // rad (~77°): a low, near-tabletop board view, but well short of the horizon so the orbit can't tip under the floor
+const MOBILE_MIN_DISTANCE = 4.0;     // world units: can't dolly INSIDE the city/rocks (initial mobile framing sits at MOBILE_CAM_DIST = 6.9, so zoom-in still works)
+const MOBILE_MIN_CAM_Y = 1.0;        // world units: HARD floor — the camera's world Y can never dip below this (safely above the −0.48 terrain floor and low ground clutter)
+const MOBILE_MIN_TARGET_Y = -0.3;    // world units: the orbit pivot can't be aimed below ~board level (aiming lower would drag the whole view under the terrain)
+
+// Desktop clamps (UNCHANGED — hoisted to named consts so the mobile/desktop split
+// in the OrbitControls props below is explicit and desktop stays byte-identical).
+const DESKTOP_MAX_POLAR_ANGLE = 1.55;
+const DESKTOP_MIN_DISTANCE = 2.5;
+
 /**
  * CameraRig: free Blender-style viewport navigation with a fixed initial framing.
  *
@@ -268,6 +293,27 @@ export function CameraRig() {
     controls.mouseButtons.LEFT = THREE.MOUSE.ROTATE;
     controls.mouseButtons.MIDDLE = undefined;
     controls.mouseButtons.RIGHT = undefined;
+
+    // MOBILE-ONLY camera-collision clamp. OrbitControls fires 'change' after EVERY
+    // move — user gesture (orbit/pan/zoom) OR programmatic update() — so clamping
+    // the camera + pivot world-Y here is the hard guarantee that no interaction can
+    // push the camera under the terrain (or the pivot below board level), which is
+    // what made the floor/rocks read as see-through from inside. Reads isMobileRef
+    // inside the handler so it self-enables/disables on rotate/resize, and
+    // early-returns on desktop → the desktop camera is NEVER touched (byte-identical).
+    // Idempotent (only lowers-nothing, raises to the floor), so re-firing every
+    // damped frame — or under StrictMode double-invoke — is harmless and stable:
+    // the next update() recomputes the orbit offset from the already-clamped
+    // camera/target, so the camera simply rests against the floor with no creep.
+    // Guarded by a typeof check so the unit-test fake (no addEventListener) is safe.
+    if (typeof controls.addEventListener === 'function') {
+      controls.addEventListener('change', () => {
+        if (!isMobileRef.current) return;
+        const cam = controls.object;
+        if (controls.target.y < MOBILE_MIN_TARGET_Y) controls.target.y = MOBILE_MIN_TARGET_Y;
+        if (cam.position.y < MOBILE_MIN_CAM_Y) cam.position.y = MOBILE_MIN_CAM_Y;
+      });
+    }
   }, []);
 
   return (
@@ -278,8 +324,12 @@ export function CameraRig() {
       enableDamping
       dampingFactor={isMobile ? MOBILE_DAMPING_FACTOR : DESKTOP_DAMPING_FACTOR}
       minPolarAngle={0.05}
-      maxPolarAngle={1.55}
-      minDistance={2.5}
+      // MOBILE tightens the low-angle + zoom-in limits so the camera can't tip
+      // under the floor or dolly into the city/rocks; DESKTOP keeps the original
+      // relaxed values (byte-identical). The hard world-Y floor is enforced by the
+      // 'change' clamp in handleMount (mobile only).
+      maxPolarAngle={isMobile ? MOBILE_MAX_POLAR_ANGLE : DESKTOP_MAX_POLAR_ANGLE}
+      minDistance={isMobile ? MOBILE_MIN_DISTANCE : DESKTOP_MIN_DISTANCE}
       maxDistance={70}
       // MOBILE adaptive dpr: driven ONLY by genuine user camera gestures. The
       // 'start' event (real drag / pinch / wheel) drops to the cheap MOVING dpr;
