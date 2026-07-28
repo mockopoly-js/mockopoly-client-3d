@@ -47,6 +47,15 @@ import { getDebugVisibility, subscribeDebugVisibility } from '../dev/debugVisibi
  *                just above it so buildings sit on the board, not floating/sunk.
  *   CITY_ROT   — Y-rotation (radians) to aim the city's "front"/streets nicely
  *                for the default camera.
+ *   CITY_SCALE / CITY_HEIGHT_SCALE — MOBILE-ONLY extra multipliers layered on
+ *                TOP of the auto-fit footprint scale above, to fix a
+ *                perceived scale mismatch (the character dwarfed the
+ *                buildings). CITY_SCALE grows the XZ footprint; CITY_HEIGHT_
+ *                SCALE additionally stretches Y for an "elongated skyscraper"
+ *                look. See the const block below for why CITY_SCALE is kept
+ *                near 1.0 (footprint headroom is only ~3% before spilling onto
+ *                the tile ring) while CITY_HEIGHT_SCALE carries the emphasis.
+ *                Desktop never reads these two consts — byte-identical.
  */
 
 // The clear inner square (inside the tile ring) is CORNER=0.134 deep on each
@@ -61,6 +70,34 @@ const CITY_PAN_Z = 0;         // world-Z fine-tune (post-scale); 0 = bbox-center
 const CITY_Y = 0.02;          // rest the city ground on the board top (TOP_Y)
 const CITY_Y_LIFT = 0.08;     // mobile-only: lift city off board surface to prevent z-fight
 const CITY_ROT = 0;           // radians; nudge to aim streets toward the camera
+
+// MOBILE-ONLY extra scale multipliers, layered on top of the auto-fit scale
+// (scaleX/scaleY/scaleZ below) to fix a scale-read problem: the player
+// character dwarfed the city, so the buildings needed to grow — especially
+// taller, for an "elongated skyscraper" silhouette that towers over the token.
+//
+// CITY_SCALE (XZ, footprint) is kept at 1.0: the auto-fit above already sets
+// the city's LONG-axis half-extent to CITY_FILL_HALF=3.55, deliberately just
+// inside the ±3.66 tile-ring edge (see file header) — only ~3% headroom
+// remains before geometry spills onto the printed tiles. Growing XZ further is
+// not safe to do blindly, so all of the "bigger" effect is carried by height.
+// If more footprint growth is wanted later, raise CITY_SCALE cautiously (stay
+// under ~1.03 = 3.66/3.55) and re-check the corners against the tile ring.
+//
+// CITY_HEIGHT_SCALE stretches Y on top of CITY_SCALE (effective Y multiplier
+// = CITY_SCALE * CITY_HEIGHT_SCALE = 1.6), which is unconstrained by the board
+// footprint (buildings just grow up into open sky), so it can be freely tuned.
+//
+// Base-anchor note: the recenter above (scene.position.set(-center.x,
+// -box.min.y, -center.z)) already places the city's lowest vertex at this
+// group's local Y=0 *before* the group's own scale/rotation/position are
+// applied. Scaling a point whose local Y is exactly 0 leaves it at 0
+// (sx*0=0), and a Y-axis rotation doesn't touch the Y component either — so
+// the group's own `position.y` (CITY_Y (+ CITY_Y_LIFT on mobile)) is the
+// FINAL world Y of the city's base no matter what CITY_SCALE/CITY_HEIGHT_SCALE
+// are set to. No position.y compensation is needed when tuning these two.
+const CITY_SCALE = 1.0;
+const CITY_HEIGHT_SCALE = 1.6;
 
 const CITY_URL = '/models/city.glb';
 
@@ -150,7 +187,14 @@ export function CityDressing({ isMobile = false }: { isMobile?: boolean }): Reac
     const scaleZ = CITY_FILL_HALF / (halfZ || 1);
     const scaleY = scaleX;
 
-    return { object: scene, groupScale: [scaleX, scaleY, scaleZ] };
+    // MOBILE-ONLY: layer CITY_SCALE/CITY_HEIGHT_SCALE on top of the auto-fit
+    // above (see the const block for why XZ stays ~1.0 while Y is emphasized).
+    // Desktop reads scaleX/scaleY/scaleZ unmodified — byte-identical to before.
+    const finalScaleX = isMobile ? scaleX * CITY_SCALE : scaleX;
+    const finalScaleZ = isMobile ? scaleZ * CITY_SCALE : scaleZ;
+    const finalScaleY = isMobile ? scaleY * CITY_SCALE * CITY_HEIGHT_SCALE : scaleY;
+
+    return { object: scene, groupScale: [finalScaleX, finalScaleY, finalScaleZ] };
   }, [gltf, isMobile]);
 
   // DEV-ONLY: city debug-visibility toggle (see src/dev/debugVisibility.ts).
