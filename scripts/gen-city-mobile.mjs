@@ -12,6 +12,21 @@
  *
  * PIPELINE (V2, 256px atlas cells):
  *   1. READ public/models/city.glb (EXT_mesh_gpu_instancing registered).
+ *   1b. CROP (MOBILE-ONLY): the desktop city is a lopsided ~289×254 rectangle —
+ *      a dense high-rise tower core over ~2/3 and a flat, sparse low-rise third.
+ *      On mobile that reads as an off-balance skyline. Before any join/merge we
+ *      crop the still-INSTANCED source to a SQUARE dense-core window in the
+ *      desktop source-coordinate frame: X∈[10,180], Z∈[-228,-58] (side 170).
+ *      A placement (each EXT_mesh_gpu_instancing instance, or each non-instanced
+ *      mesh node) is KEPT iff its world-space bbox CENTER lies inside the window
+ *      AND its XZ footprint ≤ FOOT_CAP (60) — the cap drops the ~12 city-spanning
+ *      roads/curbs (foot 100–260) that would otherwise overhang the square and
+ *      blow up the runtime Box3 auto-fit. Whole buildings only: we filter by
+ *      instance/node position, never by triangle, so NO building is ever sliced
+ *      open (no uncapped shells). Kept footprint ≈ 180.4×180.0 (aspect 1.00),
+ *      ~606 placements / ~87K of 263K tris (~33%). Desktop city.glb is untouched
+ *      (this script only ever writes OUT). Paired with a UNIFORM XZ runtime fit
+ *      in CityDressing.tsx so the square core fills the board center undistorted.
  *   2. ATLAS: pack the 69 baseColor images into ONE PNG atlas — CELL=256,
  *      GUTTER=8, grid 9×8 (72 cells ≥ 69). Each image is sharp-resized to
  *      (CELL-2*GUTTER)=240px square and composited into its cell with a gutter
@@ -63,8 +78,191 @@ const ATLAS_H = ROWS * CELL;      // 2048
 const SIMPLIFY_RATIO = 0.85;   // fraction of triangles to KEEP
 const SIMPLIFY_ERROR = 0.008;  // max normalized quadric error (silhouette guard)
 
+// ── Dense-core crop window (MOBILE-ONLY), in desktop source-coordinate space ──
+// Chosen by a height-weighted density sweep of the instanced source: this square
+// captures the dense tower cluster and drops the flat/sparse low-rise third + the
+// long rectangle ends. See the PIPELINE step 1b header for the full rationale.
+const CROP = { x0: 10, x1: 180, z0: -228, z1: -58 };
+// Max XZ footprint (world units) a KEPT placement may have. Normal buildings are
+// ≤ ~50; the ~12 city-spanning roads/curbs are 100–260 on their long axis. The
+// cap drops those spanning elements (which would overhang the square crop and
+// distort the runtime auto-fit) while keeping every real building whole.
+const CROP_FOOT_CAP = 60;
+
 const clamp01 = (x) => (x < 0 ? 0 : x > 1 ? 1 : x);
 const MB = (n) => (n / 1024 / 1024).toFixed(2) + ' MB';
+
+// ── Minimal column-major 4×4 math (no three.js dep in this build script) ──────
+const mat4Mul = (a, b) => {
+  const o = new Array(16).fill(0);
+  for (let c = 0; c < 4; c++)
+    for (let r = 0; r < 4; r++) {
+      let s = 0;
+      for (let k = 0; k < 4; k++) s += a[k * 4 + r] * b[c * 4 + k];
+      o[c * 4 + r] = s;
+    }
+  return o;
+};
+const mat4FromTRS = (t, r, s) => {
+  const [x, y, z, w] = r;
+  const x2 = x + x, y2 = y + y, z2 = z + z;
+  const xx = x * x2, xy = x * y2, xz = x * z2, yy = y * y2, yz = y * z2, zz = z * z2;
+  const wx = w * x2, wy = w * y2, wz = w * z2;
+  const [sx, sy, sz] = s;
+  // prettier-ignore
+  return [
+    (1 - (yy + zz)) * sx, (xy + wz) * sx, (xz - wy) * sx, 0,
+    (xy - wz) * sy, (1 - (xx + zz)) * sy, (yz + wx) * sy, 0,
+    (xz + wy) * sz, (yz - wx) * sz, (1 - (xx + yy)) * sz, 0,
+    t[0], t[1], t[2], 1,
+  ];
+};
+const mat4Apply = (m, p) => [
+  m[0] * p[0] + m[4] * p[1] + m[8] * p[2] + m[12],
+  m[1] * p[0] + m[5] * p[1] + m[9] * p[2] + m[13],
+  m[2] * p[0] + m[6] * p[1] + m[10] * p[2] + m[14],
+];
+
+// Local (pre-transform) bbox of a mesh, unioned over its primitives' POSITION
+// accessor min/max (present on every SimplePoly primitive).
+const meshLocalBox = (mesh) => {
+  const mn = [Infinity, Infinity, Infinity];
+  const mx = [-Infinity, -Infinity, -Infinity];
+  for (const prim of mesh.listPrimitives()) {
+    const pos = prim.getAttribute('POSITION');
+    const a = pos.getMin([]);
+    const b = pos.getMax([]);
+    for (let i = 0; i < 3; i++) {
+      if (a[i] < mn[i]) mn[i] = a[i];
+      if (b[i] > mx[i]) mx[i] = b[i];
+    }
+  }
+  return [mn, mx];
+};
+
+// Axis-aligned world bbox of a local box [mn,mx] transformed by matrix `m`.
+const worldBox = (m, mn, mx) => {
+  const bmn = [Infinity, Infinity, Infinity];
+  const bmx = [-Infinity, -Infinity, -Infinity];
+  for (let i = 0; i < 8; i++) {
+    const w = mat4Apply(m, [i & 1 ? mx[0] : mn[0], i & 2 ? mx[1] : mn[1], i & 4 ? mx[2] : mn[2]]);
+    for (let k = 0; k < 3; k++) {
+      if (w[k] < bmn[k]) bmn[k] = w[k];
+      if (w[k] > bmx[k]) bmx[k] = w[k];
+    }
+  }
+  return [bmn, bmx];
+};
+
+// A placement is KEPT iff its world-bbox center is inside CROP and its XZ
+// footprint ≤ CROP_FOOT_CAP (whole-building test — position + size, never a
+// triangle cut, so buildings are kept intact).
+const keepPlacement = (m, mn, mx) => {
+  const [bmn, bmx] = worldBox(m, mn, mx);
+  const cx = (bmn[0] + bmx[0]) / 2;
+  const cz = (bmn[2] + bmx[2]) / 2;
+  const foot = Math.max(bmx[0] - bmn[0], bmx[2] - bmn[2]);
+  return (
+    cx >= CROP.x0 && cx <= CROP.x1 && cz >= CROP.z0 && cz <= CROP.z1 && foot <= CROP_FOOT_CAP
+  );
+};
+
+/**
+ * MOBILE-ONLY dense-core crop. Mutates `doc` IN PLACE, operating on the still-
+ * instanced source (before uninstance/join/draco). For each mesh-bearing node:
+ *   • instanced (EXT_mesh_gpu_instancing): rebuild every present instance
+ *     attribute (TRANSLATION, ROTATION, and SCALE when present) with only the
+ *     kept instances; dispose the node if none remain.
+ *   • non-instanced: keep or dispose the whole node by its single placement.
+ * Whole buildings only — filtered by instance/node position, never sliced.
+ * Orphaned meshes/accessors are cleaned by the existing prune() downstream.
+ */
+function cropToDenseCore(doc) {
+  const root = doc.getRoot();
+  let keptInst = 0;
+  let droppedInst = 0;
+  let keptNodes = 0;
+  let droppedNodes = 0;
+  const gmn = [Infinity, Infinity, Infinity];
+  const gmx = [-Infinity, -Infinity, -Infinity];
+  const grow = (m, mn, mx) => {
+    const [bmn, bmx] = worldBox(m, mn, mx);
+    for (let k = 0; k < 3; k++) {
+      if (bmn[k] < gmn[k]) gmn[k] = bmn[k];
+      if (bmx[k] > gmx[k]) gmx[k] = bmx[k];
+    }
+  };
+
+  for (const node of root.listNodes()) {
+    const mesh = node.getMesh();
+    if (!mesh) continue;
+    const nodeM = mat4FromTRS(node.getTranslation(), node.getRotation(), node.getScale());
+    const [mn, mx] = meshLocalBox(mesh);
+    const inst = node.getExtension('EXT_mesh_gpu_instancing');
+
+    if (inst) {
+      const T = inst.getAttribute('TRANSLATION');
+      const R = inst.getAttribute('ROTATION');
+      const S = inst.getAttribute('SCALE');
+      const ta = T.getArray();
+      const ra = R ? R.getArray() : null;
+      const sa = S ? S.getArray() : null;
+      const keep = [];
+      for (let i = 0; i < T.getCount(); i++) {
+        const it = [ta[i * 3], ta[i * 3 + 1], ta[i * 3 + 2]];
+        const ir = ra ? [ra[i * 4], ra[i * 4 + 1], ra[i * 4 + 2], ra[i * 4 + 3]] : [0, 0, 0, 1];
+        const is = sa ? [sa[i * 3], sa[i * 3 + 1], sa[i * 3 + 2]] : [1, 1, 1];
+        const m = mat4Mul(nodeM, mat4FromTRS(it, ir, is));
+        if (keepPlacement(m, mn, mx)) {
+          keep.push(i);
+          grow(m, mn, mx);
+        }
+      }
+      const total = T.getCount();
+      droppedInst += total - keep.length;
+      keptInst += keep.length;
+      if (keep.length === 0) {
+        node.dispose();
+        droppedNodes++;
+        continue;
+      }
+      if (keep.length < total) {
+        for (const sem of inst.listSemantics()) {
+          const acc = inst.getAttribute(sem);
+          const comps = acc.getElementSize();
+          const src = acc.getArray();
+          const dst = new src.constructor(keep.length * comps);
+          keep.forEach((idx, j) => {
+            for (let k = 0; k < comps; k++) dst[j * comps + k] = src[idx * comps + k];
+          });
+          acc.setArray(dst);
+        }
+      }
+      keptNodes++;
+    } else {
+      if (keepPlacement(nodeM, mn, mx)) {
+        grow(nodeM, mn, mx);
+        keptNodes++;
+      } else {
+        node.dispose();
+        droppedNodes++;
+      }
+    }
+  }
+
+  console.log(
+    `[gen-city-mobile] crop: kept ${keptNodes} nodes / ${keptInst} instances ` +
+      `(dropped ${droppedNodes} nodes, ${droppedInst} instances)`,
+  );
+  console.log(
+    `[gen-city-mobile] crop kept world bbox: ` +
+      `X[${gmn[0].toFixed(1)}..${gmx[0].toFixed(1)}] ` +
+      `Y[${gmn[1].toFixed(1)}..${gmx[1].toFixed(1)}] ` +
+      `Z[${gmn[2].toFixed(1)}..${gmx[2].toFixed(1)}] ` +
+      `(${(gmx[0] - gmn[0]).toFixed(1)}×${(gmx[2] - gmn[2]).toFixed(1)}, ` +
+      `aspect ${((gmx[0] - gmn[0]) / (gmx[2] - gmn[2])).toFixed(3)})`,
+  );
+}
 // RGBA8 texture VRAM incl. the +1/3 mip chain.
 const texVram = (w, h) => (w * h * 4 * 4) / 3;
 
@@ -90,6 +288,11 @@ async function main() {
       `atlas grid ${COLS}×${ROWS}=${COLS * ROWS} too small for ${materials.length} materials`,
     );
   }
+
+  // ── 1b. CROP to the square dense-core (MOBILE-ONLY) ─────────────────────────
+  // Runs on the still-instanced source, before atlas/uninstance/join/draco.
+  // Whole-building crop (by instance/node position) — never slices geometry.
+  cropToDenseCore(doc);
 
   // material → its atlas cell index (list order is stable).
   const matCell = new Map();

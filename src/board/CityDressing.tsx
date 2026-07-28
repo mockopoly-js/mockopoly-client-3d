@@ -59,11 +59,13 @@ import { getDebugVisibility, subscribeDebugVisibility } from '../dev/debugVisibi
  */
 
 // The clear inner square (inside the tile ring) is CORNER=0.134 deep on each
-// side → its edge sits at world ±(0.5-0.134)*10 = ±3.66. Non-uniform scale on X
-// and Z fills both axes to the target half-extent (~3.45), while Y scale is tied
-// to X to avoid vertical distortion. City footprint (model ~300×260) is recentered
-// at origin, then each axis is scaled independently to fill the inner square equally.
-// PANs stay 0 so the bbox stays perfectly centered (|centerX|,|centerZ| < 0.1).
+// side → its edge sits at world ±(0.5-0.134)*10 = ±3.66. DESKTOP uses a
+// non-uniform per-axis scale to fill both edges of the non-square ~300×260
+// footprint; MOBILE loads a SQUARE dense-core crop (see gen-city-mobile.mjs) and
+// uses a single UNIFORM XZ scale so it fills the center undistorted. Y scale is
+// tied to the horizontal fit to avoid vertical distortion. City footprint is
+// recentered at origin before scaling. PANs stay 0 so the bbox stays perfectly
+// centered (|centerX|,|centerZ| < 0.1).
 const CITY_FILL_HALF = 3.55;  // target half-extent on X and Z axes (safely inside ±3.66 tile edge)
 const CITY_PAN_X = 0;         // world-X fine-tune (post-scale); 0 = bbox-centered on origin
 const CITY_PAN_Z = 0;         // world-Z fine-tune (post-scale); 0 = bbox-centered on origin
@@ -85,8 +87,10 @@ const CITY_ROT = 0;           // radians; nudge to aim streets toward the camera
 // under ~1.03 = 3.66/3.55) and re-check the corners against the tile ring.
 //
 // CITY_HEIGHT_SCALE stretches Y on top of CITY_SCALE (effective Y multiplier
-// = CITY_SCALE * CITY_HEIGHT_SCALE = 1.6), which is unconstrained by the board
+// = CITY_SCALE * CITY_HEIGHT_SCALE = 2.2), which is unconstrained by the board
 // footprint (buildings just grow up into open sky), so it can be freely tuned.
+// Raised 1.6 → 2.2 to elongate the cropped square dense-core into a taller,
+// more dramatic skyline that towers over the player token.
 //
 // Base-anchor note: the recenter above (scene.position.set(-center.x,
 // -box.min.y, -center.z)) already places the city's lowest vertex at this
@@ -97,7 +101,7 @@ const CITY_ROT = 0;           // radians; nudge to aim streets toward the camera
 // FINAL world Y of the city's base no matter what CITY_SCALE/CITY_HEIGHT_SCALE
 // are set to. No position.y compensation is needed when tuning these two.
 const CITY_SCALE = 1.0;
-const CITY_HEIGHT_SCALE = 1.6;
+const CITY_HEIGHT_SCALE = 2.2;
 
 const CITY_URL = '/models/city.glb';
 
@@ -180,19 +184,26 @@ export function CityDressing({ isMobile = false }: { isMobile?: boolean }): Reac
     const halfX = size.x / 2;
     const halfZ = size.z / 2;
 
-    // Scale each axis independently to fill the inner square target half-extent.
-    // Y is tied to X scale to avoid vertical distortion (keep building height
-    // proportional to width).
+    // DESKTOP: scale each axis independently to fill the inner square target
+    // half-extent (the desktop city is a non-square rectangle, so per-axis fill
+    // stretches it to fill both edges). Y is tied to X to avoid vertical
+    // distortion. Byte-identical to before on desktop.
     const scaleX = CITY_FILL_HALF / (halfX || 1);
     const scaleZ = CITY_FILL_HALF / (halfZ || 1);
     const scaleY = scaleX;
 
-    // MOBILE-ONLY: layer CITY_SCALE/CITY_HEIGHT_SCALE on top of the auto-fit
-    // above (see the const block for why XZ stays ~1.0 while Y is emphasized).
-    // Desktop reads scaleX/scaleY/scaleZ unmodified — byte-identical to before.
-    const finalScaleX = isMobile ? scaleX * CITY_SCALE : scaleX;
-    const finalScaleZ = isMobile ? scaleZ * CITY_SCALE : scaleZ;
-    const finalScaleY = isMobile ? scaleY * CITY_SCALE * CITY_HEIGHT_SCALE : scaleY;
+    // MOBILE: the mobile glb is cropped to a SQUARE dense-core (~180×180, aspect
+    // 1.00 — see scripts/gen-city-mobile.mjs step 1b), so a UNIFORM XZ fit fills
+    // the board center with the correct proportions and NO distortion. Fit the
+    // LARGER half-extent exactly to CITY_FILL_HALF (uniform = FILL/max(halfX,
+    // halfZ)) so neither axis spills past the ±3.66 tile ring; the ~0.2% shorter
+    // axis leaves only a negligible gap. CITY_SCALE (XZ) and CITY_HEIGHT_SCALE
+    // (extra Y) layer on top — see the const block. Desktop reads scaleX/scaleY/
+    // scaleZ unmodified.
+    const uniform = CITY_FILL_HALF / (Math.max(halfX, halfZ) || 1);
+    const finalScaleX = isMobile ? uniform * CITY_SCALE : scaleX;
+    const finalScaleZ = isMobile ? uniform * CITY_SCALE : scaleZ;
+    const finalScaleY = isMobile ? uniform * CITY_SCALE * CITY_HEIGHT_SCALE : scaleY;
 
     return { object: scene, groupScale: [finalScaleX, finalScaleY, finalScaleZ] };
   }, [gltf, isMobile]);
