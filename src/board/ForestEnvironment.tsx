@@ -258,6 +258,38 @@ const DENSITY_BAND_KEEPS = [0.65, 0.42, 0.22, 0.1] as const; // near / near-fog 
 const DENSITY_HYSTERESIS = 2; // world units: anti-flicker dead-band around each band edge
 
 /**
+ * ── MOBILE-ONLY: FULLY REMOVE tiny far foliage — grass + mushrooms ────────────
+ * The camera-distance DENSITY system only THINS far foliage (down to the deepest
+ * band's 10% keep). Grass tufts and mushrooms are TINY — a few pixels once they
+ * are more than a couple of tables away — so keeping even 10% of them far out is
+ * pure wasted fill + instances. This cull removes them ENTIRELY (chunk count → 0)
+ * once the live camera→chunk-center distance exceeds SMALL_FOLIAGE_CULL_DIST, and
+ * restores normal density when the camera comes back inside. It applies ONLY to
+ * SMALL-foliage chunks (grass + mushrooms); trees, birch, and flowers keep the
+ * unchanged density bands, and ground/mountains/rocks are not foliage at all.
+ *
+ * SMALL_FOLIAGE_RE matches the FOLIAGE relief type names for grass + mushrooms —
+ * `PP_Grass_11/15_*` and `PP_Mushroom_Fantasy_{Purple,Orange}_*` (verified against
+ * forest.mobile.glb). It is only ever tested on chunks that already carry LOD
+ * tiers (`meta.lod != null` → foliage), so the ground floor types (meadow / path /
+ * lake — matched by isForestGroundMesh, NO LOD) can never be caught here even
+ * though "grass" would substring-match; there is no ground type actually named
+ * "grass" in this glb, and the lod-gate makes the distinction bulletproof.
+ *
+ * TUNING vs FOG (GameScene FOG_NEAR=24 / FOG_FAR=52; fogDepth ≈ 0.8 × euclidean
+ * distance for the tilted-overhead camera): at 26 euclidean the fog is still light
+ * (fogDepth ≈ 21, below FOG_NEAR), so the removal is NOT hidden by haze — but grass
+ * and mushrooms are only a few pixels at that range, so the disappearance is
+ * imperceptible. Raise toward ~36 (≈ fog onset) if any pop shows on-device, at the
+ * cost of keeping tiny near-invisible props a little longer. The change-tracked
+ * cull (see the density loop) writes count only on the in↔out transition, and the
+ * hysteresis band stops flip-flop as the camera drifts across the edge.
+ */
+const SMALL_FOLIAGE_RE = /grass|mushroom/i;
+const SMALL_FOLIAGE_CULL_DIST = 26; // world units (euclidean cam→chunk center): grass/mushrooms fully gone beyond this
+const SMALL_FOLIAGE_CULL_HYSTERESIS = 3; // world units: anti flip-flop dead-band at the cull edge
+
+/**
  * ── MOBILE-ONLY FOREST CHUNKING + DISTANCE THINNING (revertable experiment) ──
  * See `forestChunking.ts` for the mechanism. These are the live tunables; ALL of
  * this is gated on `isMobile` — when !isMobile the forest is byte-identical to
@@ -732,6 +764,22 @@ interface ForestChunkMeta {
    */
   densityTier: number;
   /**
+   * True if this is a SMALL-foliage chunk (grass or mushroom — matched by
+   * {@link SMALL_FOLIAGE_RE} AND foliage, i.e. `lod != null`). Such chunks are
+   * FULLY removed (count → 0) beyond SMALL_FOLIAGE_CULL_DIST; all other foliage
+   * (trees/birch/flowers) and non-foliage chunks leave this false and are never
+   * hard-culled by distance here.
+   */
+  isSmallFoliage: boolean;
+  /**
+   * Change-tracked state of the small-foliage distance cull (the twin of
+   * `densityTier`): true while this small-foliage chunk is fully removed (count 0)
+   * because the camera is beyond SMALL_FOLIAGE_CULL_DIST. Written only on the
+   * in↔out transition so `mesh.count` is not touched every frame. Always false for
+   * non-small-foliage chunks.
+   */
+  smallFoliageCulled: boolean;
+  /**
    * DEV-ONLY: true while this chunk's material is the LOD-tier debug tint (green/
    * red), so the per-frame loop can RESTORE the normal fade/opaque material the
    * tick the tint toggle turns off. Always false (and never read) in production —
@@ -801,6 +849,10 @@ function buildForestChunkMetas(chunks: THREE.InstancedMesh[]): ForestChunkMeta[]
     // LOD tiers for the dynamic camera-distance swap (null → non-eligible, stays
     // full). The chunk is born full-detail, so it starts at tier 0.
     const lod = (mesh.userData as { forestLod?: ForestChunkLod }).forestLod ?? null;
+    // SMALL foliage = grass + mushrooms among the FOLIAGE types. Gate on `lod` so
+    // only actual foliage (LOD-tiered) can ever be tagged — the ground floor types
+    // (isForestGroundMesh, no LOD) are excluded even if a name substring-matched.
+    const isSmallFoliage = lod !== null && SMALL_FOLIAGE_RE.test(mesh.name);
     metas.push({
       mesh,
       worldCenter,
@@ -815,6 +867,8 @@ function buildForestChunkMetas(chunks: THREE.InstancedMesh[]): ForestChunkMeta[]
       // ever truncated per-frame below), so mesh.count here is the full count.
       instanceCount: mesh.count,
       densityTier: -1, // sentinel: first per-frame tick applies the real band
+      isSmallFoliage,
+      smallFoliageCulled: false,
       wasTinted: false,
     });
   }
@@ -1239,23 +1293,53 @@ export function ForestEnvironment({ isMobile = false }: { isMobile?: boolean }):
           next === 0 ? meta.lod.full : next === 1 ? meta.lod.lod1 : meta.lod.lod2;
       }
 
+      // (1c-cull) SMALL-foliage full removal (grass + mushrooms only). Beyond
+      // SMALL_FOLIAGE_CULL_DIST these tiny props are a few pixels and worthless, so
+      // remove them ENTIRELY (count → 0) rather than thin them to 10%. Change-
+      // tracked via `smallFoliageCulled` (with a hysteresis band) so `mesh.count`
+      // is only written on the in↔out transition — no per-frame churn. Uses the
+      // same live `centerDist` the density bands use. count=0 composes cleanly with
+      // the ring cull (mesh.visible), the material swap, and the LOD geometry swap —
+      // all orthogonal to instance count — so nothing fights it. On re-entry we
+      // reset `densityTier` to the -1 sentinel so the density block below re-applies
+      // the correct band the same tick. NOTE: opaque swap and cull both `continue`
+      // before this only for non-foliage / ring-culled chunks, so a culled small-
+      // foliage chunk still runs the (skipped-write) density check + swap harmlessly.
+      if (meta.isSmallFoliage) {
+        if (!meta.smallFoliageCulled && centerDist > SMALL_FOLIAGE_CULL_DIST) {
+          meta.smallFoliageCulled = true;
+          meta.mesh.count = 0;
+          meta.densityTier = -1; // force a fresh density write when it returns
+        } else if (
+          meta.smallFoliageCulled &&
+          centerDist < SMALL_FOLIAGE_CULL_DIST - SMALL_FOLIAGE_CULL_HYSTERESIS
+        ) {
+          meta.smallFoliageCulled = false; // fall through → density re-applies (tier is -1)
+        }
+      }
+
       // (1c) DYNAMIC DENSITY by LIVE camera distance (foliage only). Pick a
       // keep-fraction band with hysteresis and truncate `mesh.count` to render a
       // spatially-even PREFIX of the hash-reordered instances (four bands: 65% /
       // 42% / 22% / 10%, stepping down as fog opacity rises — see DENSITY_BAND_*).
       // Camera-relative, so the thinned fog ring tracks the free-roam camera as
       // it pans. Written only when the band CHANGES (no per-frame churn); the
-      // near band applies the 0.65 near keep (a 35% reduction, not full).
-      const nextDensity = selectForestDensityTier(
-        meta.densityTier, // sentinel -1 (not-yet-applied) → treated as band 0 inside
-        centerDist,
-        DENSITY_BAND_DISTS,
-        DENSITY_HYSTERESIS,
-      );
-      if (nextDensity !== meta.densityTier) {
-        meta.densityTier = nextDensity;
-        const keep = densityKeepForTier(nextDensity, DENSITY_BAND_KEEPS);
-        meta.mesh.count = Math.round(meta.instanceCount * keep);
+      // near band applies the 0.65 near keep (a 35% reduction, not full). SKIPPED
+      // while a small-foliage chunk is culled (count pinned at 0) so the count-0
+      // state is not overwritten; on re-entry `densityTier === -1` guarantees this
+      // writes the real band immediately.
+      if (!(meta.isSmallFoliage && meta.smallFoliageCulled)) {
+        const nextDensity = selectForestDensityTier(
+          meta.densityTier, // sentinel -1 (not-yet-applied) → treated as band 0 inside
+          centerDist,
+          DENSITY_BAND_DISTS,
+          DENSITY_HYSTERESIS,
+        );
+        if (nextDensity !== meta.densityTier) {
+          meta.densityTier = nextDensity;
+          const keep = densityKeepForTier(nextDensity, DENSITY_BAND_KEEPS);
+          meta.mesh.count = Math.round(meta.instanceCount * keep);
+        }
       }
 
       // (1b) DEV-ONLY LOD-tier TINT overlay. When the debug toggle is ON, paint the
