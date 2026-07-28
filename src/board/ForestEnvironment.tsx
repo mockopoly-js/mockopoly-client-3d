@@ -552,6 +552,17 @@ function buildMobileForestFadeMaterial(base: THREE.Material): THREE.Material {
 function buildMobileForestOpaqueMaterial(base: THREE.Material): THREE.Material {
   const mat = base.clone();
   injectMobileMediump(mat);
+  // Pin a CLEAN SOLID. This material's compiled program has NO `discard` at all
+  // (only injectMobileMediump runs onBeforeCompile — the fade dither and the
+  // board-footprint clip are NEVER injected), so early-Z is fully restored and
+  // the surface can never be seen through. It is the PERMANENT material for the
+  // non-foliage terrain (ground/mountains/rocks) as well as the far-tree opaque
+  // swap target, so set the solid state EXPLICITLY rather than trusting the cloned
+  // base's defaults: opaque, always depth-tested + depth-writing, no polygon offset.
+  mat.transparent = false;
+  mat.depthWrite = true;
+  mat.depthTest = true;
+  mat.polygonOffset = false;
   // DISTINCT program cache key (see buildMobileForestFadeMaterial) so the opaque
   // variant no longer shares the fade variant's cached program — this is what
   // un-breaks the opaque/fade swap. Different string from the fade key.
@@ -910,8 +921,6 @@ export function ForestEnvironment({ isMobile = false }: { isMobile?: boolean }):
 
       // Collect the freshly-built chunk InstancedMeshes and build the two swap
       // materials once (cloned from the single shared base every chunk points at).
-      // Start EVERY chunk on the fade+clip material (today's exact look, board-wide);
-      // the per-frame check (useFrame below) flips FAR non-board chunks to opaque.
       const chunks: THREE.InstancedMesh[] = [];
       scene.traverse((o) => {
         const im = o as THREE.InstancedMesh;
@@ -922,7 +931,26 @@ export function ForestEnvironment({ isMobile = false }: { isMobile?: boolean }):
       if (base && !Array.isArray(base)) {
         forestFadeMat = buildMobileForestFadeMaterial(base);
         forestOpaqueMat = buildMobileForestOpaqueMaterial(base);
-        for (const c of chunks) c.material = forestFadeMat;
+        // Assign the chunk material PER CHUNK BY TYPE — the mobile see-through /
+        // dissolve is FOLIAGE-ONLY:
+        //   FOLIAGE (carries LOD tiers → trees/birch/flowers/mushrooms/grass) →
+        //     the fade+clip material (near-camera dither-fade + board-footprint
+        //     clip). These behave EXACTLY as before: the per-frame loop still
+        //     swaps them to the opaque variant once they are provably beyond the
+        //     fade range (early-Z win) and back to fade when they re-enter.
+        //   NON-FOLIAGE (ground/meadow, mountains, rocks — NO LOD tiers) → the
+        //     discard-free OPAQUE material PERMANENTLY. Solid, depth-writing, so
+        //     the camera can NEVER see through terrain and early-Z culls their
+        //     hidden fragments. The per-frame loop NEVER reassigns these (guarded
+        //     by `!meta.lod`), so no code path can put a `discard` shader back on
+        //     ground/mountains/rocks.
+        // Foliage predicate = `userData.forestLod != null` (set by the chunker only
+        // for types present in `lodTiers`), the SAME source of truth `meta.lod`
+        // uses below and `lodGeometry.has(name)` uses in the chunker.
+        for (const c of chunks) {
+          const isFoliage = (c.userData as { forestLod?: ForestChunkLod }).forestLod != null;
+          c.material = isFoliage ? forestFadeMat : forestOpaqueMat;
+        }
         mobileChunks = chunks;
         // DEV-ONLY LOD-tier tint materials (green LOD1 / red LOD2), built once
         // from the pristine base. Behind import.meta.env.DEV so this block and
@@ -1061,6 +1089,16 @@ export function ForestEnvironment({ isMobile = false }: { isMobile?: boolean }):
       }
       if (!meta.ringVisible) continue;
 
+      // NON-FOLIAGE chunks (ground/meadow, mountains, rocks — no LOD tiers, so
+      // `meta.lod === null`) are PERMANENTLY on the discard-free OPAQUE material
+      // (assigned once at build). They are SOLID: no fade, no board-clip, no
+      // LOD/density thinning, and — crucially — the loop must NEVER swap them back
+      // to a `discard` material. Ring cull already ran above; skip ALL remaining
+      // per-chunk work (LOD/density/DEV-tint/opaque-swap) so nothing can reassign
+      // their material. This is the early-Z (overdraw) win: solid terrain writes
+      // depth and culls hidden fragments instead of overdrawing under a `discard`.
+      if (!meta.lod) continue;
+
       // Distance camera → chunk CENTER, computed ONCE. Used by the DENSITY band
       // (which classifies by center) and as the basis for `nearest` below.
       const centerDist = camPos.distanceTo(meta.worldCenter);
@@ -1072,59 +1110,60 @@ export function ForestEnvironment({ isMobile = false }: { isMobile?: boolean }):
       // MEDIUM detail instead of collapsing them to faceted ultra-low LOD2.
       const nearest = Math.max(0, centerDist - meta.worldRadius);
 
-      // (1) DYNAMIC LOD tier swap (eligible relief chunks only). By the camera →
-      // NEAREST-EDGE distance with hysteresis (NOT the chunk center — see the
-      // LOD_DIST_* note above; center-tiering faceted foreground trees inside big
-      // chunks); only reassign `geometry` when the tier actually changes. The
-      // InstancedMesh instances/instanceMatrix are untouched — this is a ref swap
-      // between already-uploaded geometries (no GPU re-upload). Applies to
+      // (1) DYNAMIC LOD tier swap. FOLIAGE ONLY — non-foliage chunks already
+      // `continue`d above (`!meta.lod`), so `meta.lod` is guaranteed non-null here.
+      // By the camera → NEAREST-EDGE distance with hysteresis (NOT the chunk center
+      // — see the LOD_DIST_* note above; center-tiering faceted foreground trees
+      // inside big chunks); only reassign `geometry` when the tier actually changes.
+      // The InstancedMesh instances/instanceMatrix are untouched — this is a ref
+      // swap between already-uploaded geometries (no GPU re-upload). Applies to
       // needsBoardClip chunks too (LOD is independent of the material / board-clip
       // discard, which every tier's shader still performs).
-      if (meta.lod) {
-        const next = selectForestLodTier(
-          meta.tier,
-          nearest,
-          LOD_DIST_1,
-          LOD_DIST_2,
-          LOD_HYSTERESIS,
-        );
-        if (next !== meta.tier) {
-          meta.tier = next;
-          meta.mesh.geometry =
-            next === 0 ? meta.lod.full : next === 1 ? meta.lod.lod1 : meta.lod.lod2;
-        }
+      const next = selectForestLodTier(
+        meta.tier,
+        nearest,
+        LOD_DIST_1,
+        LOD_DIST_2,
+        LOD_HYSTERESIS,
+      );
+      if (next !== meta.tier) {
+        meta.tier = next;
+        meta.mesh.geometry =
+          next === 0 ? meta.lod.full : next === 1 ? meta.lod.lod1 : meta.lod.lod2;
+      }
 
-        // (1c) DYNAMIC DENSITY by LIVE camera distance (foliage only). Pick a
-        // keep-fraction band with hysteresis and truncate `mesh.count` to render a
-        // spatially-even PREFIX of the hash-reordered instances (four bands: 65% /
-        // 42% / 22% / 10%, stepping down as fog opacity rises — see DENSITY_BAND_*).
-        // Camera-relative, so the thinned fog ring tracks the free-roam camera as
-        // it pans. Written only when the band CHANGES (no per-frame churn); the
-        // near band applies the 0.65 near keep (a 35% reduction, not full).
-        const nextDensity = selectForestDensityTier(
-          meta.densityTier, // sentinel -1 (not-yet-applied) → treated as band 0 inside
-          centerDist,
-          DENSITY_BAND_DISTS,
-          DENSITY_HYSTERESIS,
-        );
-        if (nextDensity !== meta.densityTier) {
-          meta.densityTier = nextDensity;
-          const keep = densityKeepForTier(nextDensity, DENSITY_BAND_KEEPS);
-          meta.mesh.count = Math.round(meta.instanceCount * keep);
-        }
+      // (1c) DYNAMIC DENSITY by LIVE camera distance (foliage only). Pick a
+      // keep-fraction band with hysteresis and truncate `mesh.count` to render a
+      // spatially-even PREFIX of the hash-reordered instances (four bands: 65% /
+      // 42% / 22% / 10%, stepping down as fog opacity rises — see DENSITY_BAND_*).
+      // Camera-relative, so the thinned fog ring tracks the free-roam camera as
+      // it pans. Written only when the band CHANGES (no per-frame churn); the
+      // near band applies the 0.65 near keep (a 35% reduction, not full).
+      const nextDensity = selectForestDensityTier(
+        meta.densityTier, // sentinel -1 (not-yet-applied) → treated as band 0 inside
+        centerDist,
+        DENSITY_BAND_DISTS,
+        DENSITY_HYSTERESIS,
+      );
+      if (nextDensity !== meta.densityTier) {
+        meta.densityTier = nextDensity;
+        const keep = densityKeepForTier(nextDensity, DENSITY_BAND_KEEPS);
+        meta.mesh.count = Math.round(meta.instanceCount * keep);
       }
 
       // (1b) DEV-ONLY LOD-tier TINT overlay. When the debug toggle is ON, paint the
       // chunk by the tier it's rendering (full = untinted fade, LOD1 = green, LOD2 =
-      // red) so a dev can SEE the dynamic LOD tracking the camera. Non-LOD chunks
-      // (meta.lod === null → mountains/ground/rocks) stay untinted (they ARE always
-      // full). This REPLACES the opaque/fade swap while on, so `continue` past it;
-      // the tick the toggle turns off, restore the fade material (board chunks keep
-      // it; others fall through to re-evaluate opaque/fade). Entirely behind
-      // import.meta.env.DEV → tree-shaken (with forestLodTintMats) in production.
+      // red) so a dev can SEE the dynamic LOD tracking the camera. Reached by
+      // FOLIAGE chunks only — non-foliage (mountains/ground/rocks, no LOD tiers)
+      // already `continue`d above (`!meta.lod`), so they stay on the permanent
+      // opaque material and are never tinted (nor faded). This REPLACES the
+      // opaque/fade swap while on, so `continue` past it; the tick the toggle turns
+      // off, restore the fade material (board chunks keep it; others fall through to
+      // re-evaluate opaque/fade). Entirely behind import.meta.env.DEV → tree-shaken
+      // (with forestLodTintMats) in production.
       if (import.meta.env.DEV && forestLodTintMats) {
         if (lodTintOn) {
-          const tintTier = meta.lod ? meta.tier : 0;
+          const tintTier = meta.tier;
           meta.mesh.material =
             tintTier === 0
               ? forestFadeMat
