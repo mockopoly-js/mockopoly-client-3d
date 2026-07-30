@@ -151,6 +151,61 @@ const CITY_ROT = 0;           // radians; nudge to aim streets toward the camera
 const CITY_SCALE = 1.0;
 const CITY_HEIGHT_SCALE = 2.2;
 
+// ── MOBILE-ONLY: cut-edge grass strip ───────────────────────────────────────
+// The STRAND/FLEET crop (gen-city-mobile.mjs Z_CUT=-143) removed the city's
+// authored perimeter grass border ALONG WITH that edge's low-rise buildings —
+// so the mobile city now shows bare gray floor/road right up to the printed
+// tile ring on that one side, while the other 3 (uncropped) sides still carry
+// their intact green landscaped border. This adds a matching green strip,
+// mobile-only, purely at runtime (no glb regen).
+//
+// MEASURED (via a temp @gltf-transform/core script against public/models/
+// city.glb — registers EXT_mesh_gpu_instancing, reads instance transforms +
+// UVs; script deleted after use, see task notes / PR description for the raw
+// numbers):
+//   • COLOR: the perimeter grass ground tiles (mesh "Plane.166", 69 instances,
+//     20×20 model units each, laid flush along the model's outer edges — e.g.
+//     a full-length single-tile-deep row along the model X-min/X-max edges,
+//     and originally along Z-min too before the crop) all sample the SAME UV
+//     rect (u 0.857–0.907, v 0.066–0.116) of the "Natures" material's atlas
+//     texture. The average pixel color of that rect is RGB(129,183,52) =
+//     #81b734 — a medium olive-green, matching the swatch visible in the
+//     border/bushes on the 3 intact sides.
+//   • WIDTH: those border tiles are ONE tile deep (20 raw model units) along
+//     the edges they run — the same depth the (removed) Z-min row used to be.
+//   • Runtime fit position: by construction of the mobile fit above, the
+//     city's DENSE-content edge always lands at EXACTLY ±CITY_FILL_HALF_MOBILE
+//     in this group's own local space (that's what the fit computes it to),
+//     regardless of the exact runtime trim numbers — so the new strip's
+//     position is expressed directly in that same local space (see the nested
+//     inverse-scale group below), not re-derived from trimHalfZ.
+//
+// CUT_GRASS_OUTER / CUT_GRASS_DEPTH / CUT_GRASS_HALF_WIDTH are in the SAME
+// "group-local" units as CITY_FILL_HALF_MOBILE (world units at the final fit
+// scale, before BOARD_ROTATION). TUNABLE:
+const CUT_GRASS_COLOR = '#81b734'; // measured Natures-atlas grass green (see above)
+const CUT_GRASS_OUTER = 3.6;       // outer edge of the strip — kept just inside the
+                                    // ±3.66 tile-ring edge (CORNER=0.134 → (0.5-0.134)*10)
+                                    // with a 0.06 safety margin, same margin philosophy as
+                                    // CITY_FILL_HALF_MOBILE=3.45 vs the ring.
+const CUT_GRASS_DEPTH = 0.5;       // depth of the strip (perpendicular to the cut edge).
+                                    // Inner edge = CUT_GRASS_OUTER - CUT_GRASS_DEPTH = 3.1,
+                                    // i.e. it overlaps ~0.35u back INTO the dense-fill
+                                    // boundary (3.45) to blend with/hide the existing bare
+                                    // floor there with margin — that overlap zone is
+                                    // confirmed floor-only (no buildings): the crop's Z_CUT
+                                    // sits in a verified empty gap between the kept downtown
+                                    // (raw Z ≥ ~-137) and the removed low-rise strip (raw Z ≤
+                                    // ~-166), so nothing real is covered.
+const CUT_GRASS_HALF_WIDTH = 3.6;  // half-width along the cut edge — matches CUT_GRASS_OUTER
+                                    // so the strip's corners meet the intact perpendicular
+                                    // borders on the other 2 sides with no gap, while staying
+                                    // inside the tile ring.
+const CUT_GRASS_Y_OFFSET = 0.015;  // small lift above the city's own ground plane (which
+                                    // sits at this group's local y=0) to avoid z-fighting
+                                    // with the floor mesh directly beneath it — on top of
+                                    // CITY_Y_LIFT already lifting the whole city off the board.
+
 const CITY_URL = '/models/city.glb';
 
 // MOBILE-ONLY variant: the same city collapsed to ~2 draws / 1 material / 1
@@ -352,6 +407,11 @@ export function CityDressing({ isMobile = false }: { isMobile?: boolean }): Reac
   // `.visible` on toggle. No per-frame cost — only fires on tap. Entirely
   // gated behind `import.meta.env.DEV`; tree-shaken out of production builds.
   const groupRef = useRef<THREE.Group>(null);
+  // MOBILE-ONLY: ref for the new cut-edge grass strip mesh (see const block
+  // above) — needed so the layer-assignment effect below can put it on
+  // CITY_LAYER alongside the rest of the city. Always null on desktop (the
+  // mesh is never rendered there).
+  const grassRef = useRef<THREE.Mesh>(null);
   useEffect(() => {
     if (!import.meta.env.DEV) return;
     const apply = () => {
@@ -378,6 +438,11 @@ export function CityDressing({ isMobile = false }: { isMobile?: boolean }): Reac
     const target = isMobile ? CITY_LAYER : 0;
     object.traverse((o) => o.layers.set(target));
     groupRef.current?.layers.set(target);
+    // MOBILE-ONLY: the grass strip mesh isn't part of `object`'s subtree (it's
+    // a sibling JSX <mesh>, only ever mounted when isMobile), so it needs its
+    // own layer assignment — see the CITY_LAYER comment in positions.ts for
+    // why layers don't inherit from a parent.
+    grassRef.current?.layers.set(target);
   }, [isMobile, object]);
 
   return (
@@ -389,6 +454,36 @@ export function CityDressing({ isMobile = false }: { isMobile?: boolean }): Reac
       scale={groupScale as [number, number, number] | number}
     >
       <primitive object={object} />
+      {isMobile && (
+        // MOBILE-ONLY: inverse-scale wrapper. The outer group's `scale` prop
+        // (groupScale, non-uniform per axis) is what maps the city's
+        // recentered local geometry onto the CITY_FILL_HALF_MOBILE-sized
+        // footprint — but it would ALSO distort a strip authored directly in
+        // final/target units (like CUT_GRASS_OUTER above) if placed straight
+        // inside the outer group. Dividing by the same groupScale here cancels
+        // it out exactly, so children of THIS group can be positioned/sized in
+        // plain final world-scale units (matching CITY_FILL_HALF_MOBILE etc.)
+        // with no extra math. Nesting inside groupRef (rather than a separate
+        // sibling group) also means the DEV city-visibility toggle still
+        // hides/shows the strip along with the rest of the city.
+        <group scale={[1 / groupScale[0], 1 / groupScale[1], 1 / groupScale[2]]}>
+          <mesh
+            ref={grassRef}
+            name="city-cut-edge-grass"
+            // Cut edge is at local z = -CITY_FILL_HALF_MOBILE (maps to world
+            // +X post-BOARD_ROTATION — see gen-city-mobile.mjs's axis-binding
+            // derivation). The strip is centered between its inner and outer
+            // bounds, both negative (same side as the cut).
+            position={[0, CUT_GRASS_Y_OFFSET, -(CUT_GRASS_OUTER + (CUT_GRASS_OUTER - CUT_GRASS_DEPTH)) / 2]}
+            rotation={[-Math.PI / 2, 0, 0]}
+            receiveShadow
+            frustumCulled={isMobile}
+          >
+            <planeGeometry args={[CUT_GRASS_HALF_WIDTH * 2, CUT_GRASS_DEPTH]} />
+            <meshStandardMaterial color={CUT_GRASS_COLOR} roughness={0.69} metalness={0} />
+          </mesh>
+        </group>
+      )}
     </group>
   );
 }
