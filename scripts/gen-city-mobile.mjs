@@ -42,11 +42,14 @@
  *      plain node that carried a large building or a slab — the missing-floor,
  *      missing-roads, missing-big-buildings bug. So the cut is now applied at the
  *      correct granularity for each kind:
- *        • INSTANCED nodes → keep each INSTANCE whose world-bbox center Z ≥ Z_CUT
- *          (no foot cap). Instances are small whole units, so a pure side test never
- *          slices one. (Behaviour is identical to the old build for instances — they
- *          were always ≤ 20, well under the old 60 cap; the cap only ever hurt the
- *          plain nodes.)
+ *        • INSTANCED nodes → keep each INSTANCE whose ENTIRE world bbox is on the
+ *          kept side (MIN Z ≥ Z_CUT, not just its center — so no instance pokes past
+ *          the cut plane), no foot cap. Instances are small whole units, so a
+ *          whole-instance side test never slices one. The min-Z test drops the thin
+ *          straddling fringe of flat road-tiles / props at the very −Z edge (≈20,
+ *          all height ≤ 1.0) that a center test left overhanging to Z ≈ -150 — that
+ *          fringe overflowed the STRAND tiles after the runtime fit; dropping it
+ *          makes the −Z edge end cleanly at ≈ Z_CUT, matching the floor clip.
  *        • PLAIN nodes → keep each TRIANGLE whose world-bbox center Z ≥ Z_CUT. A
  *          pre-pass verified ZERO source triangles straddle the plane Z = Z_CUT (it
  *          lands in a natural EMPTY gap between the kept downtown at Z ≥ ~-137 and
@@ -197,16 +200,25 @@ const worldBox = (m, mn, mx) => {
   return [bmn, bmx];
 };
 
-// An INSTANCE is KEPT iff its world-bbox center Z is on the kept side of the
-// edge-third cut (cz ≥ Z_CUT). NO footprint cap — instances are small, whole
-// repeated units (road tiles, props, small buildings, footprint ≤ ~20), so a pure
-// side test keeps them intact and never slices. (Dropping the old `foot ≤ 60` cap
-// has no effect on instances — every instance was already under it — it only stops
-// the big PLAIN nodes below from being deleted wholesale.)
+// An INSTANCE is KEPT iff its ENTIRE world bbox is on the kept side of the
+// edge-third cut — its MIN Z ≥ Z_CUT, not merely its center. NO footprint cap:
+// instances are small, whole repeated units (road tiles, props, small buildings,
+// footprint ≤ ~20), so a whole-instance side test keeps them intact and never
+// slices. (Dropping the old `foot ≤ 60` cap has no effect on instances — every
+// instance was already under it — it only stops the big PLAIN nodes below from
+// being deleted wholesale.)
+//
+// The MIN-Z test (vs a center test) is what makes the −Z / STRAND edge CLEAN: a
+// center test kept instances whose center is inside the cut but whose geometry pokes
+// ~7 units PAST the plane (down to Z ≈ -150), a fringe that — after the even-fill
+// runtime fit — overflowed onto the printed STRAND / TRAFALGAR / FLEET tiles.
+// Requiring min-Z ≥ Z_CUT drops only that thin straddling fringe (measured: 20 flat
+// road-tiles / tiny props, all height ≤ 1.0 — NO interior or tall building), so the
+// kept city's −Z extent ends cleanly at ≈ Z_CUT, matching the per-triangle floor
+// clip, and the fit fills evenly with nothing poking past the tile ring.
 const keepInstance = (m, mn, mx) => {
-  const [bmn, bmx] = worldBox(m, mn, mx);
-  const cz = (bmn[2] + bmx[2]) / 2;
-  return cz >= Z_CUT;
+  const [bmn] = worldBox(m, mn, mx);
+  return bmn[2] >= Z_CUT;
 };
 
 /**
@@ -291,9 +303,10 @@ function clipPlainPrimitiveByZ(prim, nodeM) {
  * city (model −Z third, cz < Z_CUT) — the SAME region the prior build removed; only
  * the over-removal is fixed. Mutates `doc` IN PLACE on the still-instanced source
  * (before atlas/uninstance/join/draco). For each mesh-bearing node:
- *   • instanced (EXT_mesh_gpu_instancing): keep every instance with world-bbox
- *     center Z ≥ Z_CUT (keepInstance — NO foot cap); rebuild the instance attributes
- *     with the survivors; dispose the node+mesh if none remain.
+ *   • instanced (EXT_mesh_gpu_instancing): keep every instance whose ENTIRE world
+ *     bbox is on the kept side (MIN Z ≥ Z_CUT — keepInstance, NO foot cap, so no
+ *     instance overhangs the cut plane); rebuild the instance attributes with the
+ *     survivors; dispose the node+mesh if none remain.
  *   • non-instanced (plain): keep every TRIANGLE with world-bbox center Z ≥ Z_CUT
  *     (clipPlainPrimitiveByZ) — this RETAINS the floor, roads and large buildings the
  *     old foot-cap wrongly deleted; dispose the node+mesh if 0 tris remain.
@@ -394,7 +407,7 @@ function cropRemoveEdgeThird(doc) {
   }
 
   console.log(
-    `[gen-city-mobile] edge-third crop (drop cz < ${Z_CUT}; per-instance + per-triangle, NO foot cap): ` +
+    `[gen-city-mobile] edge-third crop (instances: keep min-Z ≥ ${Z_CUT}; plain: keep per-triangle centroid ≥ ${Z_CUT}; NO foot cap): ` +
       `kept ${keptNodes} nodes (${clippedNodes} slab/merge nodes clipped), ${keptInst} instances, ` +
       `${keptTris} plain tris (dropped ${droppedNodes} nodes, ${droppedInst} instances, ${droppedTris} plain tris)`,
   );
