@@ -200,18 +200,16 @@ export function CityDressing({ isMobile = false }: { isMobile?: boolean }): Reac
     // MOBILE: the mobile glb has the STRAND/FLEET board-edge third cropped away by
     // a per-triangle / per-instance Z clip (floor, roads and big buildings on the
     // kept side RETAINED), leaving a rectangular ~300×180 remainder (aspect ~1.67 —
-    // see scripts/gen-city-mobile.mjs step 1b). A UNIFORM XZ fit keeps the correct
-    // proportions with NO distortion: fit the LARGER half-extent exactly to
-    // CITY_FILL_HALF (uniform = FILL/max(halfX, halfZ)) so neither axis spills past
-    // the ±3.66 tile ring. The shorter (Z) axis then leaves a small empty strip,
-    // split evenly by the recenter so the remainder stays centered on the board
-    // center — an acceptable strip, unlike distortion. CITY_SCALE (XZ) and
+    // see scripts/gen-city-mobile.mjs step 1b). A PER-AXIS fit stretches the rectangle
+    // to fill both the X and Z axes of the board center independently, accepting
+    // rectangular distortion to eliminate empty strips: each axis is scaled to fill
+    // exactly CITY_FILL_HALF. Y is tied to the X scale (not Z) to preserve vertical
+    // height and avoid distorting tower proportions. CITY_SCALE (XZ) and
     // CITY_HEIGHT_SCALE (extra Y) layer on top — see the const block. Desktop reads
     // scaleX/scaleY/scaleZ unmodified.
-    const uniform = CITY_FILL_HALF / (Math.max(halfX, halfZ) || 1);
-    const finalScaleX = isMobile ? uniform * CITY_SCALE : scaleX;
-    const finalScaleZ = isMobile ? uniform * CITY_SCALE : scaleZ;
-    const finalScaleY = isMobile ? uniform * CITY_SCALE * CITY_HEIGHT_SCALE : scaleY;
+    const finalScaleX = isMobile ? (CITY_FILL_HALF / (halfX || 1)) * CITY_SCALE : scaleX;
+    const finalScaleZ = isMobile ? (CITY_FILL_HALF / (halfZ || 1)) * CITY_SCALE : scaleZ;
+    const finalScaleY = isMobile ? (CITY_FILL_HALF / (halfX || 1)) * CITY_SCALE * CITY_HEIGHT_SCALE : scaleY;
 
     return { object: scene, groupScale: [finalScaleX, finalScaleY, finalScaleZ] };
   }, [gltf, isMobile]);
