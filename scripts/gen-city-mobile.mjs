@@ -12,12 +12,14 @@
  *
  * PIPELINE (V2, 256px atlas cells):
  *   1. READ public/models/city.glb (EXT_mesh_gpu_instancing registered).
- *   1b. EDGE-THIRD CROP (MOBILE-ONLY): remove the THIRD of the city that hugs ONE
+ *   1b. EDGE-THIRD Z CUT (MOBILE-ONLY): remove the THIRD of the city that hugs ONE
  *      physical board edge — the STRAND / CHANCE / FLEET STREET / TRAFALGAR SQUARE /
  *      FENCHURCH ST STATION / LEICESTER SQ / COVENTRY ST side (board tiles 21–29,
  *      the printed TOP row) — and keep the other two-thirds intact. This is a PURE
- *      POSITIONAL cut (the previous build used a tower-density optimizer that cut
- *      the wrong region).
+ *      POSITIONAL cut on ONE axis (model −Z). The cut REGION/SIDE is UNCHANGED from
+ *      the prior build — the user confirmed "the cut was fine"; only the previous
+ *      build's OVER-removal (a footprint cap that also deleted the city floor, the
+ *      roads and the large buildings) is fixed here.
  *
  *      AXIS BINDING (rigorous — see positions.ts + GameScene.tsx): those tiles are
  *      the board TOP row at board-local z = -4.33; their edge's OUTWARD normal is
@@ -29,23 +31,37 @@
  *      (pure translate) + uniform-scales the source, so model -Z == the SMALLEST
  *      source-Z coordinates. The source city spans Z ∈ [-230.8, 30.0]; the low-Z
  *      third is Z ≤ Z_CUT (-143 ≈ zmin + span/3) and is the third that hugs the
- *      STRAND/FLEET edge (it also happens to be the low-rise flat third).
+ *      STRAND/FLEET edge.
  *
- *      A placement (each EXT_mesh_gpu_instancing instance, or each non-instanced
- *      mesh node) is KEPT iff its world-space bbox CENTER has cz ≥ Z_CUT AND its XZ
- *      footprint ≤ FOOT_CAP (60). The Z test removes the edge third; the foot cap
- *      drops the ~30 near-flat city-spanning ground planes / road / plaza slabs
- *      (foot 60–260) that straddle multiple thirds — a center test can't assign
- *      them to a side, and they would overhang the removed third and blow up the
- *      runtime Box3 auto-fit (identical infra handling to the prior mobile build).
- *      Whole buildings only: we filter by instance/node position, never by
- *      triangle, so NO building is ever sliced open (no uncapped shells). Full X is
- *      preserved — we do NOT trim the long axis and do NOT force a square. Kept
- *      footprint ≈ 300×180 (aspect ~1.67), ~746 placements. Desktop city.glb is
- *      untouched (this script only ever writes OUT). Paired with a UNIFORM XZ
- *      runtime fit in CityDressing.tsx (keyed to the LONG axis) so the rectangular
- *      remainder fills the board center undistorted, centered, with a small empty
- *      strip on the short axis (distortion is not acceptable; a strip is).
+ *      HOW THE CUT IS APPLIED (this is the fix). The desktop source is NOT a clean
+ *      list of separable buildings: 50 nodes are EXT_mesh_gpu_instancing (small
+ *      repeated units — road tiles, props, small buildings; footprint ≤ ~20) and 53
+ *      are plain nodes that are actually JOINED merges of many DISJOINT buildings
+ *      PLUS the flat city FLOOR / ROAD / PLAZA slabs (footprints up to 260). A
+ *      whole-node footprint test (the old `foot ≤ 60` cap) therefore deleted every
+ *      plain node that carried a large building or a slab — the missing-floor,
+ *      missing-roads, missing-big-buildings bug. So the cut is now applied at the
+ *      correct granularity for each kind:
+ *        • INSTANCED nodes → keep each INSTANCE whose world-bbox center Z ≥ Z_CUT
+ *          (no foot cap). Instances are small whole units, so a pure side test never
+ *          slices one. (Behaviour is identical to the old build for instances — they
+ *          were always ≤ 20, well under the old 60 cap; the cap only ever hurt the
+ *          plain nodes.)
+ *        • PLAIN nodes → keep each TRIANGLE whose world-bbox center Z ≥ Z_CUT. A
+ *          pre-pass verified ZERO source triangles straddle the plane Z = Z_CUT (it
+ *          lands in a natural EMPTY gap between the kept downtown at Z ≥ ~-137 and
+ *          the removed low-rise strip at Z ≤ ~-166), so every triangle is wholly on
+ *          one side. A per-triangle keep therefore (a) keeps each whole building on
+ *          the kept side intact, (b) drops each whole building on the removed side,
+ *          and (c) clips the flat FLOOR / ROAD / PLAZA sheets to a clean straight
+ *          boundary at Z_CUT (a flat sheet → a flat line, not a hollow open face).
+ *          No triangle is split and no wall is cut open.
+ *      Kept footprint ≈ 300×180 (aspect ~1.67), X preserved in full. Desktop
+ *      city.glb is untouched (this script only ever writes OUT). Paired with a
+ *      UNIFORM XZ runtime fit in CityDressing.tsx (keyed to the LONG axis) so the
+ *      rectangular remainder fills the board center undistorted, centered, with a
+ *      small empty strip on the short axis (distortion is not acceptable; a strip
+ *      is).
  *   2. ATLAS: pack the 69 baseColor images into ONE PNG atlas — CELL=256,
  *      GUTTER=8, grid 9×8 (72 cells ≥ 69). Each image is sharp-resized to
  *      (CELL-2*GUTTER)=240px square and composited into its cell with a gutter
@@ -55,14 +71,14 @@
  *   4. REMAP every primitive's TEXCOORD_0 into its material's atlas cell
  *      (clamping the ~4 stray UVs to [0,1] first), then point every primitive
  *      at the shared material.
- *   5. TRANSFORM: prune → uninstance (bake the 1259 instances into real
+ *   5. TRANSFORM: prune → uninstance (bake the surviving instances into real
  *      geometry) → flatten → dedup → weld → join (now single-material, so
- *      everything merges to ~1-2 meshes) → prune → draco.
+ *      everything merges to ~1-2 meshes) → simplify → prune → draco.
  *   6. WRITE public/models/city.mobile.glb (draco-compressed) + print stats.
  *
- * The rendered triangle count is PRESERVED: uninstance bakes the instances into
- * real triangles, so the ~263K rendered tris survive — just carried by ~1-2
- * meshes instead of 103 + 1259 instance draws.
+ * The rendered triangle count is PRESERVED (minus the cropped third): uninstance
+ * bakes the instances into real triangles, so the kept region's tris survive — just
+ * carried by ~1-2 meshes instead of 103 + instance draws.
  *
  * Run:  npm run models:city:mobile
  */
@@ -97,20 +113,24 @@ const ATLAS_H = ROWS * CELL;      // 2048
 const SIMPLIFY_RATIO = 0.85;   // fraction of triangles to KEEP
 const SIMPLIFY_ERROR = 0.008;  // max normalized quadric error (silhouette guard)
 
-// ── Edge-third positional cut (MOBILE-ONLY), in desktop source-coordinate space ─
+// ── Edge-third Z cut (MOBILE-ONLY), in desktop source-coordinate space ──────────
 // Remove the STRAND/FLEET board-edge third of the city (= world +X = city-model -Z
 // = the SMALLEST source-Z third). Source city spans Z ∈ [-230.8, 30.0]; the low-Z
-// third boundary is zmin + span/3 ≈ -143. DROP placements whose world-bbox center
-// cz < Z_CUT; KEEP cz ≥ Z_CUT. Full X preserved (no long-axis trim, no square).
-// See the PIPELINE step 1b header for the full axis-binding derivation.
+// third boundary is zmin + span/3 ≈ -143. Geometry with world-bbox center Z < Z_CUT
+// is REMOVED; Z ≥ Z_CUT is KEPT. Full X preserved (no long-axis trim, no square).
+// This region/side is UNCHANGED from the prior build — the user confirmed the cut
+// was correct; only the over-removal (a footprint cap that also deleted the floor,
+// roads and big buildings) is fixed. See the PIPELINE step 1b header for the
+// axis-binding derivation and for how the cut is applied (per-instance +
+// per-triangle, so the floor / roads / big buildings on the kept side are RETAINED
+// whole; nothing is sliced open).
+//
+// TUNABLE: nudge Z_CUT to move the cut line along model -Z (MORE negative = keep
+// more of the city / cut a thinner strip; LESS negative = cut deeper). It sits in a
+// natural EMPTY gap — no source triangle straddles it (verified) — so the per-
+// triangle clip opens no shells; keep it inside that gap (roughly -166 < Z_CUT <
+// -137) when tuning, or re-verify the gap if moving further.
 const Z_CUT = -143;
-// Max XZ footprint (world units) a KEPT placement may have. Normal buildings are
-// ≤ ~50; the ~30 near-flat city-spanning ground planes / roads / plaza slabs are
-// 60–260 on their long axis and straddle multiple thirds — a center test can't
-// assign them to one side, and they would overhang the removed third and blow up
-// the runtime Box3 auto-fit. The cap drops those spanning elements (identical infra
-// handling to the prior mobile build) while keeping every real building whole.
-const CROP_FOOT_CAP = 60;
 
 const clamp01 = (x) => (x < 0 ? 0 : x > 1 ? 1 : x);
 const MB = (n) => (n / 1024 / 1024).toFixed(2) + ' MB';
@@ -177,29 +197,108 @@ const worldBox = (m, mn, mx) => {
   return [bmn, bmx];
 };
 
-// A placement is KEPT iff its world-bbox center Z is on the kept side of the
-// edge-third cut (cz ≥ Z_CUT) AND its XZ footprint ≤ CROP_FOOT_CAP (whole-building
-// test — position + size, never a triangle cut, so buildings are kept intact).
-// No X test: the long axis is preserved in full (do not force a square).
-const keepPlacement = (m, mn, mx) => {
+// An INSTANCE is KEPT iff its world-bbox center Z is on the kept side of the
+// edge-third cut (cz ≥ Z_CUT). NO footprint cap — instances are small, whole
+// repeated units (road tiles, props, small buildings, footprint ≤ ~20), so a pure
+// side test keeps them intact and never slices. (Dropping the old `foot ≤ 60` cap
+// has no effect on instances — every instance was already under it — it only stops
+// the big PLAIN nodes below from being deleted wholesale.)
+const keepInstance = (m, mn, mx) => {
   const [bmn, bmx] = worldBox(m, mn, mx);
   const cz = (bmn[2] + bmx[2]) / 2;
-  const foot = Math.max(bmx[0] - bmn[0], bmx[2] - bmn[2]);
-  return cz >= Z_CUT && foot <= CROP_FOOT_CAP;
+  return cz >= Z_CUT;
 };
 
 /**
+ * Per-TRIANGLE Z clip for a single non-instanced primitive. Keeps every triangle
+ * whose world-space centroid Z ≥ Z_CUT and drops the rest, then COMPACTS all vertex
+ * attributes (POSITION/NORMAL/TEXCOORD_0/COLOR_0) down to the surviving vertices and
+ * rebuilds the index buffer (so no orphan vertices bloat the output). Returns
+ * `{ keptTris, bmn, bmx }` (kept count + world-space bbox of the kept vertices);
+ * `{ keptTris: 0 }` when the whole primitive is on the removed side.
+ *
+ * WHY THIS IS SAFE (no open shells): a pre-pass verified ZERO source triangles
+ * straddle the plane Z = Z_CUT = -143 (it sits in a natural empty gap between the
+ * kept downtown at Z ≥ ~-137 and the removed low-rise strip at Z ≤ ~-166). So every
+ * triangle is wholly on one side and a per-triangle keep:
+ *   • keeps each whole building on the kept side intact (all its tris pass);
+ *   • drops each whole building on the removed side (all its tris fail);
+ *   • clips the flat FLOOR / ROAD / PLAZA slabs to a clean straight boundary at
+ *     Z_CUT (flat sheets → a flat line, not a hollow open face).
+ * No triangle is split and no vertical wall is cut open.
+ *
+ * This REPLACES the old whole-node `foot ≤ 60` drop, which deleted the floor, the
+ * roads and every large building outright (their whole-node footprint exceeded 60)
+ * — the over-removal bug. The plain nodes are JOINED merges of many disjoint
+ * buildings + the city floor slabs, so a per-triangle test is the only granularity
+ * that can both retain the kept-side buildings of a merge AND bound the merge's
+ * removed-side sprawl.
+ */
+function clipPlainPrimitiveByZ(prim, nodeM) {
+  const indices = prim.getIndices();
+  const pos = prim.getAttribute('POSITION');
+  const idxArr = indices.getArray();
+  const posArr = pos.getArray();
+  const triCount = idxArr.length / 3;
+
+  const used = new Map(); // old vertex index → new (compacted) index
+  const newIdx = [];
+  const bmn = [Infinity, Infinity, Infinity];
+  const bmx = [-Infinity, -Infinity, -Infinity];
+
+  for (let t = 0; t < triCount; t++) {
+    const tri = [idxArr[t * 3], idxArr[t * 3 + 1], idxArr[t * 3 + 2]];
+    const ws = tri.map((vi) => mat4Apply(nodeM, [posArr[vi * 3], posArr[vi * 3 + 1], posArr[vi * 3 + 2]]));
+    const cz = (ws[0][2] + ws[1][2] + ws[2][2]) / 3;
+    if (cz < Z_CUT) continue; // triangle is on the removed side — drop it whole
+    for (let j = 0; j < 3; j++) {
+      const w = ws[j];
+      for (let k = 0; k < 3; k++) {
+        if (w[k] < bmn[k]) bmn[k] = w[k];
+        if (w[k] > bmx[k]) bmx[k] = w[k];
+      }
+      let ni = used.get(tri[j]);
+      if (ni === undefined) {
+        ni = used.size;
+        used.set(tri[j], ni);
+      }
+      newIdx.push(ni);
+    }
+  }
+
+  const keptTris = newIdx.length / 3;
+  if (keptTris === 0) return { keptTris: 0 };
+
+  // Compact every vertex attribute down to the surviving vertices, preserving
+  // per-vertex data (UVs are remapped into the atlas cell later, on this subset).
+  for (const sem of prim.listSemantics()) {
+    const acc = prim.getAttribute(sem);
+    const src = acc.getArray();
+    const comps = acc.getElementSize();
+    const dst = new src.constructor(used.size * comps);
+    for (const [oldVi, ni] of used) {
+      for (let k = 0; k < comps; k++) dst[ni * comps + k] = src[oldVi * comps + k];
+    }
+    acc.setArray(dst);
+  }
+  const IndexArray = used.size > 65535 ? Uint32Array : Uint16Array;
+  indices.setArray(new IndexArray(newIdx));
+  return { keptTris, bmn, bmx };
+}
+
+/**
  * MOBILE-ONLY edge-third crop. Removes the STRAND/FLEET board-edge third of the
- * city (the smallest-source-Z third) by a PURE POSITIONAL test — see keepPlacement
- * + the PIPELINE step 1b header for the axis binding. Mutates `doc` IN PLACE,
- * operating on the still-instanced source (before uninstance/join/draco). For each
- * mesh-bearing node:
- *   • instanced (EXT_mesh_gpu_instancing): rebuild every present instance
- *     attribute (TRANSLATION, ROTATION, and SCALE when present) with only the
- *     kept instances; dispose the node if none remain.
- *   • non-instanced: keep or dispose the whole node by its single placement.
- * Whole buildings only — filtered by instance/node position, never sliced.
- * Orphaned meshes/accessors are cleaned by the existing prune() downstream.
+ * city (model −Z third, cz < Z_CUT) — the SAME region the prior build removed; only
+ * the over-removal is fixed. Mutates `doc` IN PLACE on the still-instanced source
+ * (before atlas/uninstance/join/draco). For each mesh-bearing node:
+ *   • instanced (EXT_mesh_gpu_instancing): keep every instance with world-bbox
+ *     center Z ≥ Z_CUT (keepInstance — NO foot cap); rebuild the instance attributes
+ *     with the survivors; dispose the node+mesh if none remain.
+ *   • non-instanced (plain): keep every TRIANGLE with world-bbox center Z ≥ Z_CUT
+ *     (clipPlainPrimitiveByZ) — this RETAINS the floor, roads and large buildings the
+ *     old foot-cap wrongly deleted; dispose the node+mesh if 0 tris remain.
+ * Whole buildings only — no triangle straddles the plane (verified), so nothing is
+ * sliced open. Orphaned meshes/accessors are cleaned by prune() downstream.
  */
 function cropRemoveEdgeThird(doc) {
   const root = doc.getRoot();
@@ -207,13 +306,22 @@ function cropRemoveEdgeThird(doc) {
   let droppedInst = 0;
   let keptNodes = 0;
   let droppedNodes = 0;
+  let clippedNodes = 0;
+  let keptTris = 0;
+  let droppedTris = 0;
   const gmn = [Infinity, Infinity, Infinity];
   const gmx = [-Infinity, -Infinity, -Infinity];
-  const grow = (m, mn, mx) => {
+  const growBox = (m, mn, mx) => {
     const [bmn, bmx] = worldBox(m, mn, mx);
     for (let k = 0; k < 3; k++) {
       if (bmn[k] < gmn[k]) gmn[k] = bmn[k];
       if (bmx[k] > gmx[k]) gmx[k] = bmx[k];
+    }
+  };
+  const growPoint = (p) => {
+    for (let k = 0; k < 3; k++) {
+      if (p[k] < gmn[k]) gmn[k] = p[k];
+      if (p[k] > gmx[k]) gmx[k] = p[k];
     }
   };
 
@@ -237,15 +345,16 @@ function cropRemoveEdgeThird(doc) {
         const ir = ra ? [ra[i * 4], ra[i * 4 + 1], ra[i * 4 + 2], ra[i * 4 + 3]] : [0, 0, 0, 1];
         const is = sa ? [sa[i * 3], sa[i * 3 + 1], sa[i * 3 + 2]] : [1, 1, 1];
         const m = mat4Mul(nodeM, mat4FromTRS(it, ir, is));
-        if (keepPlacement(m, mn, mx)) {
+        if (keepInstance(m, mn, mx)) {
           keep.push(i);
-          grow(m, mn, mx);
+          growBox(m, mn, mx);
         }
       }
       const total = T.getCount();
       droppedInst += total - keep.length;
       keptInst += keep.length;
       if (keep.length === 0) {
+        mesh.dispose();
         node.dispose();
         droppedNodes++;
         continue;
@@ -264,20 +373,30 @@ function cropRemoveEdgeThird(doc) {
       }
       keptNodes++;
     } else {
-      if (keepPlacement(nodeM, mn, mx)) {
-        grow(nodeM, mn, mx);
-        keptNodes++;
-      } else {
+      // Plain node: per-triangle Z clip on the single indexed TRIANGLES primitive.
+      const prim = mesh.listPrimitives()[0];
+      const before = prim.getIndices().getArray().length / 3;
+      const res = clipPlainPrimitiveByZ(prim, nodeM);
+      if (res.keptTris === 0) {
+        mesh.dispose();
         node.dispose();
         droppedNodes++;
+        droppedTris += before;
+        continue;
       }
+      droppedTris += before - res.keptTris;
+      keptTris += res.keptTris;
+      if (res.keptTris < before) clippedNodes++;
+      keptNodes++;
+      growPoint(res.bmn);
+      growPoint(res.bmx);
     }
   }
 
   console.log(
-    `[gen-city-mobile] edge-third crop (drop cz < ${Z_CUT}, foot > ${CROP_FOOT_CAP}): ` +
-      `kept ${keptNodes} nodes / ${keptInst} instances ` +
-      `(dropped ${droppedNodes} nodes, ${droppedInst} instances)`,
+    `[gen-city-mobile] edge-third crop (drop cz < ${Z_CUT}; per-instance + per-triangle, NO foot cap): ` +
+      `kept ${keptNodes} nodes (${clippedNodes} slab/merge nodes clipped), ${keptInst} instances, ` +
+      `${keptTris} plain tris (dropped ${droppedNodes} nodes, ${droppedInst} instances, ${droppedTris} plain tris)`,
   );
   console.log(
     `[gen-city-mobile] crop kept world bbox: ` +
@@ -303,9 +422,8 @@ async function main() {
   const root = doc.getRoot();
 
   const materials = root.listMaterials();
-  const meshes = root.listMeshes();
   console.log(
-    `[gen-city-mobile] source: ${meshes.length} meshes, ${materials.length} materials, ` +
+    `[gen-city-mobile] source: ${root.listMeshes().length} meshes, ${materials.length} materials, ` +
       `${root.listTextures().length} textures`,
   );
   if (materials.length > COLS * ROWS) {
@@ -316,8 +434,14 @@ async function main() {
 
   // ── 1b. Remove the STRAND/FLEET edge third (MOBILE-ONLY) ────────────────────
   // Runs on the still-instanced source, before atlas/uninstance/join/draco.
-  // Whole-building positional cut (by instance/node position) — never slices.
+  // Per-instance + per-triangle Z clip — retains the floor / roads / big buildings
+  // on the kept side and never slices a building (no source triangle crosses the
+  // plane). See the PIPELINE step 1b header for the full derivation.
   cropRemoveEdgeThird(doc);
+
+  // Re-list AFTER the crop so the atlas UV-remap + shared-material passes below only
+  // touch surviving meshes (fully-removed nodes were disposed above).
+  const meshes = root.listMeshes();
 
   // material → its atlas cell index (list order is stable).
   const matCell = new Map();
@@ -423,10 +547,11 @@ async function main() {
   // single-material meshes — the best connectivity to work on) and BEFORE draco()
   // (so the reduced geometry is what gets compressed). simplify() welds internally,
   // so it is safe after the existing weld()+join(). lockBorder:true preserves
-  // open-boundary/silhouette edges (building outlines, city perimeter). The SimplePoly
-  // city is hard-edged low-poly "triangle soup", so attribute-consistent welding
-  // leaves few interior collapsible edges → expect a CONSERVATIVE reduction, which is
-  // exactly the "gentle" intent (see the read-back tri count below to verify).
+  // open-boundary/silhouette edges (building outlines, city perimeter, and the flat
+  // slab cut edge at Z_CUT). The SimplePoly city is hard-edged low-poly "triangle
+  // soup", so attribute-consistent welding leaves few interior collapsible edges →
+  // expect a CONSERVATIVE reduction, which is exactly the "gentle" intent (see the
+  // read-back tri count below to verify).
   console.log('[gen-city-mobile] transform: prune, uninstance, flatten, dedup, weld, join, simplify, prune, draco ...');
   await doc.transform(
     prune(),
