@@ -101,8 +101,9 @@ import { getDebugVisibility, subscribeDebugVisibility } from '../dev/debugVisibi
 // of the city — not its inflated bbox edge — is what reaches CITY_FILL_HALF_MOBILE.
 // See gatherAxisSamples/percentileOf and the isMobile branch in the fit useMemo.
 const CITY_FILL_HALF = 3.55;         // DESKTOP target half-extent (X/Z) — UNCHANGED, byte-identical.
-const CITY_FILL_HALF_MOBILE = 3.64;  // MOBILE-ONLY target half-extent — raised from 3.55 to fill the
-                                      // clearing, kept 0.02 inside the measured ±3.66 tile-ring edge.
+const CITY_FILL_HALF_MOBILE = 3.45;  // MOBILE-ONLY target half-extent — pulled in from the ±3.66
+                                      // tile-ring edge to leave margin; city + ~0.2-0.4u fringe
+                                      // overhang stay off the printed tiles.
 const CITY_TRIM_PCT = 0.005;         // MOBILE-ONLY: per-axis percentile (0.5%) trimmed off EACH end
                                       // before computing the fit recenter/scale, to exclude the thin
                                       // sparse fringe above without cutting into real building mass —
