@@ -71,35 +71,23 @@ import { getDebugVisibility, subscribeDebugVisibility } from '../dev/debugVisibi
 // stale draft of this comment that assumed a uniform long-axis scale). Y scale is
 // tied to the horizontal (X) fit to avoid vertical distortion.
 //
-// MOBILE FIT SOURCE DATA (measured from public/models/city.mobile.glb via a
-// temp @gltf-transform/core script; script deleted after use — see git history /
-// task notes for the raw numbers): the runtime THREE.Box3 full bounds (X≈[-30,270]
-// size 300, Z≈[-150,30] size 180) are INFLATED on some edges by a thin, near-ZERO-
-// density sparse fringe:
-//   • Z-min (the STRAND/FLEET CUT edge, world +X post-BOARD_ROTATION): vertex count
-//     is ~0 from raw Z=-150 down to ≈-143 — this lands almost exactly on
-//     gen-city-mobile.mjs's Z_CUT=-143, confirming it's the per-triangle floor/road
-//     CLIP OVERHANG (a triangle is kept whole if its centroid is on the kept side,
-//     so a few triangles whose centroid barely clears Z_CUT still carry a vertex
-//     past it) — verified flat (Y ≤ 0.78), i.e. a floor/road sliver, not a building.
-//   • X-min (the PALL MALL/WHITEHALL/BOW edge, world -Z post-rotation → screen TOP):
-//     a similar near-zero span from X=-30 to ≈-22 (natural low-density corner
-//     taper, not crop-related) before density resumes.
-//   • The opposite edges (X-max/BOTTOM, Z-max/LEFT) are less hollow but still carry
-//     a thinner tail than the near/cut edges — X-max tail is short low-rise
-//     buildings (Y ≤ ~13.6); Z-max tail includes one moderately tall building
-//     reaching Y≈24.8, so it is trimmed more gently (see CITY_TRIM_PCT) to avoid
-//     visibly clipping it.
-// Fitting the plain (inflated) Box3 — correct for desktop, which has no such
-// fringe — left MOBILE's actual dense/visible content short of the target
-// half-extent by a DIFFERENT amount per edge (0.53–0.82 world units at the old
-// CITY_FILL_HALF=3.55), which reads as the reported asymmetric green gaps, worst
-// on the TOP and RIGHT/cut edges. Raising CITY_FILL_HALF_MOBILE alone would NOT
-// fix this (it scales the gap up proportionally along with everything else) — the
-// fix is to compute the fit denominator (recenter + scale) from a PERCENTILE-
-// TRIMMED bound that excludes just that sparse fringe, so the dense/visible edge
-// of the city — not its inflated bbox edge — is what reaches CITY_FILL_HALF_MOBILE.
-// See gatherAxisSamples/percentileOf and the isMobile branch in the fit useMemo.
+// MOBILE FIT SOURCE DATA — HISTORICAL NOTE: an earlier build of
+// gen-city-mobile.mjs left a thin, near-zero-density sparse fringe on the
+// runtime Box3 (most visibly a floor/road CLIP OVERHANG on the STRAND/FLEET
+// cut edge, a few triangles whose centroid barely cleared Z_CUT but still
+// carried a vertex past it). Fitting the plain bbox back then under-filled the
+// dense/visible content by a different amount per edge, reading as uneven
+// green gaps — the fix at the time was a per-axis PERCENTILE TRIM of the
+// vertex bounds (see git history) to exclude just that fringe before
+// recentering/scaling.
+// THAT FRINGE IS GONE: gen-city-mobile.mjs's edge-third crop now requires an
+// instance's MIN Z (not just its center) to clear Z_CUT, and the per-triangle
+// clip on plain nodes uses each triangle's own centroid with zero source
+// triangles straddling Z_CUT (verified in the generator) — so the cut edge
+// ends CLEANLY at Z_CUT with no overhang. The runtime Box3 is therefore clean
+// on every edge, and the plain (untrimmed) bbox center/half-extents are the
+// correct fit denominator — same as desktop. See the isMobile branch in the
+// fit useMemo below (no percentile trim there anymore).
 const CITY_FILL_HALF = 3.55;         // DESKTOP target half-extent (X/Z) — UNCHANGED, byte-identical.
 
 // ── MOBILE-ONLY: full grass square dressing ─────────────────────────────────
@@ -118,12 +106,12 @@ const CITY_FILL_HALF = 3.55;         // DESKTOP target half-extent (X/Z) — UNC
 //     (square) city footprint and the grass square's edge.
 //   CITY_FILL_HALF_MOBILE = GRASS_HALF - BAND — the city's mobile fit target
 //     half-extent is DERIVED from the two above, not set independently: since
-//     the city is recentered on its own dense-content midpoint (isMobile
-//     branch below) and the grass square is centered on the SAME group-local
-//     origin (CITY_PAN_X/Z = 0 for both), a city footprint of half-extent
-//     (GRASS_HALF - BAND) centered inside a grass square of half-extent
-//     GRASS_HALF leaves EXACTLY a BAND-wide margin on every side, by
-//     construction — no per-edge measurement needed.
+//     the city is recentered on its own full-bbox center (isMobile branch
+//     below, same recenter point as desktop) and the grass square is centered
+//     on the SAME group-local origin (CITY_PAN_X/Z = 0 for both), a city
+//     footprint of half-extent (GRASS_HALF - BAND) centered inside a grass
+//     square of half-extent GRASS_HALF leaves EXACTLY a BAND-wide margin on
+//     every side, by construction — no per-edge measurement needed.
 const GRASS_HALF = 3.6;    // half-extent of the grass square — 0.06 inside the ±3.66 tile-ring edge.
 const BAND = 0.35;         // even green border width between the city footprint and the grass edge.
 const GRASS_COLOR = '#81b734'; // measured avg color of the city's own perimeter grass ground tiles
@@ -136,15 +124,10 @@ const GRASS_Y_OFFSET = -0.005; // hair BELOW the city's own ground plane (this g
 const CITY_FILL_HALF_MOBILE = GRASS_HALF - BAND; // MOBILE-ONLY target half-extent (both axes — see
                                       // the isMobile fit below) — the city footprint SQUARE that sits
                                       // centered inside the grass square, leaving an even BAND margin.
-const CITY_TRIM_PCT = 0.005;         // MOBILE-ONLY: per-axis percentile (0.5%) trimmed off EACH end
-                                      // before computing the fit recenter/scale, to exclude the thin
-                                      // sparse fringe above without cutting into real building mass —
-                                      // chosen to land right at the measured true-void edge (see the
-                                      // const-block comment above). Desktop never reads this.
-const CITY_PAN_X = 0;         // world-X fine-tune (post-scale); 0 = fit-centered on origin. On
-                               // mobile the fit below already recenters on the TRIMMED dense-content
-                               // midpoint (a data-driven substitute for a manual pan), so this stays
-                               // 0; raise it only if a real-device check still shows residual drift.
+const CITY_PAN_X = 0;         // world-X fine-tune (post-scale); 0 = fit-centered on origin. Both
+                               // mobile and desktop recenter on the FULL bbox center (see the fit
+                               // useMemo below), so this stays 0; raise it only if a real-device
+                               // check still shows residual drift.
 const CITY_PAN_Z = 0;         // world-Z fine-tune (post-scale); same note as CITY_PAN_X.
 const CITY_Y = 0.02;          // rest the city ground on the board top (TOP_Y)
 const CITY_Y_LIFT = 0.08;     // mobile-only: lift city off board surface to prevent z-fight
@@ -156,16 +139,13 @@ const CITY_ROT = 0;           // radians; nudge to aim streets toward the camera
 // taller, for an "elongated skyscraper" silhouette that towers over the token.
 //
 // CITY_SCALE (XZ, footprint) is kept at 1.0: the auto-fit above already sets
-// mobile's dense-content half-extent to CITY_FILL_HALF_MOBILE (= GRASS_HALF -
+// mobile's full-bbox half-extent to CITY_FILL_HALF_MOBILE (= GRASS_HALF -
 // BAND, ~3.25 — see the full-grass-square const block above), deliberately
 // inside the ±3.66 tile-ring edge with room left for both the even BAND margin
-// AND the grass square's own 0.06 margin to the ring — and the measurement
-// notes above already show some of the excluded sparse fringe (thin floor
-// slivers / short buildings) lands slightly PAST the dense-content edge.
-// Growing XZ further is NOT safe to do blindly — it would push both the dense
-// content and that fringe further out, eating into BAND (or the ring). If more
-// footprint growth is wanted later, raise CITY_SCALE only after re-measuring
-// (see gatherAxisSamples) and re-checking every edge against BAND/the ring.
+// AND the grass square's own 0.06 margin to the ring. Growing XZ further is
+// NOT safe to do blindly — it would push the fitted content further out,
+// eating into BAND (or the ring). If more footprint growth is wanted later,
+// raise CITY_SCALE only after re-checking every edge against BAND/the ring.
 //
 // CITY_HEIGHT_SCALE stretches Y on top of CITY_SCALE (effective Y multiplier
 // = CITY_SCALE * CITY_HEIGHT_SCALE = 2.2), which is unconstrained by the board
@@ -195,61 +175,6 @@ const CITY_URL = '/models/city.glb';
 // step 1b).
 const CITY_URL_MOBILE = '/models/city.mobile.glb';
 const DRACO_PATH = '/draco/';
-
-/**
- * MOBILE-ONLY helper: one traversal of the cloned scene's real (post-uninstance)
- * geometry, collecting every vertex's WORLD-SPACE x/z into two flat typed arrays.
- * Only x/z are gathered — y (ground anchoring) intentionally keeps using the
- * plain Box3.min.y computed by the caller, since the sparse fringe this exists to
- * exclude is a HORIZONTAL (per-edge) phenomenon, not a vertical one (the ground
- * plane's lowest vertex is consistent with or without the fringe — see the
- * CITY_TRIM_PCT comment above for the measured Y check). Never called on
- * desktop (isMobile gates the call site), so desktop pays zero cost for this.
- */
-function gatherAxisSamples(scene: THREE.Object3D): { xs: Float32Array; zs: Float32Array } {
-  scene.updateMatrixWorld(true);
-  let total = 0;
-  scene.traverse((o) => {
-    const m = o as THREE.Mesh;
-    // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- runtime narrowing: `o` is Object3D; only actual meshes have isMesh===true
-    if (m.isMesh) {
-      const pos = m.geometry.getAttribute('position') as THREE.BufferAttribute | undefined;
-      if (pos) total += pos.count;
-    }
-  });
-
-  const xs = new Float32Array(total);
-  const zs = new Float32Array(total);
-  const v = new THREE.Vector3();
-  let i = 0;
-  scene.traverse((o) => {
-    const m = o as THREE.Mesh;
-    // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- see above
-    if (m.isMesh) {
-      const pos = m.geometry.getAttribute('position') as THREE.BufferAttribute | undefined;
-      if (!pos) return;
-      for (let k = 0; k < pos.count; k++) {
-        v.fromBufferAttribute(pos, k).applyMatrix4(m.matrixWorld);
-        xs[i] = v.x;
-        zs[i] = v.z;
-        i++;
-      }
-    }
-  });
-  return { xs, zs };
-}
-
-/**
- * Value at percentile `p` (0..1) of an ALREADY-SORTED-ASCENDING typed array.
- * Pure/allocation-free; caller owns the sort (see gatherAxisSamples call site —
- * sorted once per axis with an explicit numeric comparator, since a bare
- * `TypedArray.prototype.sort()` IS numeric-ascending by spec but an explicit
- * comparator removes any doubt on every JS engine this ships to).
- */
-function percentileOf(sorted: Float32Array, p: number): number {
-  const idx = Math.max(0, Math.min(sorted.length - 1, Math.floor(p * (sorted.length - 1))));
-  return sorted[idx];
-}
 
 /**
  * @param isMobile When true, city meshes are frustum-cullable (their instanced
@@ -314,40 +239,19 @@ export function CityDressing({ isMobile = false }: { isMobile?: boolean }): Reac
     box.getSize(size);
     box.getCenter(center);
 
-    // MOBILE-ONLY: percentile-trimmed fit bounds (see the CITY_TRIM_PCT const-
-    // block comment for the measured full-bbox-vs-dense-content analysis this is
-    // based on). Defaults to the plain bbox center/half-extents so DESKTOP is
-    // completely unaffected (isMobile gates the extra pass — desktop never
-    // allocates or sorts the sample arrays below).
-    let trimCenterX = center.x;
-    let trimCenterZ = center.z;
-    let trimHalfX = size.x / 2;
-    let trimHalfZ = size.z / 2;
-    if (isMobile) {
-      const { xs, zs } = gatherAxisSamples(scene);
-      xs.sort((a, b) => a - b);
-      zs.sort((a, b) => a - b);
-      const trimMinX = percentileOf(xs, CITY_TRIM_PCT);
-      const trimMaxX = percentileOf(xs, 1 - CITY_TRIM_PCT);
-      const trimMinZ = percentileOf(zs, CITY_TRIM_PCT);
-      const trimMaxZ = percentileOf(zs, 1 - CITY_TRIM_PCT);
-      trimCenterX = (trimMinX + trimMaxX) / 2;
-      trimCenterZ = (trimMinZ + trimMaxZ) / 2;
-      trimHalfX = (trimMaxX - trimMinX) / 2;
-      trimHalfZ = (trimMaxZ - trimMinZ) / 2;
-    }
+    // Recenter horizontally on the FULL bbox center — SAME for desktop and
+    // mobile. The mobile crop's cut edge now ends cleanly at Z_CUT with no
+    // sparse floor/road fringe (gen-city-mobile.mjs's edge-third crop requires
+    // an instance's MIN Z, not just its center, to clear Z_CUT, and the
+    // per-triangle clip on plain nodes has zero triangles straddling Z_CUT —
+    // see the MOBILE FIT SOURCE DATA note above), so there is no fringe left to
+    // trim around: the full Box3 IS the dense-content bound on every edge.
+    // Drop Y-min (ground) to local 0 so the outer group can place the ground
+    // precisely at CITY_Y.
+    scene.position.set(-center.x, -box.min.y, -center.z);
 
-    // Recenter horizontally: DESKTOP at the plain bbox center (trimCenterX/Z ===
-    // center.x/z when isMobile is false → byte-identical). MOBILE at the trimmed
-    // dense-content center, which is what actually removes the asymmetric gap —
-    // a data-driven substitute for a manual CITY_PAN nudge (see const block).
-    // Drop Y-min (ground) to local 0 from the FULL untrimmed box either way (the
-    // ground plane's lowest vertex is unaffected by the horizontal trim) so the
-    // outer group can place the ground precisely at CITY_Y.
-    scene.position.set(-trimCenterX, -box.min.y, -trimCenterZ);
-
-    // Compute per-axis half-extents from the recentered footprint (DESKTOP fit
-    // denominator — the plain, untrimmed bbox half-extents. Unchanged.)
+    // Per-axis half-extents from the recentered footprint — the single fit
+    // denominator used by BOTH desktop and mobile.
     const halfX = size.x / 2;
     const halfZ = size.z / 2;
 
@@ -365,16 +269,19 @@ export function CityDressing({ isMobile = false }: { isMobile?: boolean }): Reac
     // see scripts/gen-city-mobile.mjs step 1b). A PER-AXIS fit stretches the rectangle
     // to fill both the X and Z axes of the board center independently, accepting
     // rectangular distortion to eliminate empty strips: each axis is scaled to fill
-    // exactly CITY_FILL_HALF_MOBILE, using the TRIMMED half-extents above (not the
-    // inflated full-bbox ones) so the DENSE/visible content — not the sparse
-    // fringe — is what reaches the target. Y is tied to the X scale (not Z) to
-    // preserve vertical height and avoid distorting tower proportions. CITY_SCALE
-    // (XZ) and CITY_HEIGHT_SCALE (extra Y) layer on top — see the const block.
-    // Desktop reads scaleX/scaleY/scaleZ unmodified.
-    const finalScaleX = isMobile ? (CITY_FILL_HALF_MOBILE / (trimHalfX || 1)) * CITY_SCALE : scaleX;
-    const finalScaleZ = isMobile ? (CITY_FILL_HALF_MOBILE / (trimHalfZ || 1)) * CITY_SCALE : scaleZ;
+    // exactly CITY_FILL_HALF_MOBILE, using the FULL (clean, un-trimmed) half-extents
+    // above, since the outermost content on every edge — including the tall
+    // KINGS CROSS/PENTONVILLE/EUSTON side — IS the real dense content now, and
+    // mapping it to exactly CITY_FILL_HALF_MOBILE is what gives an even BAND on
+    // all 4 sides (see the const-block derivation for GRASS_HALF/BAND above). Y
+    // is tied to the X scale (not Z) to preserve vertical height and avoid
+    // distorting tower proportions. CITY_SCALE (XZ) and CITY_HEIGHT_SCALE (extra
+    // Y) layer on top — see the const block. Desktop reads scaleX/scaleY/scaleZ
+    // unmodified.
+    const finalScaleX = isMobile ? (CITY_FILL_HALF_MOBILE / (halfX || 1)) * CITY_SCALE : scaleX;
+    const finalScaleZ = isMobile ? (CITY_FILL_HALF_MOBILE / (halfZ || 1)) * CITY_SCALE : scaleZ;
     const finalScaleY = isMobile
-      ? (CITY_FILL_HALF_MOBILE / (trimHalfX || 1)) * CITY_SCALE * CITY_HEIGHT_SCALE
+      ? (CITY_FILL_HALF_MOBILE / (halfX || 1)) * CITY_SCALE * CITY_HEIGHT_SCALE
       : scaleY;
 
     return { object: scene, groupScale: [finalScaleX, finalScaleY, finalScaleZ] };
@@ -449,7 +356,7 @@ export function CityDressing({ isMobile = false }: { isMobile?: boolean }): Reac
             ref={grassRef}
             name="city-grass-square"
             // Centered at this group's local origin — the SAME point the city
-            // is recentered on (trimCenterX/Z above, with CITY_PAN_X/Z = 0) —
+            // is recentered on (the full bbox center.x/z above, with CITY_PAN_X/Z = 0) —
             // so the grass square and the (now-square) city footprint share a
             // center, giving an even BAND-wide margin on all 4 sides,
             // including the former cut edge. GRASS_Y_OFFSET (negative) drops
