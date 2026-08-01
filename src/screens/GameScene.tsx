@@ -73,14 +73,15 @@ const SHOW_HDRI_BACKGROUND = true;
  * MOBILE-ONLY sky/env intensities (see HdriSkyMobile + ProceduralSky). The mobile
  * branch REPLACES sky.webp with the procedural equirect for BOTH scene.background
  * AND scene.environment (IBL), so the whole mobile scene stays coherently lit with
- * no extra light rig. Env is TRIMMED to 0.62 (near desktop's 0.6 ballpark) so the
- * flat global IBL wash no longer flattens the scene — LESS indirect deepens the
- * KEY-baked shadows AND the city aoMap (both are relative to indirect), giving the
- * moody-cinematic contrast more room to READ while the board stays lit.
- * MOBILE_ENV_INTENSITY is a PRIMARY user nudge knob (trim first if the scene reads
- * hot). Desktop keeps ENV_INTENSITY/BG_INTENSITY on sky.webp, untouched.
+ * no extra light rig. REALISTIC/PBR: env is BUMPED to 0.95 so surfaces catch the
+ * procedural sky as subtle grazing-angle reflections (the MeshStandard BRDF's
+ * built-in fresnel-weighted IBL) and the whole scene reads as soft, even natural
+ * daylight — indirect now does the filling that a harsh warm key used to fake, so
+ * AO + baked shadows (not light contrast) supply the depth. MOBILE_ENV_INTENSITY
+ * is a PRIMARY user nudge knob (trim if the scene reads hot; raise for glossier
+ * env reflections). Desktop keeps ENV_INTENSITY/BG_INTENSITY on sky.webp, untouched.
  */
-const MOBILE_ENV_INTENSITY = 0.62;
+const MOBILE_ENV_INTENSITY = 0.95;
 const MOBILE_BG_INTENSITY = 1.0;
 
 /**
@@ -104,20 +105,21 @@ const CONTRAST = 0.12;
 
 /**
  * MOBILE-ONLY grade knobs — DECOUPLED from the desktop values above so the
- * moody-cinematic look can be tuned without touching the frozen desktop composer.
+ * realistic/PBR look can be tuned without touching the frozen desktop composer.
  * Passed to <MobileCrispBoardPipeline> instead of SATURATION/BRIGHTNESS/CONTRAST.
- * Moody-cinematic: SATURATION 0.22 (richer, not garish pop), BRIGHTNESS +0.04 (a
- * small high-key lift offsetting the ACES + vignette darkening — the PRIMARY
- * readability trim; drop toward 0.0 if too bright), and CONTRAST +0.12 (deeper
- * cinematic contrast — flips the old lifted-airy blacks to depth; postprocessing
- * BrightnessContrast divides by 1-contrast). Paired with ACES_FILMIC tone, the
- * teal-orange split, the vignette and the warm-key/cool-fill rig. Desktop
+ * REALISTIC/NATURAL (replacing the rejected cinematic grade): SATURATION 0.13
+ * (natural colour, not the old 0.22 boost — grounded, not garish), BRIGHTNESS
+ * +0.02 (a hair of lift so ACES doesn't read dim; PRIMARY readability trim, drop
+ * toward 0.0 if too bright), CONTRAST +0.05 (moderate/natural — not the old 0.12
+ * cinematic punch, not lifted-flat; postprocessing BrightnessContrast divides by
+ * 1-contrast). Paired with ACES_FILMIC tone, a NEUTRAL split-tone seam (no teal-
+ * orange), NO vignette, and the soft even neutral-daylight rig. Desktop
  * <HueSaturation>/<BrightnessContrast> still read SATURATION/BRIGHTNESS/CONTRAST →
  * byte-identical.
  */
-const MOBILE_SATURATION = 0.22;
-const MOBILE_BRIGHTNESS = 0.04;
-const MOBILE_CONTRAST = 0.12;
+const MOBILE_SATURATION = 0.13;
+const MOBILE_BRIGHTNESS = 0.02;
+const MOBILE_CONTRAST = 0.05;
 
 /**
  * MOBILE FXAA subpixel-blend quality (postprocessing FXAAEffect `subpixelQuality`
@@ -180,39 +182,42 @@ const AMBIENT_INTENSITY = 0.15;
 const HEMI_INTENSITY = 0.25;
 
 /**
- * ── MOBILE-ONLY WARM-KEY / COOL-FILL CINEMATIC LIGHT RIG ─────────────────────
- * A HIGH warm golden sun (KEY) vs a COOL-teal hemisphere ground bounce + a COOL
- * ambient floor drives the teal-orange drama: lit faces read warm, shadow faces
- * read cool-teal. FILL/RIM stay desktop-only (already dropped on mobile). These
- * twins replace the desktop hemisphere/ambient/KEY on mobile; desktop keeps its
- * KEY / HEMI / AMBIENT consts above, byte-identical.
+ * ── MOBILE-ONLY SOFT NEUTRAL-DAYLIGHT LIGHT RIG (REALISTIC/PBR) ──────────────
+ * Replaces the rejected warm-key / cool-fill cinematic rig with SOFT EVEN NATURAL
+ * DAYLIGHT: a near-white key vs a neutral daylight hemisphere + neutral ambient,
+ * at LOW key-to-fill contrast. Lit and shadow faces read as the SAME daylight, so
+ * there is no teal-orange split — AO + the baked KEY shadow (not harsh light
+ * contrast) supply the grounding/depth. FILL/RIM stay desktop-only (already
+ * dropped on mobile). These twins replace the desktop hemisphere/ambient/KEY on
+ * mobile; desktop keeps its KEY / HEMI / AMBIENT consts above, byte-identical.
  *
- * KEY (the sun): warm golden, positioned HIGH for short soft shadows. POSITION is
- * UNCHANGED [7,11,6] (horizontal dist √85 ≈ 9.22, elevation ≈ 50°) so the frozen
- * shadow bake stays valid (the ortho ±8 frame + bias/normalBias are tuned to this
- * angle; shadow maps store depth only → colour/intensity changes are shadow-safe).
- * Intensity bumped 1.5 → 1.7 for a deeper key-to-fill ratio (drama).
+ * KEY (the sun): neutral warm-WHITE (not the old warm golden), positioned HIGH
+ * for short soft shadows. POSITION is UNCHANGED [7,11,6] (horizontal dist √85 ≈
+ * 9.22, elevation ≈ 50°) so the frozen shadow bake stays valid (the ortho ±8
+ * frame + bias/normalBias are tuned to this angle; shadow maps store depth only →
+ * colour/intensity changes are shadow-safe). Intensity SOFTENED 1.7 → 1.3 for a
+ * lower, less dramatic key so the fill can even it out.
  *
- * FILL (hemi + ambient): COOLED and TRIMMED so it stops flattening — the ground
- * bounce fills the shadow-side undersides, so cooling it is what tints the shadow
- * faces teal. EXPOSURE: key 1.7 : (hemi 0.50 + ambient 0.24) ≈ 2.3:1 → deeper,
- * cooler shadow sides than the old ~1.8:1 while the board top still receives
- * KEY + hemi-sky + ambient + IBL so text stays readable. PRIMARY user nudge knobs:
- * MOBILE_ENV_INTENSITY, MOBILE_KEY_INTENSITY, MOBILE_HEMI_INTENSITY.
+ * FILL (hemi + ambient): NEUTRALISED and RAISED so the daylight is even. Hemi is a
+ * neutral daylight sky over a neutral (not cool-gray) ground bounce, bumped 0.50 →
+ * 0.62; ambient is neutral, 0.24 → 0.26. EXPOSURE: key 1.3 : (hemi 0.62 + ambient
+ * 0.26 + IBL) → a LOW key/fill contrast = soft, grounded, realistic daylight (vs
+ * the old ~2.3:1 drama). PRIMARY user nudge knobs: MOBILE_ENV_INTENSITY,
+ * MOBILE_KEY_INTENSITY, MOBILE_HEMI_INTENSITY.
  */
-const MOBILE_KEY_COLOR = '#ffd6a0'; // warm golden key
-const MOBILE_KEY_INTENSITY = 1.7;
+const MOBILE_KEY_COLOR = '#fff4ea'; // neutral warm-white daylight key
+const MOBILE_KEY_INTENSITY = 1.3;
 const MOBILE_KEY_POSITION: [number, number, number] = [7, 11, 6]; // UNCHANGED (frozen shadow bake)
-// HEMISPHERE: cool daylight sky over a COOL desaturated ground bounce. The cool
-// ground bounce is what tints the shadow-side undersides teal (reinforcing the
-// split-tone shadows + cool city rim). Trimmed so the fill stops flattening.
-const MOBILE_HEMI_SKY = '#cfe6f5';
-const MOBILE_HEMI_GROUND = '#a8b4bc';
-const MOBILE_HEMI_INTENSITY = 0.5;
-// AMBIENT: COOL fill, trimmed for deeper shadows so shadow sides read cool-teal
-// (not lifted-neutral) alongside the split-tone grade.
-const MOBILE_AMBIENT_COLOR = '#dbe6ee';
-const MOBILE_AMBIENT_INTENSITY = 0.24;
+// HEMISPHERE: neutral daylight sky over a NEUTRAL ground bounce (not cool-gray) so
+// the fill is even and colourless — soft realistic daylight, no shadow-side tint.
+// Raised so the key/fill contrast stays low.
+const MOBILE_HEMI_SKY = '#e0eaf3';
+const MOBILE_HEMI_GROUND = '#c6c4be';
+const MOBILE_HEMI_INTENSITY = 0.62;
+// AMBIENT: NEUTRAL soft even floor — just lifts pure black; AO supplies the
+// crevice darkening, so this stays low and colourless.
+const MOBILE_AMBIENT_COLOR = '#eef1f4';
+const MOBILE_AMBIENT_INTENSITY = 0.26;
 /**
  * MOBILE-ONLY frozen shadow-map resolution for the KEY sun. The map is baked
  * ONCE at load (autoUpdate off — see MobileCrispBoardPipeline), so 2048² costs a
@@ -642,16 +647,16 @@ export function GameScene() {
       {import.meta.env.DEV && isMobile && <RenderStatsReadout />}
       {/* Sky/ground hemisphere fill. DESKTOP: cool sky / olive ground, trimmed
           0.35 → 0.25 so AO + the rig shape the scene instead of a flat wash.
-          MOBILE twin: cool sky over a COOL desaturated ground bounce (cinematic;
-          the cool bounce tints the shadow-side undersides teal). */}
+          MOBILE twin: neutral daylight sky over a NEUTRAL ground bounce (realistic;
+          even colourless fill = soft natural daylight, no shadow-side tint). */}
       {!isMobile && <hemisphereLight args={['#cbe8f5', '#8a9a5b', HEMI_INTENSITY]} />}
       {isMobile && (
         <hemisphereLight args={[MOBILE_HEMI_SKY, MOBILE_HEMI_GROUND, MOBILE_HEMI_INTENSITY]} />
       )}
       {/* Ambient floor. DESKTOP: 0.15 neutral — AO now darkens crevices the flat
           ambient was washing out; this just lifts pure black. MOBILE twin: a
-          COOL fill, trimmed for deeper shadows so shadow sides read cool-teal
-          (not lifted-neutral) alongside the split-tone grade. */}
+          NEUTRAL soft even floor — AO supplies the crevice darkening, so this
+          stays low and colourless (realistic daylight, no shadow tint). */}
       {!isMobile && <ambientLight intensity={AMBIENT_INTENSITY} />}
       {isMobile && (
         <ambientLight color={MOBILE_AMBIENT_COLOR} intensity={MOBILE_AMBIENT_INTENSITY} />
@@ -773,11 +778,11 @@ export function GameScene() {
           MOBILE crisp-board pipeline (replaces the mobile <EffectComposer>).
           Renders the board texture at NATIVE dpr (razor-crisp text) in its own
           pass, composites it by depth over the reduced-dpr forest/city/tokens/sky
-          scene, and applies the moody-cinematic mobile grade — FXAA -> Sharpen
+          scene, and applies the realistic/neutral mobile grade — FXAA -> Sharpen
           (over the raw linear-HDR composite) -> ACES_FILMIC ToneMapping ->
-          HueSaturation -> BrightnessContrast -> WarmGrade (teal-orange split) ->
-          Vignette -> sRGB — ONCE over the composited linear image, so board and
-          scene are graded identically.
+          HueSaturation -> BrightnessContrast -> WarmGrade (NEUTRAL split-tone seam)
+          -> sRGB — ONCE over the composited linear image, so board and scene are
+          graded identically. No vignette (stylization dropped for the PBR look).
           The heavy scene stays at MOBILE_SCENE_DPR (1.5) for
           framerate; only the board (a cheap opaque raster) + composite + grade run
           at native dpr. Forest edges and tokens/houses correctly occlude the board
