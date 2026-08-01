@@ -1,6 +1,6 @@
-import { useEffect, useLayoutEffect, useMemo, useRef } from 'react';
+import { Suspense, useEffect, useLayoutEffect, useMemo, useRef } from 'react';
 import * as THREE from 'three';
-import { useGLTF, useKTX2 } from '@react-three/drei';
+import { useGLTF, useTexture } from '@react-three/drei';
 import { CITY_LAYER } from './positions';
 import { getDebugVisibility, subscribeDebugVisibility } from '../dev/debugVisibility';
 
@@ -228,14 +228,10 @@ const DRACO_PATH = '/draco/';
 // program: NO new render pass, render target, draw call or transparency. Bound
 // only on mobile, by <CityAO> below. Desktop (city.glb) never references it.
 //
-// PRIMARY variant: GPU-compressed KTX2 (UASTC + zstd + mipmaps, ~1 MB VRAM),
-// transcoded by the self-hosted basis transcoder in /public/basis/ — the SAME
-// pipeline as board.mobile.ktx2. A grayscale WEBP fallback ships alongside it
-// at /images/city.mobile.ao.webp (~4 MB VRAM); to swap it in, load it with
-// useTexture instead and set flipY=false at runtime (webp defaults flipY=true,
-// whereas the KTX2 is already false — matching the glTF TEXCOORD_1 convention).
-const CITY_AO_URL_MOBILE = '/images/city.mobile.ao.ktx2';
-const BASIS_PATH = '/basis/';
+// Variant: grayscale WEBP loaded via useTexture (no transcoder needed, no KTX2
+// transcode risk on iOS Safari). Loaded with useTexture and flipY=false,
+// colorSpace=NoColorSpace set at runtime to match the glTF TEXCOORD_1 convention.
+const CITY_AO_URL_MOBILE = '/images/city.mobile.ao.webp';
 
 // TUNABLE — how strongly the baked AO darkens the city's INDIRECT/ambient term.
 // Maps directly to three's aoMapIntensity, which scales how far below 1.0 the
@@ -341,12 +337,12 @@ function computeBuildingBBoxXZ(
 /**
  * MOBILE-ONLY child — binds the baked AO lightmap onto the city BUILDINGS
  * material. Split into its own component (rather than calling the AO loader hook
- * inline in CityDressing) mirrors the repo's BoardTiles WebGL/KTX2 split and
+ * inline in CityDressing) mirrors the repo's BoardTiles WebGL split and
  * GameScene's HdriSky split, for two reasons:
  *
- *   1. HOOKS: useKTX2 SUSPENDS and cannot be called conditionally after
+ *   1. HOOKS: useTexture SUSPENDS and cannot be called conditionally after
  *      CityDressing's mobile/desktop fork; calling it unconditionally would
- *      needlessly fetch the ~1 MB AO file on desktop. Mounting <CityAO> only
+ *      needlessly fetch the ~4 MB AO file on desktop. Mounting <CityAO> only
  *      when isMobile keeps the DESKTOP path hook-free (byte-identical) and the
  *      AO fetch never happens there.
  *   2. PERF-NEUTRAL: it receives the already-cloned `object` and just assigns a
@@ -358,16 +354,14 @@ function computeBuildingBBoxXZ(
  *      one-time cost is a second shader-program compile (buildings-with-aoMap vs
  *      cars-without) — already paid once by ShaderWarmup's gl.compileAsync.
  *
- * Renders nothing. Suspends inside the SAME Suspense boundary that already wraps
- * <CityDressing> (in GameScene), so the city glb and its AO resolve together and
- * the aoMapped program is warmed before first paint (no mid-flight recompile).
+ * Renders nothing. Suspends inside its own Suspense boundary (wraps in
+ * GameScene), isolated from the city glb's boundary, so a slow/failed AO load
+ * can never blank the rest of the scene.
  */
 function CityAO({ object }: { object: THREE.Object3D }): React.JSX.Element | null {
-  // PRIMARY: GPU-compressed KTX2, transcoded by the self-hosted basis decoder in
-  // /public/basis/ (KTX2Loader.setTranscoderPath + detectSupport, both wired by
-  // useKTX2). KTX2Loader already sets flipY=false + linear colorSpace from the
-  // file's linear OETF; we re-assert both below to be explicit and swap-safe.
-  const aoTex = useKTX2(CITY_AO_URL_MOBILE, BASIS_PATH);
+  // Grayscale WEBP loaded via useTexture (no transcoder, no KTX2 transcode risk).
+  // Set flipY=false + linear colorSpace below to match the glTF TEXCOORD_1 convention.
+  const aoTex = useTexture(CITY_AO_URL_MOBILE);
 
   useLayoutEffect(() => {
     // AO is DATA, not color, and its lightmap UVs live in TEXCOORD_1.
@@ -599,10 +593,10 @@ export function CityDressing({ isMobile = false }: { isMobile?: boolean }): Reac
     >
       <primitive object={object} />
       {/* MOBILE-ONLY: bind the baked AO lightmap onto the buildings material.
-          Rendered only when isMobile so useKTX2 never fetches on desktop and the
-          desktop material path stays byte-identical. Suspends inside GameScene's
-          existing Suspense boundary alongside the city glb. */}
-      {isMobile && <CityAO object={object} />}
+          Rendered only when isMobile so useTexture never fetches on desktop and the
+          desktop material path stays byte-identical. Wrapped in its own Suspense
+          boundary so a slow/failed AO load can never blank the rest of the scene. */}
+      {isMobile && (<Suspense fallback={null}><CityAO object={object} /></Suspense>)}
       {isMobile && (
         // MOBILE-ONLY: inverse-scale wrapper. The outer group's `scale` prop
         // (groupScale, non-uniform per axis) is what maps the city's
@@ -654,11 +648,11 @@ const preloadMobile =
   window.matchMedia('(max-width: 768px), (max-height: 600px)').matches;
 if (preloadMobile) {
   useGLTF.preload(CITY_URL_MOBILE, DRACO_PATH);
-  // Kick the AO ktx2 fetch in parallel with the city glb (mobile only) so it is
+  // Kick the AO webp fetch in parallel with the city glb (mobile only) so it is
   // usually cached by the time <CityAO> mounts — overlapping the two loads keeps
   // the sequential glb→AO suspend from adding visible latency. Desktop never
   // fetches it.
-  useKTX2.preload(CITY_AO_URL_MOBILE, BASIS_PATH);
+  useTexture.preload(CITY_AO_URL_MOBILE);
 } else {
   useGLTF.preload(CITY_URL);
 }
