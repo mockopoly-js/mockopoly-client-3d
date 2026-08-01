@@ -24,7 +24,6 @@ import { MobileRenderController } from '../board/MobileRenderController';
 import { MobileCrispBoardPipeline } from '../board/MobileCrispBoardPipeline';
 import { RenderStatsReadout } from '../board/RenderStatsReadout';
 import { BOARD_ROTATION } from '../board/positions';
-import { getProceduralSky } from '../board/ProceduralSky';
 import { useIsMobile } from '../ui/useIsMobile';
 
 /**
@@ -70,21 +69,29 @@ const BG_INTENSITY = 1.0;
 const SHOW_HDRI_BACKGROUND = true;
 
 /**
- * MOBILE-ONLY sky/env intensities (see HdriSkyMobile + ProceduralSky). The mobile
- * branch REPLACES sky.webp with the procedural equirect for BOTH scene.background
- * AND scene.environment (IBL). SIDE-LIGHT DEPTH: env is RAISED 0.60 → 0.75 back
- * toward a natural daylight fill. The earlier hard env cut (0.60) was paired with a
- * near-overhead sun and was crushing the shaded/away faces muddy-dark; now that the
- * depth comes from the LOWERED sun DIRECTION (see MOBILE_KEY_POSITION — a raking
- * ~31° side-light that gives every box a bright side + a dark side) the fill no
- * longer has to be starved to get form. Env at 0.75 lifts the shaded side to a
- * readable mid-tone (fresnel-weighted IBL on the MeshStandard BRDF) while the strong
- * directional KEY + longer baked shadow still carry the shaping. MOBILE_ENV_INTENSITY
- * is a PRIMARY user nudge knob (raise toward 0.95 to soften/flatten, drop toward
- * 0.60 for deeper directional contrast). Desktop keeps ENV_INTENSITY/BG_INTENSITY
- * on sky.webp, untouched.
+ * MOBILE-ONLY sky/env intensities (see HdriSkyMobile). REALISM SWAP: the mobile
+ * branch now assigns the SAME real equirect /images/sky.webp desktop uses (read-only
+ * reuse of the shared asset — the file and HdriSkyDesktop are untouched) to BOTH
+ * scene.background AND scene.environment (IBL), REPLACING the old flat 16×512
+ * procedural gradient. A real daylight equirect gives directional sky IBL
+ * (blue-from-above, warm-from-horizon, sun-ward brightening) + believable reflection
+ * variation instead of the gradient's uniform wash — the single biggest fix for the
+ * "game-y / flat" mobile look.
+ *
+ * INTENSITY RETUNE: the real sky's average luminance (blue sky + darker ground) is
+ * LOWER than the near-white procedural gradient, so env is RAISED 0.75 → 1.0 so the
+ * ambient fill does not drop when the source swaps. This works WITH the new
+ * MOBILE_EXPOSURE lever (a global multiplicative midtone lift, pre-tonemap): env
+ * intensity supplies the shaded-side/ambient lift + directional realism, exposure
+ * lifts the whole range. MOBILE_ENV_INTENSITY is a PRIMARY user nudge knob (TUNABLE
+ * 0.85–1.2: raise to soften/flatten the shade back up, drop for deeper directional
+ * contrast). LDR CAVEAT: sky.webp is 8-bit, so its 'sun' region caps at ~1.0 (no HDR
+ * hotspot in reflections) — that is fine and standard: the directional KEY light
+ * (MOBILE_KEY_INTENSITY) supplies the HDR sun punch, the LDR sky supplies directional
+ * ambient + reflection shape. Desktop keeps ENV_INTENSITY/BG_INTENSITY on the same
+ * sky.webp, untouched.
  */
-const MOBILE_ENV_INTENSITY = 0.75;
+const MOBILE_ENV_INTENSITY = 1.0;
 const MOBILE_BG_INTENSITY = 1.0;
 
 /**
@@ -108,26 +115,50 @@ const CONTRAST = 0.12;
 
 /**
  * MOBILE-ONLY grade knobs — DECOUPLED from the desktop values above so the
- * realistic-depth look can be tuned without touching the frozen desktop composer.
- * Passed to <MobileCrispBoardPipeline> instead of SATURATION/BRIGHTNESS/CONTRAST.
- * SIDE-LIGHT DEPTH (easing the earlier contrast crush): CONTRAST 0.11 → 0.05 — the
- * steep S-curve was buried the sub-0.5 shadows muddy-dark (1/0.89 = ×1.124); eased
- * to a gentle 1/0.95 = ×1.053 so the darks are no longer crushed. Depth is now
- * carried by the LOWERED sun DIRECTION + longer baked shadow (see MOBILE_KEY_POSITION),
- * so the grade no longer has to manufacture contrast. SATURATION stays 0.15 (top of
- * the natural 0.13–0.15 band — keeps colour from washing out now that contrast is
- * eased; not the old 0.22 garish boost). BRIGHTNESS 0.0 → +0.02 — a small additive
- * lift so the darkest shaded side never goes muddy (a shaded-wall pixel at LDR 0.30
- * lands ~0.31 instead of 0.275; a 0.75 highlight is essentially unchanged), which
- * un-crushes the darks without touching the lit side. This is the PRIMARY readability
- * trim. Paired with ACES_FILMIC tone, a NEUTRAL split-tone seam (no teal-orange), NO
+ * realistic look can be tuned without touching the frozen desktop composer. Passed
+ * to <MobileCrispBoardPipeline> instead of SATURATION/BRIGHTNESS/CONTRAST.
+ *
+ * REBALANCE for the exposure + real-sky lift (the two PRIMARY too-dark fixes:
+ * MOBILE_EXPOSURE below multiplies linear midtones up pre-tonemap, and the real
+ * sky.webp env raises directional ambient — see MOBILE_ENV_INTENSITY). Because the
+ * multiplicative pre-exposure now does the lifting, these are trimmed to finishing
+ * nudges, not drivers:
+ * - BRIGHTNESS +0.02 → 0.0 — the old +0.02 was an ADDITIVE black-lift to un-crush
+ *   the shaded side. With the pre-exposure MULTIPLY now lifting the whole range, an
+ *   additive offset double-lifts the floor and risks milky/washed blacks; a multiply
+ *   preserves the black point far better, so let exposure do the lifting.
+ * - CONTRAST 0.05 → 0.08 — the brighter exposure + ACES rolloff soften midtone snap
+ *   slightly; a gentle bump (1/0.92 = ×1.087, still far below the old crushing
+ *   ×1.124) restores punch without burying the darks.
+ * - SATURATION 0.15 — HELD: a brighter, real-sky env already reads slightly more
+ *   saturated; only drop toward 0.12 on-device if it looks garish.
+ * Tune ON-DEVICE together with MOBILE_EXPOSURE (1.25–1.5) and MOBILE_ENV_INTENSITY
+ * (0.85–1.2) — exposure + real env are the primary fixes; this is a finishing trim.
+ * Paired with ACES_FILMIC tone, a NEUTRAL split-tone seam (no teal-orange), NO
  * vignette, and the strong directional daylight rig. Desktop
  * <HueSaturation>/<BrightnessContrast> still read SATURATION/BRIGHTNESS/CONTRAST →
  * byte-identical.
  */
 const MOBILE_SATURATION = 0.15;
-const MOBILE_BRIGHTNESS = 0.02;
-const MOBILE_CONTRAST = 0.05;
+const MOBILE_BRIGHTNESS = 0.0;
+const MOBILE_CONTRAST = 0.08;
+
+/**
+ * MOBILE-ONLY PRE-EXPOSURE — the PRIMARY "too-dark" fix. A linear-HDR MULTIPLY
+ * applied by <MobileCrispBoardPipeline>'s grade pass BETWEEN Sharpen and the ACES
+ * ToneMapping (see PreExposureEffect), i.e. on the raw linear composite BEFORE the
+ * tonemap. ACES/AGX compress midtones without exposure compensation, so the scene
+ * reads DIM despite the light rig; scaling linear radiance up here lifts midtones
+ * while ACES rolls the boosted highlights off near white (its natural shoulder) —
+ * midtones brighten, highlights hold, and a MULTIPLY preserves the black point far
+ * better than the additive brightness offset it replaces. This is a global
+ * multiplicative lift; MOBILE_ENV_INTENSITY adds the shaded-side/ambient + directional
+ * realism — they work together. 1.0 = unchanged. STARTING VALUE 1.35; TUNABLE
+ * on-device 1.25–1.5. PERF-NEUTRAL: one uniform read + one multiply per fragment,
+ * merged into the already-present single grade EffectPass (no new pass/RT). Desktop
+ * has no equivalent (its EffectComposer is untouched) → byte-identical.
+ */
+const MOBILE_EXPOSURE = 1.35;
 
 /**
  * MOBILE FXAA subpixel-blend quality (postprocessing FXAAEffect `subpixelQuality`
@@ -409,22 +440,39 @@ function HdriSkyDesktop() {
 }
 
 /**
- * MOBILE sky/env — bright daylight, ASSET-FREE. Loads NO texture (no Suspense);
- * instead it assigns the module-singleton procedural bright-daylight equirect
- * (ProceduralSky) to BOTH scene.background (visible sky) AND scene.environment
- * (IBL). Using the daylight equirect as the environment lights ALL
- * ambient/reflection with a coherent high-key daylight with zero extra light rig,
- * and — because scene.environment is NOT layer gated — the board + city passes
- * inherit it identically in the 3-pass mobile composite. Replaces sky.webp on
- * mobile only; desktop keeps sky.webp untouched.
+ * MOBILE sky/env — REAL equirect daylight HDRI. Loads the SAME shared
+ * /images/sky.webp desktop already uses (read-only reuse — the file and
+ * HdriSkyDesktop's code path are untouched, so this stays compliant with the
+ * mobile-asset-variant discipline: no shared/desktop asset is modified) and assigns
+ * it to BOTH scene.background (visible sky) AND scene.environment (IBL). This
+ * REPLACES the old flat 16×512 procedural gradient: a real daylight equirect gives
+ * directional sky IBL + believable reflection variation instead of a uniform wash —
+ * the biggest fix for the flat/game-y mobile look. Because scene.environment is NOT
+ * layer gated, the board + city passes inherit it identically in the 3-pass mobile
+ * composite. Texture setup mirrors HdriSkyDesktop (EquirectangularReflectionMapping,
+ * SRGBColorSpace, trilinear mips + max anisotropy). Suspends via useTexture exactly
+ * like desktop — the existing outer <Suspense> around <HdriSky> already covers it.
+ * VRAM cost only (~a few MB for the 2048×1024 webp + mipmaps, already resident for
+ * desktop's identical load); NO new pass/RT/PMREM-at-runtime — materials already
+ * sample scene.environment for IBL, so this is a texture SWAP with the same
+ * per-fragment sample count. Desktop keeps sky.webp untouched.
  */
 function HdriSkyMobile() {
   const scene = useThree((s) => s.scene);
+  const gl = useThree((s) => s.gl);
+  const tex = useTexture('/images/sky.webp');
   useEffect(() => {
-    const grad = getProceduralSky();
-    scene.environment = grad;
+    tex.mapping = THREE.EquirectangularReflectionMapping;
+    tex.colorSpace = THREE.SRGBColorSpace;
+    // Crisper sky: trilinear mip filtering + max anisotropy (mirrors desktop).
+    tex.magFilter = THREE.LinearFilter;
+    tex.minFilter = THREE.LinearMipmapLinearFilter;
+    tex.generateMipmaps = true;
+    tex.anisotropy = gl.capabilities.getMaxAnisotropy();
+    tex.needsUpdate = true;
+    scene.environment = tex;
     scene.environmentIntensity = MOBILE_ENV_INTENSITY;
-    scene.background = grad;
+    scene.background = tex;
     scene.backgroundIntensity = MOBILE_BG_INTENSITY;
     // Under frameloop="always" the imperatively-set scene.environment/background
     // paints on the next frame automatically — no render poke needed.
@@ -432,15 +480,16 @@ function HdriSkyMobile() {
       scene.environment = null;
       scene.background = null;
     };
-  }, [scene]);
+  }, [tex, scene, gl]);
   return null;
 }
 
 /**
  * Parent selector — renders exactly ONE of the two sibling sky components based
- * on isMobile so each hook (useTexture on desktop, none on mobile) is called
- * unconditionally within its component (rules-of-hooks safe across resize /
- * orientation flips). Mirrors the BoardTiles WebGL/KTX2 split.
+ * on isMobile so each hook (both now useTexture on the SAME /images/sky.webp) is
+ * called unconditionally within its component (rules-of-hooks safe across resize /
+ * orientation flips). The branches differ only in intensities (MOBILE_*), never in
+ * the shared asset or desktop's code path. Mirrors the BoardTiles WebGL/KTX2 split.
  */
 function HdriSky() {
   const isMobile = useIsMobile();
@@ -766,11 +815,12 @@ export function GameScene() {
         (suspends), sets EquirectangularReflectionMapping + SRGBColorSpace, then
         assigns scene.environment (ENV_INTENSITY IBL) and, when
         SHOW_HDRI_BACKGROUND is true, scene.background (BG_INTENSITY) — deterministic
-        vs. drei <Environment files=...>. MOBILE (HdriSkyMobile): loads NO texture;
-        assigns the procedural warm-gradient equirect (ProceduralSky) to both
-        scene.background and scene.environment (MOBILE_*_INTENSITY) for the
-        bright-daylight look with zero new asset. The outer Suspense is inert for the
-        mobile branch (it never suspends).
+        vs. drei <Environment files=...>. MOBILE (HdriSkyMobile): loads the SAME
+        /images/sky.webp (read-only reuse of the shared asset; desktop's path
+        untouched) and assigns it to both scene.background and scene.environment
+        (MOBILE_*_INTENSITY) — a real daylight equirect for directional sky IBL +
+        real reflections instead of the old flat gradient. Both branches suspend via
+        useTexture, so the outer Suspense covers either.
       */}
       <Suspense fallback={null}>
         <HdriSky />
@@ -834,6 +884,7 @@ export function GameScene() {
           saturation={MOBILE_SATURATION}
           brightness={MOBILE_BRIGHTNESS}
           contrast={MOBILE_CONTRAST}
+          exposure={MOBILE_EXPOSURE}
           fxaaSubpixelQuality={MOBILE_FXAA_SUBPIXEL_QUALITY}
           sceneDpr={MOBILE_SCENE_DPR}
           cityDpr={MOBILE_CITY_DPR}

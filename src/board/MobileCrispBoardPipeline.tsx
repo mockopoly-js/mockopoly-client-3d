@@ -13,6 +13,7 @@ import {
 import { FullScreenQuad } from 'three-stdlib';
 import { SharpenEffectImpl } from '../screens/SharpenEffect';
 import { WarmGradeEffectImpl } from '../screens/WarmGradeEffect';
+import { PreExposureEffectImpl } from '../screens/PreExposureEffect';
 import { useGameStore } from '../state/gameStore';
 import { BOARD_LAYER, CITY_LAYER } from './positions';
 
@@ -60,6 +61,7 @@ import { BOARD_LAYER, CITY_LAYER } from './positions';
  *   5. GRADE       — the reused mobile grade EffectPass over compositeFBO → canvas
  *                    (native): FXAA → Sharpen (over the RAW linear-HDR composite, so
  *                    their neighbour taps and centre share one colour space) →
+ *                    PreExposure (linear-HDR midtone lift, still pre-tonemap) →
  *                    ACES_FILMIC ToneMapping → HueSaturation → BrightnessContrast →
  *                    WarmGrade (NEUTRAL/identity split-tone seam) → sRGB, encoded
  *                    once. (No vignette — the realistic look drops all stylization.)
@@ -85,6 +87,12 @@ interface MobileCrispBoardPipelineProps {
   brightness: number;
   /** BrightnessContrast `contrast` — same value the mobile composer used. */
   contrast: number;
+  /**
+   * PreExposure `uExposure` — a linear-HDR MULTIPLY applied PRE-tonemap (between
+   * Sharpen and the ACES ToneMapping) to lift midtones out of the too-dark ACES
+   * compression; 1.0 = unchanged. See PreExposureEffect. MOBILE-ONLY.
+   */
+  exposure: number;
   /** FXAA `subpixelQuality` — same value the mobile composer used. */
   fxaaSubpixelQuality: number;
   /**
@@ -207,6 +215,7 @@ export function MobileCrispBoardPipeline({
   saturation,
   brightness,
   contrast,
+  exposure,
   fxaaSubpixelQuality,
   sceneDpr,
   cityDpr,
@@ -321,6 +330,11 @@ export function MobileCrispBoardPipeline({
     // its merged shader in initialize().
     fxaa.subpixelQuality = fxaaSubpixelQuality;
     const sharpen = new SharpenEffectImpl();
+    // Pre-exposure — a linear-HDR MULTIPLY inserted BETWEEN sharpen and the ACES
+    // tonemap (see below + PreExposureEffect). It lifts linear midtones out of the
+    // too-dark ACES compression; ACES then rolls the boosted highlights off near
+    // white. Non-convolution Effect → merges into this same pass (zero new pass/RT).
+    const preExposure = new PreExposureEffectImpl({ exposure });
     // EFFECT ORDER — FXAA + SHARPEN FIRST, then tonemap + grade. WHY: in a merged
     // postprocessing EffectPass every effect shares ONE `inputBuffer` uniform = the
     // pass input (this linear-HDR composite FBO), so FXAA's edge samples and
@@ -344,6 +358,7 @@ export function MobileCrispBoardPipeline({
       camera,
       fxaa,
       sharpen,
+      preExposure,
       toneMapping,
       hueSat,
       brightnessContrast,
@@ -364,7 +379,7 @@ export function MobileCrispBoardPipeline({
       quad,
       gradePass,
     };
-  }, [camera, saturation, brightness, contrast, fxaaSubpixelQuality, depthBias, cityDepthBias]);
+  }, [camera, saturation, brightness, contrast, exposure, fxaaSubpixelQuality, depthBias, cityDepthBias]);
 
   // Last native pixel size the grade pass was sized to (its FXAA/Sharpen texelSize).
   const lastNative = useRef({ w: 0, h: 0 });
