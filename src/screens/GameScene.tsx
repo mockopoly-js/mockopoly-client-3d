@@ -72,19 +72,19 @@ const SHOW_HDRI_BACKGROUND = true;
 /**
  * MOBILE-ONLY sky/env intensities (see HdriSkyMobile + ProceduralSky). The mobile
  * branch REPLACES sky.webp with the procedural equirect for BOTH scene.background
- * AND scene.environment (IBL). REALISTIC-DEPTH: env is TRIMMED 0.95 → 0.60 — the
- * high 0.95 IBL was an even, omnidirectional wash that FILLED the shadow/away faces
- * as brightly as the lit faces, which is exactly what made the scene read flat
- * ("one-dimensional, no depth"). Cutting env fill hands the shaping back to the
- * strong directional KEY sun (MOBILE_KEY_INTENSITY) + the baked KEY shadow: away
- * faces and crevices now fall into shade instead of being lifted by IBL, so form
- * and shadows READ. Env stays non-zero so surfaces still catch a subtle
- * grazing-angle sky reflection (the MeshStandard BRDF's fresnel-weighted IBL) and
- * pure-black is avoided. MOBILE_ENV_INTENSITY is a PRIMARY user nudge knob (raise
- * toward 0.95 to flatten/soften, drop for even deeper directional contrast).
- * Desktop keeps ENV_INTENSITY/BG_INTENSITY on sky.webp, untouched.
+ * AND scene.environment (IBL). SIDE-LIGHT DEPTH: env is RAISED 0.60 → 0.75 back
+ * toward a natural daylight fill. The earlier hard env cut (0.60) was paired with a
+ * near-overhead sun and was crushing the shaded/away faces muddy-dark; now that the
+ * depth comes from the LOWERED sun DIRECTION (see MOBILE_KEY_POSITION — a raking
+ * ~31° side-light that gives every box a bright side + a dark side) the fill no
+ * longer has to be starved to get form. Env at 0.75 lifts the shaded side to a
+ * readable mid-tone (fresnel-weighted IBL on the MeshStandard BRDF) while the strong
+ * directional KEY + longer baked shadow still carry the shaping. MOBILE_ENV_INTENSITY
+ * is a PRIMARY user nudge knob (raise toward 0.95 to soften/flatten, drop toward
+ * 0.60 for deeper directional contrast). Desktop keeps ENV_INTENSITY/BG_INTENSITY
+ * on sky.webp, untouched.
  */
-const MOBILE_ENV_INTENSITY = 0.6;
+const MOBILE_ENV_INTENSITY = 0.75;
 const MOBILE_BG_INTENSITY = 1.0;
 
 /**
@@ -110,24 +110,24 @@ const CONTRAST = 0.12;
  * MOBILE-ONLY grade knobs — DECOUPLED from the desktop values above so the
  * realistic-depth look can be tuned without touching the frozen desktop composer.
  * Passed to <MobileCrispBoardPipeline> instead of SATURATION/BRIGHTNESS/CONTRAST.
- * REALISTIC-DEPTH (reversing the flat, lifted 0.05-contrast grade): CONTRAST 0.05 →
- * 0.11 — the moderate S-curve reinforces the directional light rig by deepening the
- * shadow side and letting the lit side pop, so the tone-mapped image carries the
- * same depth the rig now casts (a lifted-flat 0.05 curve greyed the two together);
- * postprocessing BrightnessContrast divides by 1-contrast. SATURATION 0.13 → 0.15
- * (a hair richer — grounded daylight colour, still not the old 0.22 garish boost).
- * BRIGHTNESS +0.02 → 0.0 — the old lift was there because the flat rig read dim;
- * the strong KEY sun now carries the exposure, so brightness returns to neutral to
- * keep the shadow side DEEP (lifting it back would re-flatten the depth). This is
- * the PRIMARY readability trim — nudge up only if the shadow side crushes on-device.
- * Paired with ACES_FILMIC tone, a NEUTRAL split-tone seam (no teal-orange), NO
+ * SIDE-LIGHT DEPTH (easing the earlier contrast crush): CONTRAST 0.11 → 0.05 — the
+ * steep S-curve was buried the sub-0.5 shadows muddy-dark (1/0.89 = ×1.124); eased
+ * to a gentle 1/0.95 = ×1.053 so the darks are no longer crushed. Depth is now
+ * carried by the LOWERED sun DIRECTION + longer baked shadow (see MOBILE_KEY_POSITION),
+ * so the grade no longer has to manufacture contrast. SATURATION stays 0.15 (top of
+ * the natural 0.13–0.15 band — keeps colour from washing out now that contrast is
+ * eased; not the old 0.22 garish boost). BRIGHTNESS 0.0 → +0.02 — a small additive
+ * lift so the darkest shaded side never goes muddy (a shaded-wall pixel at LDR 0.30
+ * lands ~0.31 instead of 0.275; a 0.75 highlight is essentially unchanged), which
+ * un-crushes the darks without touching the lit side. This is the PRIMARY readability
+ * trim. Paired with ACES_FILMIC tone, a NEUTRAL split-tone seam (no teal-orange), NO
  * vignette, and the strong directional daylight rig. Desktop
  * <HueSaturation>/<BrightnessContrast> still read SATURATION/BRIGHTNESS/CONTRAST →
  * byte-identical.
  */
 const MOBILE_SATURATION = 0.15;
-const MOBILE_BRIGHTNESS = 0.0;
-const MOBILE_CONTRAST = 0.11;
+const MOBILE_BRIGHTNESS = 0.02;
+const MOBILE_CONTRAST = 0.05;
 
 /**
  * MOBILE FXAA subpixel-blend quality (postprocessing FXAAEffect `subpixelQuality`
@@ -190,62 +190,75 @@ const AMBIENT_INTENSITY = 0.15;
 const HEMI_INTENSITY = 0.25;
 
 /**
- * ── MOBILE-ONLY STRONG DIRECTIONAL DAYLIGHT RIG (REALISTIC-DEPTH) ─────────────
- * REVERSES the flat "soft even daylight" rig (its LOW key-to-fill contrast lit the
- * away/shadow faces as brightly as the sunlit faces, so the low-poly geometry read
- * one-dimensional with no depth — the reported regression). The fix is a HIGH
- * key-to-fill contrast: a STRONG directional KEY sun over a much dimmer neutral
- * fill (hemi + ambient + IBL). Now a face pointing at the sun is bright, a face
- * turned away falls into shade, and the baked KEY shadow lands dark against the
- * lit ground — so form, shadows, and face-to-face tonal separation all READ as
- * depth (even on low-poly). The fill stays NEUTRAL (no teal-orange split — that
- * cinematic look was separately rejected); depth here comes from VALUE contrast,
- * not hue. FILL/RIM stay desktop-only (already dropped on mobile). These twins
+ * ── MOBILE-ONLY DIRECTIONAL SIDE-LIGHT DAYLIGHT RIG (SIDE-LIGHT DEPTH) ─────────
+ * Fixes flat-reading low-poly CITY BOXES (their vertical walls only differentiate
+ * when the sun rakes from a LOWER/SIDE angle — a near-overhead sun lit all four
+ * walls ~equally). The fix is a LOWERED raking KEY sun (~31° elevation) over a
+ * NATURAL neutral fill (hemi + ambient + IBL). Now a wall facing the sun is bright,
+ * the wall turned away falls into shade, and the (longer) baked KEY shadow lands
+ * dark against the lit ground — so every box reads a bright side + mid top + dark
+ * side, and form/shadows/face-to-face separation all READ as depth (even on
+ * low-poly). Depth comes from the sun DIRECTION, NOT from crushing the fill dark
+ * (the earlier hard fill cut is reversed — it was making the shaded sides muddy).
+ * The fill stays NEUTRAL (no teal-orange split — that cinematic look was separately
+ * rejected). FILL/RIM stay desktop-only (already dropped on mobile). These twins
  * replace the desktop hemisphere/ambient/KEY on mobile; desktop keeps its KEY /
  * HEMI / AMBIENT consts above, byte-identical.
  *
- * KEY (the sun): neutral warm-WHITE, positioned HIGH for short soft shadows.
- * POSITION is UNCHANGED [7,11,6] (horizontal dist √85 ≈ 9.22, elevation ≈ 50°) so
- * the frozen shadow bake stays valid (the ortho ±8 frame + bias/normalBias are
- * tuned to this angle; shadow maps store depth only → colour/intensity changes are
- * shadow-safe, NO re-bake needed). Intensity RAISED 1.3 → 2.0 so the sun clearly
- * dominates the fill and drives the shading.
+ * KEY (the sun): neutral warm-WHITE, LOWERED to a raking side-light so boxy walls
+ * differentiate. POSITION [7,11,6] → [7,5.5,6] — x/z (azimuth) UNCHANGED, only Y
+ * dropped 11 → 5.5 (horizontal dist √85 ≈ 9.22, elevation atan(5.5/9.22) ≈ 31° —
+ * down from ≈50°). At ≈50° the top face (N·L 0.766) out-lit every vertical wall
+ * (0.42–0.64) so boxes read as bright-topped slabs; at ≈31° the sun-facing wall
+ * (N·L 0.859) now EXCEEDS the top (0.512) while the averted wall clamps to 0 — every
+ * box gets a bright side + a mid top + a dark side, the raking break an overhead sun
+ * cannot make. Because POSITION moved, the frozen shadow map RE-BAKES ONCE at load
+ * from the light's live world matrix (MobileCrispBoardPipeline, autoUpdate off — no
+ * per-frame cost, no offline step); the ortho frame is WIDENED ±8 → ±12 below to
+ * contain the ~2× longer throw. Intensity 2.0 → 2.1 so the lit side still dominates
+ * and to recover the up-face exposure the lower sun loses to cosine (top N·L 0.766 →
+ * 0.512); intensity changes are shadow-safe (depth-only map).
  *
- * FILL (hemi + ambient): CUT so it lifts the shade without erasing it. Hemi is a
- * neutral daylight sky over a slightly darker warm ground bounce, trimmed 0.62 →
- * 0.30; ambient is neutral, trimmed 0.26 → 0.12. EXPOSURE MATH: an UP-facing
- * surface (board top, ground, canopy) receives key ~2.0 + hemi(sky) 0.30 + ambient
- * 0.12 + env ~0.60 ≈ 3.0 — essentially the SAME total the old rig gave it (≈3.1),
- * so the board TEXT stays as readable/bright as before. An AWAY/shadow face
- * receives NO key, only fill 0.30 + 0.12 + 0.60 ≈ 1.0 — DOWN 44% from the old
- * ≈1.83. So the flat top surfaces hold their exposure while the vertical/shadow
- * faces darken → lit:shadow ≈ 3:1 (vs the old flat ≈1.7:1). That redistribution IS
- * the depth. PRIMARY user nudge knobs: MOBILE_KEY_INTENSITY (raise for more drama),
- * MOBILE_HEMI_INTENSITY / MOBILE_ENV_INTENSITY (raise to soften the shade back up).
+ * FILL (hemi + ambient): RAISED back toward natural now that depth comes from the
+ * sun DIRECTION, not from starved fill — reversing the earlier hard cut that made
+ * the shaded sides muddy/dark. Hemi 0.30 → 0.44 (neutral daylight sky over a
+ * slightly darker warm ground bounce); ambient 0.12 → 0.20 (neutral). EXPOSURE MATH
+ * (three's hemi factor 0.5 for vertical faces, 1.0 up): a SHADED vertical wall (no
+ * key) receives hemi 0.44×0.5 + ambient 0.20 + env 0.75 ≈ 1.17 — UP 34% from the old
+ * ≈0.87, so the shaded side is now READABLE, not muddy (the direct fix for "too
+ * dark"). A board/ground UP-face (key N·L 0.512) receives 2.1×0.512 + hemi 0.44 +
+ * ambient 0.20 + env 0.75 ≈ 2.47 (vs the old ≈2.55, ~3% lower — offset by the grade
+ * brightness lift), so board TEXT stays as readable/bright as before. The lit-wall
+ * (key 2.1×0.859 + fill 1.17 ≈ 2.97) : shaded-wall (1.17) ratio ≈ 2.5:1 — same head
+ * ratio as the old flat rig but produced by the lit WALL out-lighting the top and
+ * the shaded side LIFTED, not by crushed blacks. PRIMARY user nudge knobs:
+ * MOBILE_KEY_INTENSITY (raise for more drama), MOBILE_HEMI_INTENSITY /
+ * MOBILE_ENV_INTENSITY (raise to soften the shade back up).
  */
 const MOBILE_KEY_COLOR = '#fff4ea'; // neutral warm-white daylight key
-const MOBILE_KEY_INTENSITY = 2.0;
-const MOBILE_KEY_POSITION: [number, number, number] = [7, 11, 6]; // UNCHANGED (frozen shadow bake)
+const MOBILE_KEY_INTENSITY = 2.1;
+const MOBILE_KEY_POSITION: [number, number, number] = [7, 5.5, 6]; // lowered Y 11→5.5 for side-light (elev ~31°); re-bakes at load
 // HEMISPHERE: neutral daylight sky over a slightly darker WARM ground bounce (so
-// undersides read a touch deeper), CUT so it no longer floods the shadow side.
+// undersides read a touch deeper), RAISED to a natural daylight fill so the shaded
+// side reads instead of going muddy — depth now comes from the raking sun angle.
 const MOBILE_HEMI_SKY = '#e0eaf3';
 const MOBILE_HEMI_GROUND = '#b3ad9e';
-const MOBILE_HEMI_INTENSITY = 0.3;
-// AMBIENT: NEUTRAL soft floor — just lifts pure black so the deepest shade never
-// crushes; the directional KEY + baked shadow supply the darkening, so this stays
-// low and colourless.
+const MOBILE_HEMI_INTENSITY = 0.44;
+// AMBIENT: NEUTRAL soft floor — lifts pure black so the deepest shade never crushes;
+// the raking directional KEY + longer baked shadow supply the darkening, so this
+// stays low and colourless.
 const MOBILE_AMBIENT_COLOR = '#eef1f4';
-const MOBILE_AMBIENT_INTENSITY = 0.12;
+const MOBILE_AMBIENT_INTENSITY = 0.2;
 /**
  * MOBILE-ONLY frozen shadow-map resolution for the KEY sun. The map is baked
  * ONCE at load (autoUpdate off — see MobileCrispBoardPipeline), so 2048² costs a
  * single extra shadow render at load + ~16 MB depth VRAM and ZERO per-frame cost.
- * The high ~50° sun throws SHORT shadows, and the ortho frame is now tightened to
- * ±8 (see the shadow-camera below), so 2048 gives ~128 texels/unit (up from ~73
- * over the old ±14) → crisper short edges. Because the frame shrank, 1024 (~64
- * texels/unit, ≈ the old 2048/±14 density) is now a viable load-time VRAM
- * fallback on a low-end device — but there is no framerate reason to drop it.
- * Desktop's KEY light keeps its own 1024².
+ * The lower ~31° sun throws LONGER shadows (~2× the old ≈50°), so the ortho frame is
+ * WIDENED to ±12 (see the shadow-camera below) to contain them without clipping;
+ * 2048 over ±12 gives ~85 texels/unit — plenty crisp for the soft PCF receive (the
+ * known-good old baseline was ~73 over ±28). Do NOT bump the map size to chase the
+ * wider frame — 2048 is enough and a larger map only adds load-time VRAM for no
+ * frame benefit. Desktop's KEY light keeps its own 1024².
  */
 const MOBILE_SHADOW_MAP_SIZE = 2048;
 
@@ -666,17 +679,17 @@ export function GameScene() {
       {/* Sky/ground hemisphere fill. DESKTOP: cool sky / olive ground, trimmed
           0.35 → 0.25 so AO + the rig shape the scene instead of a flat wash.
           MOBILE twin: neutral daylight sky over a slightly darker warm ground
-          bounce, CUT 0.62 → 0.30 so it lifts the shade WITHOUT erasing it — the
-          strong KEY sun does the shaping (realistic-depth, high key-to-fill). */}
+          bounce, RAISED 0.30 → 0.44 to a natural daylight fill so the shaded side
+          reads — the raking KEY sun ANGLE does the shaping, not starved fill. */}
       {!isMobile && <hemisphereLight args={['#cbe8f5', '#8a9a5b', HEMI_INTENSITY]} />}
       {isMobile && (
         <hemisphereLight args={[MOBILE_HEMI_SKY, MOBILE_HEMI_GROUND, MOBILE_HEMI_INTENSITY]} />
       )}
       {/* Ambient floor. DESKTOP: 0.15 neutral — AO now darkens crevices the flat
           ambient was washing out; this just lifts pure black. MOBILE twin: a
-          NEUTRAL soft floor CUT 0.26 → 0.12 — just enough to keep the deepest
-          shade off pure-black; the directional KEY + baked shadow supply the
-          darkening, so the shadow side reads (realistic-depth). */}
+          NEUTRAL soft floor RAISED 0.12 → 0.20 — lifts the deepest shade to a
+          readable mid-tone; the raking directional KEY + longer baked shadow supply
+          the darkening, so depth comes from direction not from crushed darks. */}
       {!isMobile && <ambientLight intensity={AMBIENT_INTENSITY} />}
       {isMobile && (
         <ambientLight color={MOBILE_AMBIENT_COLOR} intensity={MOBILE_AMBIENT_INTENSITY} />
@@ -696,20 +709,22 @@ export function GameScene() {
           <orthographicCamera attach="shadow-camera" args={[-8, 8, 8, -8, 0.1, 30]} />
         </directionalLight>
       )}
-      {/* MOBILE KEY twin — a HIGH ~50° neutral warm-white sun, RAISED to intensity
-          2.0 so it clearly dominates the cut fill and shades the low-poly geometry
-          (realistic-depth). It is the mobile shadow CASTER: its map is BAKED ONCE
-          (frozen) by MobileCrispBoardPipeline (renderer autoUpdate off), so
-          castShadow + a 2048² map cost a single shadow render at load and nothing
-          per frame. POSITION is unchanged, so the frozen bake stays valid — only
-          intensity/colour changed and shadow maps store depth only. The
-          high sun throws SHORT shadows (height × cot50° ≈ height × 0.84, toward
-          [-7,·,-6]), so the ortho frame is tightened to [-8,8,8,-8, 0.5, 30]:
-          board (±5) + city + buildings + the short throw stay inside ±8 with
-          margin, and the tighter frame lifts texel density to ~128/unit for
-          crisp short edges. Far plane 30 brackets the light (dist √206≈14.35 from
-          origin) ± the ±8 frame. bias/normalBias guard acne (less needed now the
-          sun is less grazing). Desktop's KEY (above) is untouched → byte-identical. */}
+      {/* MOBILE KEY twin — a LOWERED ~31° neutral warm-white raking sun (intensity
+          2.1) so the boxy city walls get a bright side + a dark side and stop reading
+          flat. It is the mobile shadow CASTER: its map is BAKED ONCE (frozen) by
+          MobileCrispBoardPipeline (renderer autoUpdate off), so castShadow + a 2048²
+          map cost a single shadow render at load and nothing per frame. POSITION
+          moved (Y 11→5.5), so the frozen map RE-BAKES ONCE at load from the light's
+          live world matrix — no offline step, no per-frame cost. The lower sun throws
+          LONGER shadows (height × cot31° ≈ height × 1.68, toward [-7,·,-6], ~2× the
+          old ≈50°), so the ortho frame is WIDENED to [-12,12,12,-12, 0.5, 30]: a tall
+          city tower's shadow tip reaches ~(-8.8,-8.3) world — outside the old ±8, so
+          ±12 contains it with margin. Far plane 30 still brackets the light (it moved
+          CLOSER, dist √115≈10.74) ± the ±12 frame; near 0.5 clears the nearest caster.
+          shadow-normalBias raised 0.02→0.03 to kill the extra grazing-angle acne the
+          lower incidence adds (bias stays -0.0004 — normalBias is the correct lever,
+          deepening depth-bias would risk contact detachment). Desktop's KEY (above) is
+          untouched → byte-identical. */}
       {isMobile && (
         <directionalLight
           color={MOBILE_KEY_COLOR}
@@ -718,9 +733,9 @@ export function GameScene() {
           castShadow
           shadow-mapSize={[MOBILE_SHADOW_MAP_SIZE, MOBILE_SHADOW_MAP_SIZE]}
           shadow-bias={-0.0004}
-          shadow-normalBias={0.02}
+          shadow-normalBias={0.03}
         >
-          <orthographicCamera attach="shadow-camera" args={[-8, 8, 8, -8, 0.5, 30]} />
+          <orthographicCamera attach="shadow-camera" args={[-12, 12, 12, -12, 0.5, 30]} />
         </directionalLight>
       )}
       {/* FILL: cool, low, opposite-ish angle — softens the shadow side without
