@@ -5,9 +5,11 @@ import { useProgress } from '@react-three/drei';
 import {
   EffectPass,
   ToneMappingEffect,
+  ToneMappingMode,
   HueSaturationEffect,
   BrightnessContrastEffect,
   FXAAEffect,
+  VignetteEffect,
 } from 'postprocessing';
 import { FullScreenQuad } from 'three-stdlib';
 import { SharpenEffectImpl } from '../screens/SharpenEffect';
@@ -57,8 +59,10 @@ import { BOARD_LAYER, CITY_LAYER } from './positions';
  *                    → cityFBO [css × min(dpr,cityDpr), HalfFloat LINEAR + DepthTexture]
  *   4. COMPOSITE   — depth-merge city over board over scene (native) → compositeFBO
  *   5. GRADE       — the reused mobile grade EffectPass over compositeFBO → canvas
- *                    (native): AGX ToneMapping → HueSaturation → BrightnessContrast
- *                    → FXAA → Sharpen → sRGB, encoded once.
+ *                    (native): FXAA → Sharpen (over the RAW linear-HDR composite, so
+ *                    their neighbour taps and centre share one colour space) →
+ *                    ACES_FILMIC ToneMapping → HueSaturation → BrightnessContrast →
+ *                    WarmGrade (teal-orange split) → Vignette → sRGB, encoded once.
  *
  * All passes share the SAME scene + camera, so the board AND city inherit the SAME
  * lights (this component additively enables BOTH BOARD_LAYER and CITY_LAYER on every
@@ -117,6 +121,16 @@ interface MobileCrispBoardPipelineProps {
    */
   cityDepthBias: number;
 }
+
+/**
+ * MOBILE-ONLY cinematic vignette (folds into the single grade EffectPass).
+ * Build-time literals like the ToneMapping mode default — NOT reactive, so they do
+ * NOT need to enter the rig useMemo deps. VignetteEffect is a non-convolution
+ * mainImage (samples only the center inputColor + uv, no neighbor taps), so it
+ * MERGES into the one existing grade pass — zero new pass / render target / draw.
+ */
+const MOBILE_VIGNETTE_OFFSET = 0.35; // wider bright center; keeps the board readable
+const MOBILE_VIGNETTE_DARKNESS = 0.5; // moderate edge darkening (toward black)
 
 // Full-screen composite. Vertex maps the FullScreenQuad's PlaneGeometry(2,2)
 // positions (already in [-1,1]) straight to clip space; no matrices needed.
@@ -290,22 +304,26 @@ export function MobileCrispBoardPipeline({
 
     // Grade EffectPass — all non-convolution effects, so they MERGE into ONE
     // pass over the linear-HDR composite. sRGB OETF is applied once by
-    // EffectMaterial.encodeOutput (on by default). Chain shape: tone/hue/BC trio
-    // then a (now NEUTRALIZED) split-tone (WarmGrade), then FXAA + Sharpen.
-    // (Bloom was removed from this pass for fill-rate — see note above.)
+    // EffectMaterial.encodeOutput (on by default). Chain shape (order matters — see
+    // the FXAA/Sharpen-FIRST rationale on the EffectPass below): FXAA + Sharpen run
+    // FIRST over the RAW linear-HDR composite, THEN the ACES_FILMIC ToneMapping →
+    // HueSaturation → BrightnessContrast trio, then the (teal-orange) split-tone
+    // (WarmGrade), and a final lens Vignette. (Bloom was removed from this pass for
+    // fill-rate — see note above.)
     //
-    // ToneMapping default is AGX (parity with desktop). AGX gives clean, gently
-    // desaturated highlights — well suited to the high-key pastel daylight look;
-    // if more punch is ever wanted the one-line alternative is
-    // `new ToneMappingEffect({ mode: ToneMappingMode.ACES_FILMIC })` — a tuning
-    // toggle, not the default.
-    const toneMapping = new ToneMappingEffect({});
+    // ToneMapping is ACES_FILMIC — a cinematic filmic curve with punchier
+    // highlights than AGX, exactly the "more punch" toggle the prior comment
+    // documented. It is STILL the sole tonemap: the renderer stays NoToneMapping
+    // (set in the layout effect below) and the composite FBO is linear
+    // HalfFloat/NoColorSpace, so ACES runs once on the linear-HDR composite. The
+    // grade downstream shapes the tone-mapped LDR for the moody-cinematic look.
+    const toneMapping = new ToneMappingEffect({ mode: ToneMappingMode.ACES_FILMIC });
     const hueSat = new HueSaturationEffect({ saturation });
     const brightnessContrast = new BrightnessContrastEffect({ brightness, contrast });
-    // Split-tone — NEUTRALIZED to a near-identity pass-through for the daylight
-    // look (all knobs zeroed in WarmGradeEffect). Kept in the chain, after the
-    // tone/hue/BC trio, so a gentle grade can be dialled back in without
-    // re-plumbing the merged pass.
+    // Split-tone — an ACTIVE teal-orange cinematic split (warm/orange highlights,
+    // cool/teal shadows; see WarmGradeEffect). Luma-keyed off the contrast-shaped
+    // luminance so mid-tones (board text / token faces) stay readable. Placed
+    // after the tone/hue/BC trio so it keys off the final LDR luma.
     const warmGrade = new WarmGradeEffectImpl();
     const fxaa = new FXAAEffect({});
     // subpixelQuality is a define-backed setter (the R3F <FXAA subpixelQuality>
@@ -313,14 +331,44 @@ export function MobileCrispBoardPipeline({
     // its merged shader in initialize().
     fxaa.subpixelQuality = fxaaSubpixelQuality;
     const sharpen = new SharpenEffectImpl();
+    // Vignette — LAST: a lens edge-darkening over the fully graded color (Sharpen
+    // ran pre-tonemap, so its high-frequency detail is already baked into the grade).
+    // Non-convolution (samples only center inputColor + uv), so it merges into the
+    // same pass with no extra pass / render target / blur. DEFAULT technique
+    // multiplies toward black at the edges (the moody look), with a wide bright
+    // center (offset 0.35) so the centered board + tokens stay readable.
+    const vignette = new VignetteEffect({
+      offset: MOBILE_VIGNETTE_OFFSET,
+      darkness: MOBILE_VIGNETTE_DARKNESS,
+    });
+    // EFFECT ORDER — FXAA + SHARPEN FIRST, then tonemap + grade. WHY: in a merged
+    // postprocessing EffectPass every effect shares ONE `inputBuffer` uniform = the
+    // pass input (this linear-HDR composite FBO), so FXAA's edge samples and
+    // Sharpen's 4 neighbour taps ALWAYS read that RAW buffer — a merged effect can
+    // never sample a later effect's threaded colour. If FXAA/Sharpen ran AFTER the
+    // grade (as they used to), their CENTRE (`inputColor` = the tonemapped+graded
+    // LDR `color0`) and their neighbour taps (raw linear HDR) would live in
+    // DIFFERENT colour spaces: Sharpen's unsharp mask would subtract an HDR value
+    // from an LDR one — a frame-wide DC offset that lifts blacks / dulls highlights
+    // and washes the ACES grade out — and FXAA would splice ungraded raw-HDR edge
+    // pixels into the graded image (haloed, blown-out silhouette/text edges).
+    // Running them FIRST makes centre and taps the SAME raw composite, and the
+    // AA'd/sharpened result then flows through ACES + the full grade like every
+    // other pixel — graded ONCE, uniformly. (Desktop fixes the identical problem
+    // with a separate SMAA CONVOLUTION sub-pass, which reads the already-graded
+    // buffer; the mobile path must stay a SINGLE pass for fill-rate, so it reorders
+    // within the one pass instead of adding a pass/RT.) Sharpen floors its output at
+    // 0 but NO LONGER clips the top (see SharpenEffect) so the >1 highlights survive
+    // for ACES downstream.
     const gradePass = new EffectPass(
       camera,
+      fxaa,
+      sharpen,
       toneMapping,
       hueSat,
       brightnessContrast,
       warmGrade,
-      fxaa,
-      sharpen,
+      vignette,
     );
     // Present straight to the canvas at native dpr (outputBuffer ignored).
     gradePass.renderToScreen = true;

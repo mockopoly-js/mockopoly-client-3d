@@ -20,11 +20,17 @@ import { wrapEffect } from '@react-three/postprocessing';
  * that already runs. It reads the shared built-in `inputBuffer` / `texelSize`
  * uniforms exactly like the FXAA effect does.
  *
- * PLACEMENT: mounted LAST in the mobile composer (after FXAA), so `inputColor`
- * is the FXAA output and the 4 neighbour taps come from the same pass input
- * buffer FXAA samples — center and neighbours live in the same colour space, so
- * the unsharp mask is spatially/colorimetrically consistent (no grade mismatch)
- * and it counters the FXAA/dpr softness rather than re-introducing it.
+ * PLACEMENT: runs FIRST in the mobile grade pass, immediately AFTER FXAA and
+ * BEFORE the tonemap + grade. In a merged postprocessing EffectPass the 4 neighbour
+ * taps can ONLY read `inputBuffer` (the RAW linear-HDR composite = the pass input);
+ * they can never reach a later effect's threaded colour. So Sharpen MUST sit where
+ * `inputColor` is ALSO that raw composite — i.e. before any grade effect mutates it.
+ * Here `inputColor` is the FXAA output (raw composite, AA'd) and the taps are the
+ * raw composite: center and neighbours live in the SAME linear-HDR colour space, so
+ * the unsharp mask is colorimetrically consistent (no HDR-minus-LDR DC offset), and
+ * the sharpened result then flows through ACES + the full grade like every other
+ * pixel. (Mounting it AFTER the grade — the old placement — put a graded-LDR center
+ * against raw-HDR taps, a frame-wide DC offset that washed the grade out.)
  *
  * SHARPEN_STRENGTH — the single tuning knob. It scales the high-frequency
  * detail added back: out = center + strength * (center - blur). Higher = crisper
@@ -47,10 +53,15 @@ void mainImage(const in vec4 inputColor, const in vec2 uv, out vec4 outputColor)
   vec3 blur = (up + down + left + right) * 0.25;
 
   // Unsharp mask: add back the high-frequency detail the dpr-2 downsample +
-  // FXAA edge blend removed. Clamp to [0,1] to suppress halo overshoot/ringing.
+  // FXAA edge blend removed.
   vec3 sharp = center + ${SHARPEN_STRENGTH.toFixed(4)} * (center - blur);
 
-  outputColor = vec4(clamp(sharp, 0.0, 1.0), inputColor.a);
+  // FLOOR at 0 only — kills the negative undershoot/ringing on the dark side of an
+  // edge (negative colour would corrupt the ACES input). Do NOT clip the TOP: this
+  // now runs PRE-tonemap on the raw linear-HDR composite, where bright pixels are
+  // legitimately > 1; ACES downstream rolls those highlights off, so clamping to 1
+  // here would flatten them (the "muddy, dulled highlights" regression).
+  outputColor = vec4(max(sharp, 0.0), inputColor.a);
 }
 `;
 

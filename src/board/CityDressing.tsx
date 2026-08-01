@@ -250,6 +250,22 @@ const CITY_AO_URL_MOBILE = '/images/city.mobile.ao.webp';
 const CITY_AO_INTENSITY = 0.5;
 
 /**
+ * MOBILE-ONLY cinematic RIM (fresnel edge-light) on the CITY BUILDINGS material.
+ * Folds a few ALU + one pow into the buildings' EXISTING highp MeshStandard
+ * program via onBeforeCompile — NO new pass / render target / draw call /
+ * transparency; a one-time program compile at load, ZERO per-frame cost. The
+ * cool skylight tint reinforces the cool fill / teal shadows of the grade + rig.
+ * Applied ONLY to the freshly-cloned buildings material owned by CityAO (never
+ * the fragile mediump forest material, never drei's cache, never the cars mesh).
+ * - CITY_RIM_STRENGTH: rim add amount (0.15–0.25).
+ * - CITY_RIM_POWER: fresnel falloff exponent; higher = tighter edge.
+ * - CITY_RIM_TINT: cool skylight rim colour.
+ */
+const CITY_RIM_STRENGTH = 0.2;
+const CITY_RIM_POWER = 3.0;
+const CITY_RIM_TINT: readonly [number, number, number] = [0.6, 0.76, 0.9];
+
+/**
  * MOBILE-ONLY helper — computes an X/Z bounding box over only the "building"
  * geometry of the cloned city scene: vertices whose WORLD-space Y is at/above
  * `yMin`, excluding the flat floor/road/plaza (which sit at world Y ≈ 0). This
@@ -396,6 +412,24 @@ function CityAO({ object }: { object: THREE.Object3D }): React.JSX.Element | nul
       const lit = std.clone();
       lit.aoMap = aoTex;
       lit.aoMapIntensity = CITY_AO_INTENSITY;
+      // Cinematic fresnel RIM — injected AFTER opaque_fragment (which sets
+      // gl_FragColor = vec4(outgoingLight, alpha) in LINEAR space), so the rim is
+      // added in linear light; the grade pass's ACES then tone-maps it (no harsh
+      // clip) and mobile fog still fades it on the far side. `normal` (view-space,
+      // normalized in normal_fragment_begin) and `vViewPosition` (meshphysical
+      // varying) are both in scope here. Folds into this SAME cloned buildings
+      // program CityAO already forces (aoMap variant) → no extra program count.
+      lit.onBeforeCompile = (shader) => {
+        shader.fragmentShader = shader.fragmentShader.replace(
+          '#include <opaque_fragment>',
+          `#include <opaque_fragment>
+      {
+        float rimFres = 1.0 - clamp(dot(normalize(normal), normalize(vViewPosition)), 0.0, 1.0);
+        float rim = pow(rimFres, ${CITY_RIM_POWER.toFixed(1)}) * ${CITY_RIM_STRENGTH.toFixed(4)};
+        gl_FragColor.rgb += rim * vec3(${CITY_RIM_TINT[0].toFixed(4)}, ${CITY_RIM_TINT[1].toFixed(4)}, ${CITY_RIM_TINT[2].toFixed(4)});
+      }`,
+        );
+      };
       lit.needsUpdate = true;
       m.material = lit;
     });
