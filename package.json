@@ -26,6 +26,7 @@
     "models:forest:mobile": "node scripts/gen-forest-mobile.mjs",
     "models:city": "node scripts/gen-city.mjs",
     "models:city:mobile": "node scripts/gen-city-mobile.mjs",
+    "models:city:ao": "node scripts/gen-city-mobile-ao.mjs",
     "models:board:mobile": "node scripts/gen-board-mobile.mjs",
     "models:characters": "node scripts/gen-characters.mjs",
     "models:characters:mobile": "node scripts/gen-characters-mobile.mjs",
