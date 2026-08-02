@@ -10,6 +10,11 @@ import {
   BrightnessContrast,
   SMAA,
 } from '@react-three/postprocessing';
+// KernelSize enum for the MOBILE-ONLY tilt-shift blur kernel (see
+// MOBILE_TILTSHIFT_* below + MobileCrispBoardPipeline). Imported from the base
+// `postprocessing` package (the @react-three/postprocessing wrapper does not
+// re-export it).
+import { KernelSize } from 'postprocessing';
 import { SoftShadows, Stats, useTexture } from '@react-three/drei';
 import { BoardTiles } from '../board/BoardTiles';
 import { PlayerTokens } from '../board/PlayerTokens';
@@ -369,6 +374,50 @@ const MOBILE_SCENE_DPR = 1.5;
 const MOBILE_BOARD_DEPTH_BIAS = 0.03;
 const MOBILE_CITY_DPR = 1.5;
 const MOBILE_CITY_DEPTH_BIAS = 0.03;
+
+/**
+ * ── MOBILE-ONLY TILT-SHIFT / MINIATURE-DIORAMA (see MobileCrispBoardPipeline) ──
+ * A screen-vertical band blur merged into the mobile grade EffectPass: the board +
+ * centre city stay razor-sharp while the far terrain/mountains (top of frame) and
+ * the extreme near foreground (bottom) blur, tricking the eye into reading the whole
+ * scene as a tiny tabletop model — the biggest "premium" jump for a board game. This
+ * is the ONE effect BUDGETED to cost fps (~10-15fps; scene idles ~84 → stays ≥ 65).
+ * Cost is a single half-res Kawase blur into TiltShift's own RT (see the two knobs
+ * below). MOBILE-ONLY: only <MobileCrispBoardPipeline> (isMobile branch) consumes
+ * these; desktop keeps its own <EffectComposer> → byte-identical.
+ *
+ * Units: framebuffer-space, where the FULL screen height spans 2.0 (bottom −1,
+ * centre 0, top +1). fully-sharp core = OFFSET ± (FOCUS_AREA − FEATHER); full blur
+ * beyond OFFSET ± FOCUS_AREA.
+ * - MOBILE_TILTSHIFT_OFFSET: screen-Y centre of the sharp band. 0 = screen centre
+ *   (board centre at the idle dolly-in pose). +0.03..+0.05 to read the near
+ *   foreground sharper (band toward far terrain); negative toward the near/city side.
+ * - MOBILE_TILTSHIFT_FOCUS_AREA: half-height of the feather-out edge. WIDENED to 0.85
+ *   (from 0.6) so the sharp+feather zone spans ±0.85 of the 2.0-tall frame and full
+ *   blur is confined to the outer ~15% top/bottom. This is the fix for the review
+ *   finding that the free camera (deep zoom-in to minDistance 4.0 ≈ 1.7× the idle
+ *   6.9 framing, plus limited vertical pan) could previously push the NEAR/FAR board
+ *   rows past the old ±0.6 cutoff into full blur. At 0.85 the board stays inside the
+ *   sharp+feather zone across the whole mobile camera envelope; only at the most
+ *   extreme zoom-in+pan do its outermost rows reach the SOFT feather (never the hard
+ *   full-blur), which reads as depth, not a bug. Lower toward 0.6 for a stronger
+ *   diorama ONLY if you also re-tighten the camera clamps; raise toward 1.0 to push
+ *   full blur off-screen entirely (mildest, guaranteed-sharp board).
+ * - MOBILE_TILTSHIFT_FEATHER: softness of the focus-area edge ramp.
+ * - MOBILE_TILTSHIFT_RESOLUTION_SCALE: the dominant cost knob — the internal blur RT
+ *   is this × the pass's native size per axis (0.5 ⇒ ¼ of the pixels). Lower is BOTH
+ *   cheaper AND a softer/larger-reading blur; escalate 0.5 → 0.4 → 0.35 if over the
+ *   fps budget.
+ * - MOBILE_TILTSHIFT_KERNEL_SIZE: Kawase kernel (KernelSize enum). MEDIUM start; drop
+ *   to SMALL first if over budget, raise to LARGE for a stronger diorama if under.
+ * MEASURE on-device via RenderStatsReadout at the idle pose (expect ~84 → confirm
+ * ≥ 65); A/B by temporarily setting FOCUS_AREA = 2.0 (whole screen sharp = blur off).
+ */
+const MOBILE_TILTSHIFT_OFFSET = 0.0;
+const MOBILE_TILTSHIFT_FOCUS_AREA = 0.85;
+const MOBILE_TILTSHIFT_FEATHER = 0.35;
+const MOBILE_TILTSHIFT_RESOLUTION_SCALE = 0.5;
+const MOBILE_TILTSHIFT_KERNEL_SIZE = KernelSize.MEDIUM;
 
 /**
  * ── MOBILE-ONLY DISTANCE FOG (atmospheric far-haze) ───────────────────────────
@@ -921,6 +970,11 @@ export function GameScene() {
           cityDpr={MOBILE_CITY_DPR}
           depthBias={MOBILE_BOARD_DEPTH_BIAS}
           cityDepthBias={MOBILE_CITY_DEPTH_BIAS}
+          tiltShiftOffset={MOBILE_TILTSHIFT_OFFSET}
+          tiltShiftFocusArea={MOBILE_TILTSHIFT_FOCUS_AREA}
+          tiltShiftFeather={MOBILE_TILTSHIFT_FEATHER}
+          tiltShiftResolutionScale={MOBILE_TILTSHIFT_RESOLUTION_SCALE}
+          tiltShiftKernelSize={MOBILE_TILTSHIFT_KERNEL_SIZE}
         />
       ) : (
         <EffectComposer multisampling={0} stencilBuffer={false}>

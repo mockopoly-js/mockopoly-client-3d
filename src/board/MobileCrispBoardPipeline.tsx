@@ -9,6 +9,7 @@ import {
   HueSaturationEffect,
   BrightnessContrastEffect,
   FXAAEffect,
+  TiltShiftEffect,
 } from 'postprocessing';
 import { FullScreenQuad } from 'three-stdlib';
 import { SharpenEffectImpl } from '../screens/SharpenEffect';
@@ -128,6 +129,50 @@ interface MobileCrispBoardPipelineProps {
    * small and the 1.5-vs-native contact shimmer returns.
    */
   cityDepthBias: number;
+  /**
+   * ── TILT-SHIFT / MINIATURE-DIORAMA (MOBILE-ONLY) ───────────────────────────
+   * TiltShiftEffect `offset` — screen-Y CENTRE of the razor-sharp band, in
+   * framebuffer units where the FULL screen height spans 2.0 (bottom −1, centre 0,
+   * top +1). 0.0 = band centred on screen-Y. POSITIVE nudges the sharp band toward
+   * the TOP (far terrain), negative toward the near/city side. See the FOCUS BAND
+   * note on the effect construction below.
+   */
+  tiltShiftOffset: number;
+  /**
+   * TiltShift `focusArea` — half-height (in the same 2.0-per-screen units) of the
+   * FEATHER-out edge: full blur begins beyond `offset ± focusArea`, the fully-sharp
+   * core is `offset ± (focusArea − feather)`. Kept GENEROUS (0.85) so the entire
+   * board + centre city stays inside the sharp+feather zone across the whole mobile
+   * camera envelope while the distant mountains (top) and extreme near ground
+   * (bottom) blur — the miniature read.
+   *
+   * FREE-CAMERA CAVEAT (review fix): this band is SCREEN-SPACE, not world-locked, so
+   * it is NOT true that a free-camera move can only ever weaken the blur. Under the
+   * old ±0.6 cutoff, a deep zoom-in (to minDistance 4.0 ≈ 1.7× the idle 6.9 framing)
+   * or a vertical pan could push the NEAR/FAR board rows past ±0.6 into full blur —
+   * the board itself softening. Widening to 0.85 shrinks full blur to the outer ~15%
+   * top/bottom, which the clamped mobile camera (maxPolarAngle 1.35, minDistance 4.0,
+   * MIN_TARGET_Y −0.3) cannot drive the board into; at the most extreme zoom-in+pan
+   * the outermost board rows reach only the SOFT feather (reads as depth), never the
+   * hard full-blur. Lower → stronger diorama but the board can re-enter full blur;
+   * raise toward 1.0 → full blur pushed off-screen (mildest, guaranteed sharp).
+   */
+  tiltShiftFocusArea: number;
+  /** TiltShift `feather` — softness (same units) of the focus-area edge ramp. */
+  tiltShiftFeather: number;
+  /**
+   * TiltShift blur RT `resolutionScale` — the internal Kawase blur renders at
+   * `resolutionScale` × the pass's native size PER AXIS (0.5 ⇒ a QUARTER of the
+   * pixels). The dominant fps knob: lower is BOTH cheaper AND a softer/larger-reading
+   * blur. Escalate 0.5 → 0.4 → 0.35 if over budget.
+   */
+  tiltShiftResolutionScale: number;
+  /**
+   * TiltShift Kawase `kernelSize` — the `KernelSize` enum value (numeric). Bigger =
+   * wider blur radius AND more iterations (more cost). MEDIUM start; drop to SMALL
+   * first if over budget, raise to LARGE for a stronger diorama if under budget.
+   */
+  tiltShiftKernelSize: number;
 }
 
 // Full-screen composite. Vertex maps the FullScreenQuad's PlaneGeometry(2,2)
@@ -221,6 +266,11 @@ export function MobileCrispBoardPipeline({
   cityDpr,
   depthBias,
   cityDepthBias,
+  tiltShiftOffset,
+  tiltShiftFocusArea,
+  tiltShiftFeather,
+  tiltShiftResolutionScale,
+  tiltShiftKernelSize,
 }: MobileCrispBoardPipelineProps): null {
   const gl = useThree((s) => s.gl);
   const scene = useThree((s) => s.scene);
@@ -335,6 +385,58 @@ export function MobileCrispBoardPipeline({
     // too-dark ACES compression; ACES then rolls the boosted highlights off near
     // white. Non-convolution Effect → merges into this same pass (zero new pass/RT).
     const preExposure = new PreExposureEffectImpl({ exposure });
+    // ── TILT-SHIFT / MINIATURE-DIORAMA (MOBILE-ONLY) ──────────────────────────
+    // Screen-vertical band blur (Kawase, NO depth buffer needed): a razor-sharp
+    // horizontal band across the board with blur ramping up into the sky/mountains
+    // (far) and down into the extreme near foreground — the classic "tiny tabletop
+    // model" read at the default dolly-in pose (target = board centre → board
+    // projects at screen-Y centre).
+    //
+    // WHY TiltShift and NOT DepthOfFieldEffect: DoF is declared
+    // `attributes: EffectAttribute.DEPTH` and needs a per-fragment depth matching the
+    // COLOUR it defocuses. This grade pass runs over `compositeFBO` = makeTarget(null)
+    // — NO depth — and the three depth textures that DO exist are PER-TIER (the scene
+    // depth EXCLUDES board+city), so there is no single depth matching the composited
+    // colour. Wiring DoF would need a merged depth MRT during the composite plus its
+    // internal CoC + near/far bokeh + mask sub-passes (~2-3× the fill) — the ">20fps"
+    // overrun the brief forbids. TiltShift has NO `attributes` (defaults to
+    // EffectAttribute.NONE) so it MERGES into this pass (no standalone convolution
+    // sub-pass); its only new GPU work is one half-res Kawase blur into its OWN RT in
+    // update(), and `mainImage` adds just one texture fetch + a mix. Cost is bounded
+    // by resolutionScale (0.5 ⇒ ¼ pixels) and kernelSize (MEDIUM) → ~1.5-3ms on an
+    // A15-class phone: the budgeted ~10-15fps hit that stays comfortably ≥ 65fps.
+    //
+    // FOCUS BAND (framebuffer units, full screen height = 2.0): rotation 0 (the
+    // board's long axis is ~horizontal on screen at ~44° elevation); offset centres
+    // the band; fully-sharp core = offset ± (focusArea − feather), full blur beyond
+    // offset ± focusArea. With focusArea 0.85 / feather 0.35 the middle ~50% of
+    // screen height (±0.5) is razor sharp, feathers out to ±0.85, and only the outer
+    // ~15% top (sky/mountains) and bottom (extreme near ground) reach full blur — so
+    // the whole board + centre city sit inside the sharp+feather zone at the idle
+    // framing.
+    //
+    // REVIEW FIX — this band is SCREEN-SPACE, so it is NOT true (as an earlier note
+    // claimed) that a free-camera move can only ever WEAKEN the blur. Under the old
+    // ±0.6 cutoff a deep zoom-in (to minDistance 4.0 ≈ 1.7× the idle 6.9 framing) or
+    // a vertical pan (MIN_TARGET_Y −0.3) could push the NEAR/FAR board rows past ±0.6
+    // into full blur — the board itself softening. Widening to 0.85 confines full
+    // blur to the outer ~15%, which the CLAMPED mobile camera (maxPolarAngle 1.35,
+    // minDistance 4.0, MIN_TARGET_Y −0.3, MIN_CAM_Y 1.0) cannot drive a board row
+    // into: at the most extreme reachable zoom-in+pan the outermost rows reach only
+    // the SOFT feather (reads as depth), never the hard full-blur. A world-locked
+    // band (projecting the board's screen-Y extent each frame to drive offset/
+    // focusArea) would make this exact instead of enveloped, but adds per-frame
+    // projection + degenerate-pose (w≤0/NaN) guarding to a pipeline the brief
+    // requires stay blank-screen-proof; the widened static band is the bounded,
+    // zero-new-failure-surface fix and needs no per-frame work.
+    const tiltShift = new TiltShiftEffect({
+      offset: tiltShiftOffset,
+      rotation: 0,
+      focusArea: tiltShiftFocusArea,
+      feather: tiltShiftFeather,
+      kernelSize: tiltShiftKernelSize,
+      resolutionScale: tiltShiftResolutionScale,
+    });
     // EFFECT ORDER — FXAA + SHARPEN FIRST, then tonemap + grade. WHY: in a merged
     // postprocessing EffectPass every effect shares ONE `inputBuffer` uniform = the
     // pass input (this linear-HDR composite FBO), so FXAA's edge samples and
@@ -354,10 +456,27 @@ export function MobileCrispBoardPipeline({
     // within the one pass instead of adding a pass/RT.) Sharpen floors its output at
     // 0 but NO LONGER clips the top (see SharpenEffect) so the >1 highlights survive
     // for ACES downstream.
+    //
+    // TILT-SHIFT SLOT (load-bearing) — AFTER sharpen, BEFORE preExposure. Like
+    // FXAA/Sharpen, TiltShift blurs the pass INPUT (the RAW linear-HDR composite FBO)
+    // into its internal RT and its mainImage does `mix(blurredMap, inputColor, mask)`
+    // — so the blurred `map` is ALWAYS raw-linear-HDR composite space. Placing it here
+    // makes `inputColor` at this slot ALSO raw-linear-HDR (after Sharpen keeps the
+    // unsharp detail in the sharp band, before PreExposure/ACES), so BOTH the sharp
+    // centre and the blurred map share ONE colour space. The mixed (partly defocused)
+    // linear-HDR result then flows ONCE through PreExposure → ACES ToneMapping →
+    // HueSat → BC → WarmGrade and is sRGB-encoded ONCE by EffectMaterial.encodeOutput
+    // at pass end — no double-tonemap (renderer stays NoToneMapping; ACES is the sole
+    // tonemap), and the defocus happens in LINEAR light pre-tonemap where physically-
+    // correct blur/highlight-bleed belongs. TiltShift declares NO `attributes`
+    // (EffectAttribute.NONE, like FXAA here) so it MERGES — no extra convolution
+    // sub-pass — and is initialize()d/setSize()d/dispose()d by this same gradePass.
+    // Revert path: delete the `tiltShift,` arg to restore today's exact chain.
     const gradePass = new EffectPass(
       camera,
       fxaa,
       sharpen,
+      tiltShift,
       preExposure,
       toneMapping,
       hueSat,
@@ -379,7 +498,21 @@ export function MobileCrispBoardPipeline({
       quad,
       gradePass,
     };
-  }, [camera, saturation, brightness, contrast, exposure, fxaaSubpixelQuality, depthBias, cityDepthBias]);
+  }, [
+    camera,
+    saturation,
+    brightness,
+    contrast,
+    exposure,
+    fxaaSubpixelQuality,
+    depthBias,
+    cityDepthBias,
+    tiltShiftOffset,
+    tiltShiftFocusArea,
+    tiltShiftFeather,
+    tiltShiftResolutionScale,
+    tiltShiftKernelSize,
+  ]);
 
   // Last native pixel size the grade pass was sized to (its FXAA/Sharpen texelSize).
   const lastNative = useRef({ w: 0, h: 0 });
