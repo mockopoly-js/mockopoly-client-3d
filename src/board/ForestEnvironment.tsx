@@ -653,6 +653,7 @@ function buildMobileForestFadeMaterial(base: THREE.Material): THREE.Material {
   const mat = base.clone() as THREE.MeshStandardMaterial;
   (mat as THREE.MeshStandardMaterial).roughness = MOBILE_FOREST_ROUGHNESS;
   (mat as THREE.MeshStandardMaterial).metalness = 0.0;
+  (mat as THREE.MeshStandardMaterial).envMapIntensity = MOBILE_FOREST_ENV_INTENSITY;
   applyForestFade(mat); // same fade + board-clip discard program as desktop
   injectMobileMediump(mat);
   // DISTINCT program cache key. three's DEFAULT customProgramCacheKey returns
@@ -680,6 +681,7 @@ function buildMobileForestOpaqueMaterial(base: THREE.Material): THREE.Material {
   const mat = base.clone() as THREE.MeshStandardMaterial;
   (mat as THREE.MeshStandardMaterial).roughness = MOBILE_FOREST_ROUGHNESS;
   (mat as THREE.MeshStandardMaterial).metalness = 0.0;
+  (mat as THREE.MeshStandardMaterial).envMapIntensity = MOBILE_FOREST_ENV_INTENSITY;
   injectMobileMediump(mat);
   // Pin a CLEAN SOLID. This material's compiled program has NO `discard` at all
   // (only injectMobileMediump runs onBeforeCompile — the fade dither and the
@@ -715,6 +717,7 @@ function buildMobileForestGroundClipMaterial(base: THREE.Material): THREE.Materi
   const mat = base.clone() as THREE.MeshStandardMaterial;
   (mat as THREE.MeshStandardMaterial).roughness = MOBILE_FOREST_ROUGHNESS;
   (mat as THREE.MeshStandardMaterial).metalness = 0.0;
+  (mat as THREE.MeshStandardMaterial).envMapIntensity = MOBILE_FOREST_ENV_INTENSITY;
   applyForestBoardClip(mat); // board-clip discard ONLY — no fade
   injectMobileMediump(mat);
   mat.transparent = false;
@@ -938,6 +941,7 @@ const LOD2_SUFFIX = '_LOD2';
  */
 const MOBILE_SMOOTH_TERRAIN = true; // smooth vertex normals on ground geoms (kills faceted low-poly shading); false = raw glb per-face normals
 const MOBILE_FOREST_ROUGHNESS = 1.0; // fully matte forest/terrain — kills the plastic specular sheen the smoothed normals exposed
+const MOBILE_FOREST_ENV_INTENSITY = 0.08; // near-zero env reflection — matte grass/dirt/rock (kills HDRI sheen)
 
 /**
  * ── MOBILE-ONLY: baked island-wide TOP-DOWN forest CONTACT-AO ground decal ────
@@ -994,7 +998,7 @@ const FOREST_AO_URL_MOBILE = '/images/forest.mobile.ao.webp';
  * Both are MOBILE-ONLY (desktop forest never binds this map). Pure albedo multiply →
  * no shadow GLSL, mediump-safe, zero new pass/RT/draw-call.
  */
-const FOREST_AO_CONTRAST = 1.8;
+const FOREST_AO_CONTRAST = 2.2;
 const FOREST_AO_INTENSITY = 1.0;
 
 /**

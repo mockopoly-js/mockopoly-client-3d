@@ -309,6 +309,13 @@ void main() {
 }
 `;
 
+// How long (ms, wall-clock since the load-gate first opens) the per-frame
+// shadow-caster traversal keeps re-checking for a caster-count change before
+// it settles down. Generous window for CityDressing's async glb mount/clone
+// race (see the caster-signature comment in the bake block below) — after
+// this a build action (buildingSig effect) is the only thing that re-arms it.
+const CASTER_SIG_WINDOW_MS = 8000;
+
 /** Linear-HDR render target; pass a DepthTexture to also capture depth. */
 function makeTarget(depth: THREE.DepthTexture | null): THREE.WebGLRenderTarget {
   return new THREE.WebGLRenderTarget(2, 2, {
@@ -363,6 +370,12 @@ export function MobileCrispBoardPipeline({
   // Flips true after the frozen shadow map has been baked; reset to false to
   // force a single re-bake (see the building-signature effect below + cleanup).
   const baked = useRef(false);
+  // Shadow-CASTER signature (count of every castShadow===true mesh in the
+  // scene) as of the last successful bake, and how long we've been checking
+  // it — see the caster-signature re-bake trigger in the useFrame below. -1
+  // is "never checked" so the very first post-load-gate frame always differs.
+  const lastCasterSig = useRef(-1);
+  const casterCheckElapsed = useRef(0);
 
   // RE-BAKE HOOK — buildings (houses/hotels) are the one semi-dynamic caster;
   // they appear/disappear mid-game. A stable string signature of every
@@ -740,6 +753,8 @@ export function MobileCrispBoardPipeline({
       gl.shadowMap.autoUpdate = prevShadowAutoUpdate;
       gl.shadowMap.needsUpdate = prevShadowNeedsUpdate;
       baked.current = false;
+      lastCasterSig.current = -1;
+      casterCheckElapsed.current = 0;
       for (const light of litLights) {
         light.layers.disable(BOARD_LAYER);
         light.layers.disable(CITY_LAYER);
@@ -809,12 +824,44 @@ export function MobileCrispBoardPipeline({
     const prevBackground = scene.background;
     gl.autoClear = true;
 
-    // ── ONE-SHOT STATIC SHADOW BAKE ───────────────────────────────────────────
-    // Fires once assets have settled (load gate above) and again whenever the
-    // building signature changes (baked reset in the effect). enabled=true +
-    // needsUpdate=true drives exactly one shadowMap.render this frame; it
-    // auto-resets needsUpdate to false and restores the render target inside
-    // shadowMap.render, so every subsequent frame reuses the frozen map.
+    // ── SHADOW-CASTER SIGNATURE ────────────────────────────────────────────
+    // The bake below USED to be gated purely on `!baked.current` — a
+    // permanent one-shot latch that fires exactly once, on the first frame
+    // the drei load-gate reports `active:false`. That gate tracks
+    // useLoader's async network fetches; it does NOT track CityDressing's
+    // building meshes actually ATTACHING `castShadow=true` in the scene
+    // graph, which happens a beat later (glb parse completes off that same
+    // load-gate + a further material CLONE for the mobile mediump swap) —
+    // so the very first bake frequently froze the shadow map with ZERO city
+    // geometry in it, permanently losing the building-shaped shadow on the
+    // board (autoUpdate=false means the frozen map is never re-rendered
+    // after that). Counting every `castShadow===true` mesh in the scene
+    // each frame and re-baking whenever that count changes re-fires the
+    // SAME bake the instant the city's casters attach, then goes quiet once
+    // the count stops moving — a cheap few-hundred-object traverse, bounded
+    // to a short settle window (CASTER_SIG_WINDOW_MS) after the load gate
+    // opens so it doesn't scan the whole scene forever over a long session.
+    // A build action (buildingSig effect above, via `baked.current = false`)
+    // always forces one more check regardless of the window.
+    let casterSig = lastCasterSig.current;
+    if (!progressActive && progressTotal > 0) {
+      casterCheckElapsed.current += delta * 1000;
+      if (!baked.current || casterCheckElapsed.current <= CASTER_SIG_WINDOW_MS) {
+        casterSig = 0;
+        scene.traverse((o) => {
+          if ((o as THREE.Mesh).castShadow === true) casterSig++;
+        });
+      }
+    }
+
+    // ── STATIC SHADOW BAKE ─────────────────────────────────────────────────
+    // Fires once assets have settled (load gate above), again whenever the
+    // caster signature changes (the city-mount race above), and again
+    // whenever the building signature changes (baked reset in the effect).
+    // enabled=true + needsUpdate=true drives exactly one shadowMap.render
+    // this frame; it auto-resets needsUpdate to false and restores the
+    // render target inside shadowMap.render, so every subsequent frame
+    // reuses the frozen map.
     //
     // enableAll() enables camera-layer bits 0,1,2 so the caster layer-test inside
     // shadowMap.render (`object.layers.test(camera.layers)`) passes for casters on
@@ -834,7 +881,7 @@ export function MobileCrispBoardPipeline({
     // immediately (before pass 1 draws it with enabled=false). If the name ever
     // changes the lookup no-ops and the fix degrades only to the still-correct
     // enabled=false display path.
-    if (!baked.current && !progressActive && progressTotal > 0) {
+    if (!progressActive && progressTotal > 0 && (!baked.current || casterSig !== lastCasterSig.current)) {
       const prevMask = camera.layers.mask;
       camera.layers.enableAll();
       const forest = scene.getObjectByName('forest-environment');
@@ -846,6 +893,7 @@ export function MobileCrispBoardPipeline({
       gl.render(scene, camera);
       if (forest) forest.visible = forestPrevVisible;
       camera.layers.mask = prevMask;
+      lastCasterSig.current = casterSig;
       baked.current = true;
     }
 
