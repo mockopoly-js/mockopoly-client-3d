@@ -87,6 +87,17 @@ const BOARD_SATURATION = 1.6;
 const MOBILE_BOARD_SATURATION = 1.9;
 
 /**
+ * MOBILE-ONLY board TOP roughness (mobile lighting-tuning pass): mattes the
+ * printed board artwork slightly so it doesn't catch a shiny env highlight
+ * under the raised MOBILE_KEY_INTENSITY / lowered MOBILE_ENV_INTENSITY rig.
+ * Selected by `isMobile ? MOBILE_BOARD_TOP_ROUGHNESS : <desktop literal>` at
+ * the `top` MeshStandardMaterial construction below, so desktop's roughness
+ * stays the literal 0.7 it always was — byte-identical. Edge roughness (0.85,
+ * above) is left untouched on both paths.
+ */
+const MOBILE_BOARD_TOP_ROUGHNESS = 0.86;
+
+/**
  * Shared slab renderer. Takes a fully-configured board `texture` (webp on
  * desktop, KTX2 on mobile) and builds the slab + saturation patch. Identical for
  * both paths so the board renders the same regardless of source.
@@ -134,7 +145,7 @@ function BoardSlab({ texture }: { texture: THREE.Texture }) {
     // both stay at exactly TOP_Y — the board sits at the identical height.
     const top = new THREE.MeshStandardMaterial({
       map: texture,
-      roughness: 0.7,
+      roughness: isMobile ? MOBILE_BOARD_TOP_ROUGHNESS : 0.7,
       polygonOffset: true,
       polygonOffsetFactor: -1,
       polygonOffsetUnits: -1,

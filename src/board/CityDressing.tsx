@@ -268,6 +268,14 @@ const CITY_AO_INTENSITY = 0.5;
  */
 const CITY_ENV_MAP_INTENSITY = 1.15;
 const CITY_ROUGHNESS = 0.6;
+// MOBILE-ONLY matte overrides (mobile lighting-tuning pass): kill the shiny env
+// sheen the raised MOBILE_KEY_INTENSITY / lowered MOBILE_ENV_INTENSITY rig would
+// otherwise catch on glossier walls, and roughen the low-poly walls further so
+// the baked AO + cast shadows read as FORM instead of a glossy highlight. Applied
+// only inside CityAO (mobile-only — see its file-level comment); desktop keeps
+// CITY_ENV_MAP_INTENSITY / CITY_ROUGHNESS above, byte-identical.
+const MOBILE_CITY_ENV_MAP_INTENSITY = 0.35;
+const MOBILE_CITY_ROUGHNESS = 0.9;
 
 /**
  * MOBILE-ONLY helper — computes an X/Z bounding box over only the "building"
@@ -378,7 +386,13 @@ function computeBuildingBBoxXZ(
  * GameScene), isolated from the city glb's boundary, so a slow/failed AO load
  * can never blank the rest of the scene.
  */
-function CityAO({ object }: { object: THREE.Object3D }): React.JSX.Element | null {
+function CityAO({
+  object,
+  isMobile,
+}: {
+  object: THREE.Object3D;
+  isMobile: boolean;
+}): React.JSX.Element | null {
   // Grayscale WEBP loaded via useTexture (no transcoder, no KTX2 transcode risk).
   // Set flipY=false + linear colorSpace below to match the glTF TEXCOORD_1 convention.
   const aoTex = useTexture(CITY_AO_URL_MOBILE);
@@ -425,12 +439,17 @@ function CityAO({ object }: { object: THREE.Object3D }): React.JSX.Element | nul
       // already scene.environment, so this is zero per-frame cost (and it drops the
       // rim's per-fragment ALU). Folds into this SAME cloned buildings program CityAO
       // already forces (aoMap variant) → no extra program count.
-      lit.envMapIntensity = CITY_ENV_MAP_INTENSITY;
-      lit.roughness = CITY_ROUGHNESS;
+      // MOBILE-ONLY matte override (see MOBILE_CITY_ENV_MAP_INTENSITY /
+      // MOBILE_CITY_ROUGHNESS above); CityAO only ever mounts when isMobile is
+      // true (see the isMobile && <CityAO/> call site below), so the `false`
+      // branch here is unreachable in practice — kept explicit so desktop's
+      // values stay documented and byte-identical if that ever changes.
+      lit.envMapIntensity = isMobile ? MOBILE_CITY_ENV_MAP_INTENSITY : CITY_ENV_MAP_INTENSITY;
+      lit.roughness = isMobile ? MOBILE_CITY_ROUGHNESS : CITY_ROUGHNESS;
       lit.needsUpdate = true;
       m.material = lit;
     });
-  }, [object, aoTex]);
+  }, [object, aoTex, isMobile]);
 
   return null;
 }
@@ -627,7 +646,7 @@ export function CityDressing({ isMobile = false }: { isMobile?: boolean }): Reac
           Rendered only when isMobile so useTexture never fetches on desktop and the
           desktop material path stays byte-identical. Wrapped in its own Suspense
           boundary so a slow/failed AO load can never blank the rest of the scene. */}
-      {isMobile && (<Suspense fallback={null}><CityAO object={object} /></Suspense>)}
+      {isMobile && (<Suspense fallback={null}><CityAO object={object} isMobile={isMobile} /></Suspense>)}
       {isMobile && (
         // MOBILE-ONLY: inverse-scale wrapper. The outer group's `scale` prop
         // (groupScale, non-uniform per axis) is what maps the city's
@@ -660,7 +679,13 @@ export function CityDressing({ isMobile = false }: { isMobile?: boolean }): Reac
             frustumCulled={isMobile}
           >
             <planeGeometry args={[GRASS_HALF * 2, GRASS_HALF * 2]} />
-            <meshStandardMaterial color={GRASS_COLOR} roughness={0.69} metalness={0} />
+            {/* MOBILE-ONLY matte override: this grass-square mesh only ever
+                mounts inside the `isMobile &&` block above, so `isMobile` is
+                always true here in practice — kept explicit (rather than a
+                bare 0.95 literal) so the desktop roughness (0.69) stays
+                documented alongside it and this reads as a deliberate
+                mobile-only override, not a silent global change. */}
+            <meshStandardMaterial color={GRASS_COLOR} roughness={isMobile ? 0.95 : 0.69} metalness={0} />
           </mesh>
         </group>
       )}

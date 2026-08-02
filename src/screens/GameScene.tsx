@@ -96,7 +96,7 @@ const SHOW_HDRI_BACKGROUND = true;
  * ambient + reflection shape. Desktop keeps ENV_INTENSITY/BG_INTENSITY on the same
  * sky.webp, untouched.
  */
-const MOBILE_ENV_INTENSITY = 1.0;
+const MOBILE_ENV_INTENSITY = 0.32;
 const MOBILE_BG_INTENSITY = 1.0;
 
 /**
@@ -158,7 +158,7 @@ const CONTRAST = 0.12;
  */
 const MOBILE_SATURATION = -0.08;
 const MOBILE_BRIGHTNESS = 0.0;
-const MOBILE_CONTRAST = 0.13;
+const MOBILE_CONTRAST = 0.20;
 
 /**
  * MOBILE-ONLY PRE-EXPOSURE — the PRIMARY "too-dark" fix. A linear-HDR MULTIPLY
@@ -175,7 +175,7 @@ const MOBILE_CONTRAST = 0.13;
  * merged into the already-present single grade EffectPass (no new pass/RT). Desktop
  * has no equivalent (its EffectComposer is untouched) → byte-identical.
  */
-const MOBILE_EXPOSURE = 1.35;
+const MOBILE_EXPOSURE = 1.30;
 
 /**
  * MOBILE FXAA subpixel-blend quality (postprocessing FXAAEffect `subpixelQuality`
@@ -287,21 +287,21 @@ const MOBILE_KEY_COLOR = '#fff4ea'; // neutral warm-white daylight key
 // SHADOW-DRAMA: raised 2.1 → 2.3 so lit up-faces pop ~10% (a board/ground up-face goes
 // ~2.47 → ~2.51 luma), sharpening the sunlit-vs-shaded read. Shadow-safe (the KEY's
 // shadow map is the frozen depth-only one-shot bake). Tunable 2.3–2.5 for more punch.
-const MOBILE_KEY_INTENSITY = 2.3;
+const MOBILE_KEY_INTENSITY = 3.4;
 const MOBILE_KEY_POSITION: [number, number, number] = [7, 5.5, 6]; // lowered Y 11→5.5 for side-light (elev ~31°); re-bakes at load
 // HEMISPHERE: neutral daylight sky over a slightly darker WARM ground bounce (so
 // undersides read a touch deeper), RAISED to a natural daylight fill so the shaded
 // side reads instead of going muddy — depth now comes from the raking sun angle.
-const MOBILE_HEMI_SKY = '#e0eaf3';
-const MOBILE_HEMI_GROUND = '#b3ad9e';
-const MOBILE_HEMI_INTENSITY = 0.44;
+const MOBILE_HEMI_SKY = '#cfe0f5';
+const MOBILE_HEMI_GROUND = '#6b7488';
+const MOBILE_HEMI_INTENSITY = 0.16;
 // AMBIENT: NEUTRAL soft floor — lifts pure black so the deepest shade never crushes;
 // the raking directional KEY + longer baked shadow supply the darkening, so this
 // stays low and colourless. SHADOW-DRAMA: trimmed 0.20 → 0.17 for a deeper (still
 // lifted + hued) shadow side — a shaded wall stays ~1.1 luma, well above the ~0.87
 // "too dark" floor the last round fixed. Hold 0.20 if any muddiness appears.
-const MOBILE_AMBIENT_COLOR = '#eef1f4';
-const MOBILE_AMBIENT_INTENSITY = 0.17;
+const MOBILE_AMBIENT_COLOR = '#aeb8cc';
+const MOBILE_AMBIENT_INTENSITY = 0.06;
 /**
  * MOBILE-ONLY frozen shadow-map resolution for the KEY sun. The map is baked
  * ONCE at load (autoUpdate off — see MobileCrispBoardPipeline), so it costs a single
