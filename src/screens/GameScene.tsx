@@ -177,7 +177,7 @@ const MOBILE_CONTRAST = 0.20;
  * merged into the already-present single grade EffectPass (no new pass/RT). Desktop
  * has no equivalent (its EffectComposer is untouched) → byte-identical.
  */
-const MOBILE_EXPOSURE = 1.30;
+const MOBILE_EXPOSURE = 1.18;
 
 /**
  * MOBILE FXAA subpixel-blend quality (postprocessing FXAAEffect `subpixelQuality`
@@ -289,7 +289,7 @@ const MOBILE_KEY_COLOR = '#fff4ea'; // neutral warm-white daylight key
 // SHADOW-DRAMA: raised 2.1 → 2.3 so lit up-faces pop ~10% (a board/ground up-face goes
 // ~2.47 → ~2.51 luma), sharpening the sunlit-vs-shaded read. Shadow-safe (the KEY's
 // shadow map is the frozen depth-only one-shot bake). Tunable 2.3–2.5 for more punch.
-const MOBILE_KEY_INTENSITY = 3.4;
+const MOBILE_KEY_INTENSITY = 2.7;
 const MOBILE_KEY_POSITION: [number, number, number] = [7, 5.5, 6]; // lowered Y 11→5.5 for side-light (elev ~31°); re-bakes at load
 // HEMISPHERE: neutral daylight sky over a slightly darker WARM ground bounce (so
 // undersides read a touch deeper), RAISED to a natural daylight fill so the shaded
