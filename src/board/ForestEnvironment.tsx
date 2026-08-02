@@ -2,6 +2,7 @@ import { Suspense, useEffect, useLayoutEffect, useMemo, useRef } from 'react';
 import * as THREE from 'three';
 import { useGLTF, useTexture } from '@react-three/drei';
 import { useFrame } from '@react-three/fiber';
+import { mergeVertices } from 'three-stdlib';
 import { BOARD_WORLD_SIZE } from './positions';
 import {
   rebuildForestAsChunks,
@@ -918,6 +919,20 @@ const LOD1_SUFFIX = '_LOD1';
 const LOD2_SUFFIX = '_LOD2';
 
 /**
+ * ── MOBILE-ONLY: SMOOTH-SHADE THE GROUND (kill the faceted low-poly look) ─────
+ * forest.mobile.glb bakes flat PER-FACE normals into the ground meshes (Meadow,
+ * Grass, Meadow_Path, Lake_Ground — see {@link isForestGroundMesh}), which reads
+ * as a faceted "low-poly" surface on the meadow/mud/lake floor. We recompute
+ * AVERAGED (smooth) vertex normals on those ground geometries once at load —
+ * same triangle count, ~0 fps cost — so the INTERIOR shading smooths out while
+ * the SILHOUETTE stays exactly as faceted as the source geometry (normals don't
+ * change vertex positions, only how each face is lit). FOLIAGE (trees, flowers,
+ * mushrooms, grass foliage) and MOUNTAINS/ROCKS are never touched — only the
+ * flat ground surface benefits from smoothing.
+ */
+const MOBILE_SMOOTH_TERRAIN = true; // smooth vertex normals on ground geoms (kills faceted low-poly shading); false = raw glb per-face normals
+
+/**
  * ── MOBILE-ONLY: baked island-wide TOP-DOWN forest CONTACT-AO ground decal ────
  * A 1024² grayscale occlusion map baked (Blender, scripts/gen-forest-mobile-ao.mjs)
  * as a TOP-DOWN orthographic occluder-coverage render of the forest's trees/birch/
@@ -1135,6 +1150,34 @@ export function ForestEnvironment({ isMobile = false }: { isMobile?: boolean }):
     const lodTiers = new Map<string, { lod1: THREE.BufferGeometry; lod2: THREE.BufferGeometry }>();
     for (const [name, e] of lodGeometry) {
       if (e.lod1 && e.lod2) lodTiers.set(name, { lod1: e.lod1, lod2: e.lod2 });
+    }
+
+    // MOBILE-ONLY: smooth-shade the GROUND surface (see MOBILE_SMOOTH_TERRAIN).
+    // Runs ONCE here, on the SOURCE island-wide InstancedMeshes, BEFORE
+    // rebuildForestAsChunks copies this geometry onto every spatial chunk — so
+    // every chunk inherits the smoothed geometry for free. GROUND ONLY: skip
+    // any type present in `lodTiers` (FOLIAGE — trees/flowers/mushrooms/grass;
+    // mirrors the exact `lodGeometry?.has(im.name)` isFoliage test forestChunking
+    // uses internally) and skip anything that isn't `isForestGroundMesh`
+    // (mountains/rocks). Desktop (forest.glb, patched in place elsewhere) never
+    // enters this branch — geometry there is untouched, byte-identical.
+    // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- MOBILE_SMOOTH_TERRAIN is a documented tuning constant meant to be toggled; the branch is intentional
+    if (isMobile && MOBILE_SMOOTH_TERRAIN) {
+      scene.traverse((o) => {
+        const im = o as THREE.InstancedMesh;
+        // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- runtime narrowing: o is Object3D; only actual InstancedMeshes have isInstancedMesh===true
+        if (!im.isInstancedMesh) return;
+        if (lodTiers.has(im.name)) return; // foliage — never smoothed (LOD-tiered types)
+        if (!isForestGroundMesh(im.name)) return; // ground only (meadow/path/lake)
+        const g = im.geometry;
+        g.deleteAttribute('normal'); // drop baked per-face normals so the weld keys on position/uv/color, not normals
+        const smoothed = mergeVertices(g); // weld coincident verts (returns a NEW indexed geometry)
+        smoothed.computeVertexNormals(); // averaged => smooth shading
+        smoothed.computeBoundingBox();
+        smoothed.computeBoundingSphere();
+        g.dispose(); // free the old geometry
+        im.geometry = smoothed;
+      });
     }
 
     scene.traverse((o) => {
