@@ -131,6 +131,14 @@ interface MobileCrispBoardPipelineProps {
   cityDepthBias: number;
   /**
    * ── TILT-SHIFT / MINIATURE-DIORAMA (MOBILE-ONLY) ───────────────────────────
+   * MASTER on/off (MOBILE_TILTSHIFT_ENABLED). When false the TiltShiftEffect is NOT
+   * constructed and NOT added to the grade EffectPass, so the half-res Kawase blur, its
+   * RT and its per-frame update() are entirely absent — a ~1.5-3ms/frame perf WIN and no
+   * "weird" defocus. When true the band is built from the knobs below. All tilt-shift
+   * knobs still flow through regardless so the effect stays fully tunable on re-enable.
+   */
+  tiltShiftEnabled: boolean;
+  /**
    * TiltShiftEffect `offset` — screen-Y CENTRE of the razor-sharp band, in
    * framebuffer units where the FULL screen height spans 2.0 (bottom −1, centre 0,
    * top +1). 0.0 = band centred on screen-Y. POSITIVE nudges the sharp band toward
@@ -266,6 +274,7 @@ export function MobileCrispBoardPipeline({
   cityDpr,
   depthBias,
   cityDepthBias,
+  tiltShiftEnabled,
   tiltShiftOffset,
   tiltShiftFocusArea,
   tiltShiftFeather,
@@ -429,14 +438,19 @@ export function MobileCrispBoardPipeline({
     // projection + degenerate-pose (w≤0/NaN) guarding to a pipeline the brief
     // requires stay blank-screen-proof; the widened static band is the bounded,
     // zero-new-failure-surface fix and needs no per-frame work.
-    const tiltShift = new TiltShiftEffect({
-      offset: tiltShiftOffset,
-      rotation: 0,
-      focusArea: tiltShiftFocusArea,
-      feather: tiltShiftFeather,
-      kernelSize: tiltShiftKernelSize,
-      resolutionScale: tiltShiftResolutionScale,
-    });
+    // GATED on tiltShiftEnabled (MOBILE_TILTSHIFT_ENABLED). When false the effect is
+    // not constructed at all → no half-res Kawase blur pass, no RT, no per-frame
+    // update() — a perf WIN, and the null slot is dropped from the pass below.
+    const tiltShift = tiltShiftEnabled
+      ? new TiltShiftEffect({
+          offset: tiltShiftOffset,
+          rotation: 0,
+          focusArea: tiltShiftFocusArea,
+          feather: tiltShiftFeather,
+          kernelSize: tiltShiftKernelSize,
+          resolutionScale: tiltShiftResolutionScale,
+        })
+      : null;
     // EFFECT ORDER — FXAA + SHARPEN FIRST, then tonemap + grade. WHY: in a merged
     // postprocessing EffectPass every effect shares ONE `inputBuffer` uniform = the
     // pass input (this linear-HDR composite FBO), so FXAA's edge samples and
@@ -471,12 +485,15 @@ export function MobileCrispBoardPipeline({
     // correct blur/highlight-bleed belongs. TiltShift declares NO `attributes`
     // (EffectAttribute.NONE, like FXAA here) so it MERGES — no extra convolution
     // sub-pass — and is initialize()d/setSize()d/dispose()d by this same gradePass.
-    // Revert path: delete the `tiltShift,` arg to restore today's exact chain.
+    // ENABLE PATH: `tiltShift` is null unless MOBILE_TILTSHIFT_ENABLED, so the
+    // conditional spread drops the slot entirely when disabled (default) — the merged
+    // grade shader is built WITHOUT the tilt-shift mix and its blur RT never exists.
+    // Set MOBILE_TILTSHIFT_ENABLED = true to splice the band blur back into the chain.
     const gradePass = new EffectPass(
       camera,
       fxaa,
       sharpen,
-      tiltShift,
+      ...(tiltShift ? [tiltShift] : []),
       preExposure,
       toneMapping,
       hueSat,
@@ -507,6 +524,7 @@ export function MobileCrispBoardPipeline({
     fxaaSubpixelQuality,
     depthBias,
     cityDepthBias,
+    tiltShiftEnabled,
     tiltShiftOffset,
     tiltShiftFocusArea,
     tiltShiftFeather,

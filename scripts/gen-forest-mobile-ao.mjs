@@ -1,32 +1,35 @@
 /**
- * gen-forest-mobile-ao.mjs — bake the ISLAND-WIDE, TOP-DOWN forest contact-
- * occlusion texture for the MOBILE forest and produce the compressed decal map.
- * MOBILE-ONLY; the desktop-frozen `public/models/forest.glb` and every runtime
- * material are left untouched. This pass does NOT wire the decal into three — it
- * only produces + verifies the texture and reports the world→UV mapping.
+ * gen-forest-mobile-ao.mjs — bake the ISLAND-WIDE, TOP-DOWN forest GROUND map for
+ * the MOBILE forest (DIRECTIONAL sun cast shadows + contact-AO in one grayscale
+ * luminance map) and produce the compressed decal. MOBILE-ONLY; the desktop-frozen
+ * `public/models/forest.glb` and every runtime material are left untouched. The
+ * decal is ALREADY wired (world-XZ tap + multiply in ForestEnvironment); this pass
+ * only re-bakes its CONTENT (same URL / mapping) and verifies it.
  *
  * WHY: the mobile forest (`public/models/forest.mobile.glb`, GPU-instanced) rings
- * a central board CLEARING. A single baked top-down occlusion map, applied later
- * as ONE ground decal / overlay sampled by world XZ, adds cheap grounding depth
- * (dark under tree/rock/mountain clusters, white in the clearing) at ZERO
- * framerate cost — +1 texture tap on one bounded ground quad, no SSAO / no render
- * target / no per-frame shadow / no blur at runtime.
+ * a central board CLEARING. A single baked top-down ground map, sampled by world XZ
+ * and multiplied into the ground albedo, adds cheap grounding depth (directional
+ * shadow streaks + contact-AO under tree/rock clusters, white in the clearing) at
+ * ZERO framerate cost — +1 texture tap on one bounded ground quad, no SSAO / no
+ * render target / no per-frame shadow / no blur at runtime. iOS-safe: the shadows
+ * are BAKED into this texture, never from enabling shadowMap on the mediump forest.
  *
  * PIPELINE:
  *   1. RENDER (Blender/Cycles, scripts/blender/bake_forest_ao.py): import the
  *      mobile glb, drop the `_LOD1`/`_LOD2` sibling meshes + the flat ground floor
- *      (meadow/path/lake) + small clutter (grass/flowers/mushrooms), keep ONLY the
- *      occluders (trees/birch/rocks/mountains), and render them flat-black on a
- *      white world through a TOP-DOWN orthographic camera framing the full island
- *      box. Output: a raw coverage PNG (black = occluded, white = open) + a meta
- *      JSON carrying the world islandMin/islandSize the wiring needs.
- *   2. SOFTEN + SQUARE (this script, sharp): downsample to a square texture,
- *      Gaussian-blur into a soft penumbra (OFFLINE — not a runtime pass), and lift
- *      a subtle black FLOOR so the decal reads as gentle occlusion, not a hard
- *      cut-out. The map is a grayscale occlusion factor (1 = no change, <1 =
- *      darken) — multiply-friendly for either an aoMap-style or a decal overlay.
- *   3. VERIFY it is a sane occlusion map: central (board) region near-WHITE, real
- *      DARK regions under the clusters, plus an ASCII preview + stats.
+ *      (meadow/path/lake) + small clutter (grass/flowers/mushrooms), keep the
+ *      tree/rock occluders, and render a white RECEIVER plane lit by a DIRECTIONAL
+ *      sun (dir = GameScene MOBILE_KEY_POSITION) + a uniform white sky, with the
+ *      occluders as shadow casters, through a TOP-DOWN ortho camera framing the full
+ *      island box. Output: a raw grayscale luminance PNG (dark = shadow/AO, white =
+ *      open) + a meta JSON carrying the world islandMin/islandSize the wiring needs.
+ *   2. NORMALIZE + SQUARE (this script, sharp): downsample to a square texture, a
+ *      SMALL offline penumbra blur (the sun angle already gives a physical penumbra),
+ *      normalize the white point (open plateau → 1.0), CLAMP a subtle black floor
+ *      (keep reference-dark shadows just off pure-black), and composite a WHITE board
+ *      keep-out disc. The map is a grayscale factor (1 = no change, <1 = darken).
+ *   3. VERIFY it is a sane map: central (board) region near-WHITE, real DARK regions
+ *      under the clusters, bright clearing inside a darker ring, ASCII preview + stats.
  *   4. COMPRESS to public/images/forest.mobile.ao.ktx2 (UASTC, linear, genmipmap —
  *      matches board.mobile.ktx2 / city.mobile.ao.ktx2) AND a .webp fallback.
  *
@@ -54,11 +57,24 @@ const LOCAL_KTX_LIB = join(ROOT, 'tools/ktx/lib');
 const TEX_SIZE = 1024;      // final SQUARE texture edge (px). Low-frequency map →
                             // 1024^2 is ample (≈0.1 world units/texel) and matches
                             // the mobile budget (city.mobile.ao is 1024 too).
-const AO_BLUR_SIGMA = 6;    // px @1024: soften the hard coverage silhouette into a
-                            // ~1-world-unit contact penumbra. OFFLINE blur only.
-const AO_FLOOR = 0.25;      // lift the black point so the DARKEST occlusion reads
-                            // as a subtle 0.25 (not black); open stays 1.0. Runtime
-                            // can scale further via decal opacity / aoMapIntensity.
+const AO_BLUR_SIGMA = 3;    // px @1024: the physical sun angle already gives a real
+                            // penumbra, so a SMALL offline blur keeps the cast
+                            // shadows READABLE (clear lit/shadowed) instead of mush.
+const AO_FLOOR = 0.08;      // black-point CLAMP (out = max(in, FLOOR)) — NOT a lift.
+                            // The physical render already yields ~0.42 shadow / ~0.15
+                            // AO; a lift would wash them back toward 0.5. The clamp
+                            // preserves the reference-dark shadows and only prevents
+                            // pure-black, so the runtime cool hemi / ambient / grade
+                            // still light the darkened albedo to a COLORED shadow.
+const AO_WHITE_PCT = 0.995; // normalize: the bright open plateau (this percentile)
+                            // maps to 1.0 → open clearing = white regardless of the
+                            // absolute Blender exposure (and guarantees verify max≥.95).
+// BOARD/CITY CLEARING white keep-out (full-width-fraction radius from the centre =
+// world origin = board centre). The ~31° sun streaks long shadows toward the centre
+// from the treeline; a soft white disc keeps the board footprint (±0.048U/±0.057V,
+// corner r≈0.074) pure white while leaving the treeline ring intact for drama.
+const AO_DISC_SOLID = 0.075; // solid white out to here
+const AO_DISC_FADE = 0.12;   // smoothstep back to the map by here
 
 const MB = (n) => (n / 1024 / 1024).toFixed(2) + ' MB';
 const KB = (n) => (n / 1024).toFixed(1) + ' KB';
@@ -87,28 +103,73 @@ function resolveToktx() {
   return null;
 }
 
+/** smoothstep(e0,e1,x) → 0..1 with a smooth ease at both ends. */
+function smoothstep(e0, e1, x) {
+  const t = Math.min(1, Math.max(0, (x - e0) / (e1 - e0)));
+  return t * t * (3 - 2 * t);
+}
+
 /**
- * Soften + square the raw coverage render into the final grayscale occlusion map.
- * Returns the processed square PNG path (in `scratch`).
+ * Turn the raw top-down sun-shadow + AO render into the final grayscale ground map.
+ * grayscale → square → small penumbra blur, then three numeric passes over the raw
+ * buffer: (1) NORMALIZE the white point (open plateau → 1.0), (2) black-point CLAMP
+ * (keep reference-dark shadows, just off pure-black), (3) composite the WHITE board
+ * clearing keep-out disc. Returns the processed square PNG path (in `scratch`).
  */
 async function postProcess(coveragePng, scratch) {
   const meta = await sharp(coveragePng).metadata();
-  console.log(`[gen-forest-ao] coverage render: ${meta.width}x${meta.height} (${KB(statSync(coveragePng).size)})`);
+  console.log(`[gen-forest-ao] shadow+AO render: ${meta.width}x${meta.height} (${KB(statSync(coveragePng).size)})`);
 
   const outPng = join(scratch, 'forest_ao_1024.png');
   // grayscale → square (anisotropic 'fill'; the true world aspect lives in
-  // islandSize, so the shader un-stretches) → blur (offline penumbra) → lift floor.
-  // linear(a,b): out = in*a + b (8-bit) with a = 1-FLOOR, b = FLOOR*255 → black
-  // point rises to FLOOR, white point stays 255.
-  await sharp(coveragePng)
+  // islandSize, so the shader un-stretches) → small offline penumbra blur, then read
+  // the raw single-channel buffer for the numeric passes below.
+  const { data, info } = await sharp(coveragePng)
     .grayscale()
     .resize(TEX_SIZE, TEX_SIZE, { fit: 'fill', kernel: 'lanczos3' })
     .blur(AO_BLUR_SIGMA)
-    .linear(1 - AO_FLOOR, Math.round(AO_FLOOR * 255))
+    .raw()
+    .toBuffer({ resolveWithObject: true });
+  const W = info.width;
+  const H = info.height;
+
+  // 1) NORMALIZE white point: rescale so the bright open plateau (AO_WHITE_PCT) → 255.
+  const hist = new Array(256).fill(0);
+  for (let i = 0; i < data.length; i++) hist[data[i]]++;
+  let cum = 0;
+  let whitePoint = 255;
+  const target = AO_WHITE_PCT * data.length;
+  for (let v = 0; v < 256; v++) {
+    cum += hist[v];
+    if (cum >= target) {
+      whitePoint = v;
+      break;
+    }
+  }
+  const scale = 255 / Math.max(1, whitePoint);
+
+  // 2) FLOOR CLAMP (not black) + 3) WHITE board-clearing keep-out disc.
+  const floor = Math.round(AO_FLOOR * 255);
+  const out = Buffer.allocUnsafe(data.length);
+  for (let y = 0; y < H; y++) {
+    for (let x = 0; x < W; x++) {
+      const i = y * W + x;
+      let v = Math.min(255, Math.round(data[i] * scale)); // normalize white point
+      if (v < floor) v = floor; // clamp black point off pure-black
+      // full-width-fraction radius from centre (= world origin = board centre)
+      const rx = (x - W / 2) / W;
+      const ry = (y - H / 2) / H;
+      const a = 1 - smoothstep(AO_DISC_SOLID, AO_DISC_FADE, Math.hypot(rx, ry));
+      out[i] = Math.round(v * (1 - a) + 255 * a); // keep the board footprint white
+    }
+  }
+  await sharp(out, { raw: { width: W, height: H, channels: 1 } })
     .png({ compressionLevel: 9 })
     .toFile(outPng);
   console.log(
-    `[gen-forest-ao] processed → ${TEX_SIZE}x${TEX_SIZE} (blur σ=${AO_BLUR_SIGMA}px, floor=${AO_FLOOR}) (${KB(statSync(outPng).size)})`,
+    `[gen-forest-ao] processed → ${TEX_SIZE}x${TEX_SIZE} (blur σ=${AO_BLUR_SIGMA}px, ` +
+      `whitePoint=${whitePoint}→255 ×${scale.toFixed(3)}, floor=${AO_FLOOR}, disc r=${AO_DISC_SOLID}→${AO_DISC_FADE}) ` +
+      `(${KB(statSync(outPng).size)})`,
   );
   return outPng;
 }

@@ -132,11 +132,12 @@ const CONTRAST = 0.12;
  *   re-activated WarmGrade shadow term adds a gentle lift, so an ADDITIVE brightness
  *   offset would double-lift the floor and risk milky/washed blacks; a multiply
  *   preserves the black point far better, so let exposure do the lifting.
- * - CONTRAST 0.08 → 0.10 — REBALANCE for the palette mute below. Desaturation slightly
- *   flattens vibrancy/value; the stylized low-poly references are muted but NOT grey —
- *   they hold value contrast from the one key. A small BrightnessContrast bump
- *   (1/0.90 = ×1.11, still well below the desktop ×1.124 crush) re-establishes midtone
- *   snap so the muted palette does not read flat.
+ * - CONTRAST 0.10 → 0.13 — SHADOW-DRAMA round. Widen the highlight/shadow separation
+ *   after ACES so the muted palette (MOBILE_SATURATION −0.08) reads as VALUE drama, not
+ *   oversaturation. The stylized low-poly references are muted but NOT grey — they hold
+ *   value contrast from the one key. The BrightnessContrast bump is now 1/0.87 = ×1.149
+ *   (a hair above the desktop ×1.124 crush), pairing with the raised KEY + darker baked
+ *   shadow to re-establish midtone snap. Tunable 0.10–0.15.
  * - SATURATION 0.15 → -0.08 — the REFERENCE-MATCH palette lever. The good stylized
  *   low-poly renders share MUTED, harmonious, DESATURATED palettes; our neon-uniform
  *   green is the #1 "cheap" tell. postprocessing 6.39.3 HueSaturation runs
@@ -157,7 +158,7 @@ const CONTRAST = 0.12;
  */
 const MOBILE_SATURATION = -0.08;
 const MOBILE_BRIGHTNESS = 0.0;
-const MOBILE_CONTRAST = 0.1;
+const MOBILE_CONTRAST = 0.13;
 
 /**
  * MOBILE-ONLY PRE-EXPOSURE — the PRIMARY "too-dark" fix. A linear-HDR MULTIPLY
@@ -283,7 +284,10 @@ const HEMI_INTENSITY = 0.25;
  * MOBILE_ENV_INTENSITY (raise to soften the shade back up).
  */
 const MOBILE_KEY_COLOR = '#fff4ea'; // neutral warm-white daylight key
-const MOBILE_KEY_INTENSITY = 2.1;
+// SHADOW-DRAMA: raised 2.1 → 2.3 so lit up-faces pop ~10% (a board/ground up-face goes
+// ~2.47 → ~2.51 luma), sharpening the sunlit-vs-shaded read. Shadow-safe (the KEY's
+// shadow map is the frozen depth-only one-shot bake). Tunable 2.3–2.5 for more punch.
+const MOBILE_KEY_INTENSITY = 2.3;
 const MOBILE_KEY_POSITION: [number, number, number] = [7, 5.5, 6]; // lowered Y 11→5.5 for side-light (elev ~31°); re-bakes at load
 // HEMISPHERE: neutral daylight sky over a slightly darker WARM ground bounce (so
 // undersides read a touch deeper), RAISED to a natural daylight fill so the shaded
@@ -293,9 +297,11 @@ const MOBILE_HEMI_GROUND = '#b3ad9e';
 const MOBILE_HEMI_INTENSITY = 0.44;
 // AMBIENT: NEUTRAL soft floor — lifts pure black so the deepest shade never crushes;
 // the raking directional KEY + longer baked shadow supply the darkening, so this
-// stays low and colourless.
+// stays low and colourless. SHADOW-DRAMA: trimmed 0.20 → 0.17 for a deeper (still
+// lifted + hued) shadow side — a shaded wall stays ~1.1 luma, well above the ~0.87
+// "too dark" floor the last round fixed. Hold 0.20 if any muddiness appears.
 const MOBILE_AMBIENT_COLOR = '#eef1f4';
-const MOBILE_AMBIENT_INTENSITY = 0.2;
+const MOBILE_AMBIENT_INTENSITY = 0.17;
 /**
  * MOBILE-ONLY frozen shadow-map resolution for the KEY sun. The map is baked
  * ONCE at load (autoUpdate off — see MobileCrispBoardPipeline), so it costs a single
@@ -379,12 +385,17 @@ const MOBILE_CITY_DEPTH_BIAS = 0.03;
  * ── MOBILE-ONLY TILT-SHIFT / MINIATURE-DIORAMA (see MobileCrispBoardPipeline) ──
  * A screen-vertical band blur merged into the mobile grade EffectPass: the board +
  * centre city stay razor-sharp while the far terrain/mountains (top of frame) and
- * the extreme near foreground (bottom) blur, tricking the eye into reading the whole
- * scene as a tiny tabletop model — the biggest "premium" jump for a board game. This
- * is the ONE effect BUDGETED to cost fps (~10-15fps; scene idles ~84 → stays ≥ 65).
- * Cost is a single half-res Kawase blur into TiltShift's own RT (see the two knobs
- * below). MOBILE-ONLY: only <MobileCrispBoardPipeline> (isMobile branch) consumes
- * these; desktop keeps its own <EffectComposer> → byte-identical.
+ * the extreme near foreground (bottom) blur, reading the scene as a tiny tabletop
+ * model. DISABLED BY DEFAULT (MOBILE_TILTSHIFT_ENABLED = false): the miniature-diorama
+ * look actively FIGHTS the "high-quality low-poly render" reference goal, and users
+ * flagged the blur as "weird". When false the effect is NOT constructed and NOT added
+ * to the grade pass (see MobileCrispBoardPipeline), so its half-res Kawase blur + RT +
+ * per-frame update() are GONE — a ~1.5-3ms/frame perf WIN, not just neutral. Flip
+ * MOBILE_TILTSHIFT_ENABLED to true to bring it back (it was the ONE effect BUDGETED to
+ * cost fps, ~10-15fps; scene idles ~84 → stays ≥ 65). The band shape/cost knobs below
+ * still feed the effect when re-enabled, so the whole thing stays TUNABLE. MOBILE-ONLY:
+ * only <MobileCrispBoardPipeline> (isMobile branch) consumes these; desktop keeps its
+ * own <EffectComposer> → byte-identical.
  *
  * Units: framebuffer-space, where the FULL screen height spans 2.0 (bottom −1,
  * centre 0, top +1). fully-sharp core = OFFSET ± (FOCUS_AREA − FEATHER); full blur
@@ -413,6 +424,10 @@ const MOBILE_CITY_DEPTH_BIAS = 0.03;
  * MEASURE on-device via RenderStatsReadout at the idle pose (expect ~84 → confirm
  * ≥ 65); A/B by temporarily setting FOCUS_AREA = 2.0 (whole screen sharp = blur off).
  */
+// MASTER on/off for the mobile tilt-shift. false = effect dropped from the grade pass
+// (perf WIN + removes the "weird" blur). Flip to true to restore the diorama band using
+// the OFFSET/FOCUS_AREA/FEATHER/RESOLUTION_SCALE/KERNEL_SIZE knobs below.
+const MOBILE_TILTSHIFT_ENABLED = false;
 const MOBILE_TILTSHIFT_OFFSET = 0.0;
 const MOBILE_TILTSHIFT_FOCUS_AREA = 0.85;
 const MOBILE_TILTSHIFT_FEATHER = 0.35;
@@ -847,12 +862,18 @@ export function GameScene() {
           lower incidence adds — now paired with the softer 1536² map, whose larger
           texels need a touch more normal offset (bias stays -0.0004 — normalBias is
           the correct lever, deepening depth-bias would risk contact detachment).
-          SOFT-SHADOW VALUE (reference-match): shadow-intensity={0.75} sets the receive
-          to 75% strength (three 0.169 LightShadow.intensity — a receive-time
-          mix(1.0, shadow, intensity) in the shadow chunk, fully compatible with the
-          frozen/autoUpdate-off map and FREE) so board+city grounding reads SOFT, not
-          crushed-black, matching the hazy non-crushed reference shadows. Desktop's KEY
-          (above) is untouched → byte-identical. */}
+          SHADOW-DRAMA VALUE: shadow-intensity={0.9} sets the receive to 90% strength (a
+          receive-time mix(1.0, shadow, intensity) in the shadow chunk, fully compatible
+          with the frozen/autoUpdate-off map and FREE), RAISED from the over-softened
+          0.75 last round so the board slab + city tower cast shadows GROUND clearly and
+          add the reference's depth/mood. NOT crushed-black: the shaded surface still
+          gets hemi(0.44×0.5) + ambient(0.17) + env(1.0) fill (~1.1 luma), so 0.90 reads
+          as a deep-but-COLORED occlusion, and the 10% key bleed keeps a hair of
+          softness (go 1.0 for max — still non-black via fill). Tunable 0.88–0.95. EDGE
+          softness is HELD, not sharpened: 1536² PCFSoftShadowMap penumbra, bias
+          −0.0004, normalBias 0.035 and the ±12 ortho frame are all unchanged, so this
+          is darker, NOT harder, with no acne/peter-panning retune. Desktop's KEY (above)
+          is untouched → byte-identical. */}
       {isMobile && (
         <directionalLight
           color={MOBILE_KEY_COLOR}
@@ -862,7 +883,7 @@ export function GameScene() {
           shadow-mapSize={[MOBILE_SHADOW_MAP_SIZE, MOBILE_SHADOW_MAP_SIZE]}
           shadow-bias={-0.0004}
           shadow-normalBias={0.035}
-          shadow-intensity={0.75}
+          shadow-intensity={0.9}
         >
           <orthographicCamera attach="shadow-camera" args={[-12, 12, 12, -12, 0.5, 30]} />
         </directionalLight>
@@ -970,6 +991,7 @@ export function GameScene() {
           cityDpr={MOBILE_CITY_DPR}
           depthBias={MOBILE_BOARD_DEPTH_BIAS}
           cityDepthBias={MOBILE_CITY_DEPTH_BIAS}
+          tiltShiftEnabled={MOBILE_TILTSHIFT_ENABLED}
           tiltShiftOffset={MOBILE_TILTSHIFT_OFFSET}
           tiltShiftFocusArea={MOBILE_TILTSHIFT_FOCUS_AREA}
           tiltShiftFeather={MOBILE_TILTSHIFT_FEATHER}
