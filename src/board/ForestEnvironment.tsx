@@ -650,7 +650,9 @@ function injectMobileMediump(material: THREE.Material): void {
  * so all textures/uniforms are shared — only the compiled program differs.
  */
 function buildMobileForestFadeMaterial(base: THREE.Material): THREE.Material {
-  const mat = base.clone();
+  const mat = base.clone() as THREE.MeshStandardMaterial;
+  (mat as THREE.MeshStandardMaterial).roughness = MOBILE_FOREST_ROUGHNESS;
+  (mat as THREE.MeshStandardMaterial).metalness = 0.0;
   applyForestFade(mat); // same fade + board-clip discard program as desktop
   injectMobileMediump(mat);
   // DISTINCT program cache key. three's DEFAULT customProgramCacheKey returns
@@ -675,7 +677,9 @@ function buildMobileForestFadeMaterial(base: THREE.Material): THREE.Material {
  * at the swap). Cloned from the base so textures/uniforms are shared.
  */
 function buildMobileForestOpaqueMaterial(base: THREE.Material): THREE.Material {
-  const mat = base.clone();
+  const mat = base.clone() as THREE.MeshStandardMaterial;
+  (mat as THREE.MeshStandardMaterial).roughness = MOBILE_FOREST_ROUGHNESS;
+  (mat as THREE.MeshStandardMaterial).metalness = 0.0;
   injectMobileMediump(mat);
   // Pin a CLEAN SOLID. This material's compiled program has NO `discard` at all
   // (only injectMobileMediump runs onBeforeCompile — the fade dither and the
@@ -708,7 +712,9 @@ function buildMobileForestOpaqueMaterial(base: THREE.Material): THREE.Material {
  * variants so their compiled programs never collide.
  */
 function buildMobileForestGroundClipMaterial(base: THREE.Material): THREE.Material {
-  const mat = base.clone();
+  const mat = base.clone() as THREE.MeshStandardMaterial;
+  (mat as THREE.MeshStandardMaterial).roughness = MOBILE_FOREST_ROUGHNESS;
+  (mat as THREE.MeshStandardMaterial).metalness = 0.0;
   applyForestBoardClip(mat); // board-clip discard ONLY — no fade
   injectMobileMediump(mat);
   mat.transparent = false;
@@ -931,6 +937,7 @@ const LOD2_SUFFIX = '_LOD2';
  * flat ground surface benefits from smoothing.
  */
 const MOBILE_SMOOTH_TERRAIN = true; // smooth vertex normals on ground geoms (kills faceted low-poly shading); false = raw glb per-face normals
+const MOBILE_FOREST_ROUGHNESS = 1.0; // fully matte forest/terrain — kills the plastic specular sheen the smoothed normals exposed
 
 /**
  * ── MOBILE-ONLY: baked island-wide TOP-DOWN forest CONTACT-AO ground decal ────
