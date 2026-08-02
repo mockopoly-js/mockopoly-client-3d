@@ -90,6 +90,46 @@ export const BOARD_LAYER = 1;
  */
 export const CITY_LAYER = 2;
 
+/**
+ * FOREST_GROUND_LAYER — dedicated render LAYER for the MOBILE forest TERRAIN GROUND
+ * (meadow / path / lake floor), used ONLY by MobileCrispBoardPipeline when
+ * MOBILE_FOREST_SHADOWS_ENABLED is on.
+ *
+ * WHY A SEPARATE LAYER (the iOS shadow landmine): enabling `renderer.shadowMap.enabled`
+ * injects shadow-sampling GLSL (the ~6e-8 RGBA depth-unpack constants) into EVERY
+ * MeshStandard program in that (sub)pass — three gates USE_SHADOWMAP on
+ * `shadowMap.enabled && shadows.length`, NOT on `object.receiveShadow`. The forest's
+ * foliage/rock materials run `precision mediump float`, and those constants underflow
+ * mediump so the iOS/Metal compiler REJECTS the program → INVISIBLE forest. To let the
+ * terrain ground RECEIVE real tree shadows we isolate it (a HIGHP material) on this
+ * layer and draw it in its own scene sub-pass with shadowMap.enabled=true, while the
+ * mediump foliage/rocks draw in a second sub-pass with shadowMap.enabled=false — so no
+ * mediump program is ever compiled under shadow injection. The pipeline additively
+ * enables this layer on every scene light (same as BOARD/CITY) so the ground is lit.
+ *
+ * Desktop never touches this (inert). When MOBILE_FOREST_SHADOWS_ENABLED is off the
+ * ground stays on layer 0 (mediump, no shadow receipt) and this layer is unused.
+ */
+export const FOREST_GROUND_LAYER = 3;
+
+/**
+ * MASTER TOGGLE — real-time TREE (+ rock) shadows cast into the frozen static shadow
+ * map and RECEIVED by the terrain ground, on the MOBILE path. It is the SAME frozen
+ * one-shot shadow-map that already makes the building-on-board shadow work, extended
+ * so trees cast into it and the ground receives from it.
+ *
+ * A/B + instant on-device revert: flip to `false` to restore the pre-feature path
+ * byte-for-byte — ground mediump on layer 0, a single shadows-OFF scene pass, ortho
+ * ±12 / 1536² frozen map, forest non-casting, the baked contact-AO at full strength,
+ * and NO blank screen (it is the exact current code path). `true` = trees/rocks cast +
+ * the highp ground receives (see the scene-pass split in MobileCrispBoardPipeline and
+ * the material/caster wiring in ForestEnvironment).
+ *
+ * Typed `boolean` (not the literal `true`) ON PURPOSE so both branches type-check and
+ * survive in the bundle for a rebuild-flip revert. DESKTOP is unaffected either way.
+ */
+export const MOBILE_FOREST_SHADOWS_ENABLED: boolean = true;
+
 /** Map a tile index to a world-space [x, y=0, z] on the board plane, centered at origin. */
 export function tileToWorld(index: number): [number, number, number] {
   const pos = SPACE_POSITIONS[index];

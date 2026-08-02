@@ -3,7 +3,7 @@ import * as THREE from 'three';
 import { useGLTF, useTexture } from '@react-three/drei';
 import { useFrame } from '@react-three/fiber';
 import { mergeVertices } from 'three-stdlib';
-import { BOARD_WORLD_SIZE } from './positions';
+import { BOARD_WORLD_SIZE, FOREST_GROUND_LAYER, MOBILE_FOREST_SHADOWS_ENABLED } from './positions';
 import {
   rebuildForestAsChunks,
   isForestGroundMesh,
@@ -428,6 +428,19 @@ const FOREST_DEBUG_CATEGORY_PATTERNS: readonly [ForestDebugCategory, RegExp][] =
   ['ground', /meadow|path|lake/i],
 ];
 
+/**
+ * ── MOBILE-ONLY: which forest prop types CAST into the frozen shadow map ──────────
+ * Trees + birch (the tall silhouettes that read as real cast shadows on the ground)
+ * and rocks (a nice-to-have grounding cue). Tested on the SOURCE island-wide mesh
+ * names BEFORE chunking, so castShadow propagates onto every rebuilt chunk (emitChunk
+ * copies castShadow). Mountains are deliberately EXCLUDED — capturing them would need
+ * a huge shadow-camera frustum (deferred). Ground never casts (it is the receiver).
+ * Casting uses the highp MeshDepthMaterial (a separate program from the mediump beauty
+ * material), so a caster foliage type stays mediump for its COLOR pass and is still
+ * iOS-safe. Gated by MOBILE_FOREST_SHADOWS_ENABLED at the call site; desktop never casts.
+ */
+const FOREST_CASTER_RE = /tree|birch|rock/i;
+
 /** Returns the matched debug category for a forest mesh name, or null if none match. */
 function classifyForestDebugCategory(name: string): ForestDebugCategory | null {
   for (const [category, pattern] of FOREST_DEBUG_CATEGORY_PATTERNS) {
@@ -719,12 +732,25 @@ function buildMobileForestGroundClipMaterial(base: THREE.Material): THREE.Materi
   (mat as THREE.MeshStandardMaterial).metalness = 0.0;
   (mat as THREE.MeshStandardMaterial).envMapIntensity = MOBILE_FOREST_ENV_INTENSITY;
   applyForestBoardClip(mat); // board-clip discard ONLY — no fade
-  injectMobileMediump(mat);
+  // PRECISION: the ground is the terrain shadow RECEIVER. When MOBILE_FOREST_SHADOWS_
+  // ENABLED it draws in the GROUND scene sub-pass with shadowMap.enabled=true, which
+  // injects the shadow-depth-unpack GLSL (~6e-8 constants) into its program — those
+  // UNDERFLOW mediump and iOS/Metal REJECTS the program (the invisible-forest bug). So
+  // it MUST stay HIGHP here (three's default fragment precision) — we SKIP
+  // injectMobileMediump. A material only needs highp to RECEIVE shadows; the ground
+  // pays highp fill on the (low-overdraw) floor only, while the foliage/rocks keep
+  // mediump (they don't receive). With the toggle OFF the ground never receives, so it
+  // keeps the cheap mediump override (revert-identical). The 'highp'/'mediump' cache-key
+  // suffix tracks this so a precision change never re-uses a stale cached program.
+  if (!MOBILE_FOREST_SHADOWS_ENABLED) injectMobileMediump(mat);
   mat.transparent = false;
   mat.depthWrite = true;
   mat.depthTest = true;
   mat.polygonOffset = false;
-  mat.customProgramCacheKey = () => 'mobile-forest-ground-clip-mediump';
+  mat.customProgramCacheKey = () =>
+    MOBILE_FOREST_SHADOWS_ENABLED
+      ? 'mobile-forest-ground-clip-highp'
+      : 'mobile-forest-ground-clip-mediump';
   mat.needsUpdate = true;
   return mat;
 }
@@ -941,7 +967,12 @@ const LOD2_SUFFIX = '_LOD2';
  */
 const MOBILE_SMOOTH_TERRAIN = true; // smooth vertex normals on ground geoms (kills faceted low-poly shading); false = raw glb per-face normals
 const MOBILE_FOREST_ROUGHNESS = 1.0; // fully matte forest/terrain — kills the plastic specular sheen the smoothed normals exposed
-const MOBILE_FOREST_ENV_INTENSITY = 0.08; // near-zero env reflection — matte grass/dirt/rock (kills HDRI sheen)
+// ZERO env reflection on forest/terrain — kills the residual HDRI grazing sheen the
+// user still saw at 0.08 (matte grass/dirt/rock). NOTE: this removes the ENV specular
+// only; the KEY light's DIRECT specular lobe (Fresnel-boosted at grazing angles) can
+// still add a faint edge sheen on the now-highp ground — if it shows on-device that is
+// the next lever (kill the spec term), not this const. Applies to ALL forest materials.
+const MOBILE_FOREST_ENV_INTENSITY = 0.0;
 
 /**
  * ── MOBILE-ONLY: baked island-wide TOP-DOWN forest CONTACT-AO ground decal ────
@@ -950,8 +981,9 @@ const MOBILE_FOREST_ENV_INTENSITY = 0.08; // near-zero env reflection — matte 
  * rocks, softened offline into a soft contact penumbra (1 = open clearing → no
  * change, ~0.25 = densest cluster). It adds grounding contact-shadow depth under
  * the tree/rock clusters onto the forest GROUND floor for the cost of ONE extra
- * texture tap folded into the ground clip material's EXISTING mediump MeshStandard
- * program — NO new render pass / render target / draw call / transparency / SSAO /
+ * texture tap folded into the ground clip material's EXISTING MeshStandard program
+ * (mediump, or highp when MOBILE_FOREST_SHADOWS_ENABLED makes the ground a shadow
+ * receiver) — NO new render pass / render target / draw call / transparency / SSAO /
  * per-frame shadow. Bound ONLY on mobile, by <ForestGroundAO> below; the desktop-
  * frozen forest.glb + materials never reference it.
  *
@@ -966,10 +998,11 @@ const MOBILE_FOREST_ENV_INTENSITY = 0.08; // near-zero env reflection — matte 
  * (worldZ - min.z)/sizeZ with no extra flip.
  *
  * iOS-SAFE (see the mediump/shadow gotcha): this only ADDS a plain `sampler2D` +
- * a `texture2D` tap + a `diffuseColor` multiply to the mediump ground program. It
- * introduces NO shadow GLSL, NO new varying (vWorldPos already exists), and NO new
- * precision-sensitive compare — the UV is a subtract+scale of the SAME world
- * position the shipped board-clip already compares at mediump.
+ * a `texture2D` tap + a `diffuseColor` multiply to the ground program. It introduces
+ * NO shadow GLSL itself, NO new varying (vWorldPos already exists), and NO new
+ * precision-sensitive compare — the UV is a subtract+scale of the SAME world position
+ * the shipped board-clip already computes. (When the ground is a shadow receiver its
+ * program is HIGHP anyway, so the shadow GLSL that DOES get injected is safe too.)
  */
 const FOREST_AO_URL_MOBILE = '/images/forest.mobile.ao.webp';
 
@@ -997,9 +1030,18 @@ const FOREST_AO_URL_MOBILE = '/images/forest.mobile.ao.webp';
  *
  * Both are MOBILE-ONLY (desktop forest never binds this map). Pure albedo multiply →
  * no shadow GLSL, mediump-safe, zero new pass/RT/draw-call.
+ *
+ * REAL-SHADOW INTERACTION (MOBILE_FOREST_SHADOWS_ENABLED): once the trees cast a REAL
+ * directional shadow into the frozen shadow map that the ground RECEIVES, this baked
+ * map must NOT also paint its own (soft, and possibly slightly-misaligned) tree shadow
+ * on top — that would double-darken / ghost. So when real shadows are on we drop
+ * FOREST_AO_INTENSITY to 0.3: the baked map then contributes only GENTLE ambient
+ * occlusion / cluster grounding (which the directional cast shadow does not provide),
+ * and the crisp directional tree shadows come entirely from the shadow map. With the
+ * toggle OFF the baked map is the sole tree-shadow cue, so it stays at full 1.0.
  */
 const FOREST_AO_CONTRAST = 2.2;
-const FOREST_AO_INTENSITY = 1.0;
+const FOREST_AO_INTENSITY = MOBILE_FOREST_SHADOWS_ENABLED ? 0.3 : 1.0;
 
 /**
  * World-XZ → AO-UV mapping constants (world units). The island is centred at the
@@ -1072,8 +1114,14 @@ function applyForestGroundAo(material: THREE.Material, aoTex: THREE.Texture): vo
 
   // DISTINCT program cache key so this AO variant compiles as its OWN program and
   // never collides with the plain ground-clip program (three APPENDS this to its
-  // built-in instancing/lights key). Different string from the ground-clip key.
-  mat.customProgramCacheKey = () => 'mobile-forest-ground-clip-ao-mediump';
+  // built-in instancing/lights/shadowMap key). The precision suffix MUST track the
+  // ground material's precision (highp when MOBILE_FOREST_SHADOWS_ENABLED — the ground
+  // is a shadow RECEIVER then, so it drops the mediump override) so a precision change
+  // never re-uses a stale cached program.
+  mat.customProgramCacheKey = () =>
+    MOBILE_FOREST_SHADOWS_ENABLED
+      ? 'mobile-forest-ground-clip-ao-highp'
+      : 'mobile-forest-ground-clip-ao-mediump';
   mat.needsUpdate = true;
 }
 
@@ -1219,18 +1267,23 @@ export function ForestEnvironment({ isMobile = false }: { isMobile?: boolean }):
       const m = o as THREE.Mesh;
       // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- runtime narrowing: o is Object3D; only actual meshes have isMesh===true
       if (m.isMesh) {
-        m.receiveShadow = true; // ground/foliage takes the board's shadow
-        // The forest does NOT cast into the frozen shadow bake. Forest-ground tree
-        // shadows are DEFERRED: the mobile forest renders in the SCENE pass with
-        // shadowMap.enabled=false (see MobileCrispBoardPipeline) so its material
-        // keeps the pre-regression USE_SHADOWMAP-undefined program the iOS/Metal
-        // compiler accepts; keeping it out of the bake as a caster (board / city /
-        // buildings remain the casters) keeps the fix deterministic. castShadow is
-        // now a bare `false` — identical to the desktop default (three's default is
-        // false), so DESKTOP stays byte-identical; only mobile changes (was
-        // `isMobile`). rebuildForestAsChunks copies castShadow onto every rebuilt
-        // chunk (forestChunking), so the chunks inherit false.
-        m.castShadow = false;
+        m.receiveShadow = true; // ground receives the frozen tree/board/city shadow (foliage inert: no shadow GLSL in its mediump program)
+        // MOBILE (MOBILE_FOREST_SHADOWS_ENABLED): trees/birch + rocks CAST into the
+        // frozen one-shot shadow map so their shadows land on the terrain ground. This
+        // is iOS-safe because CASTING uses the highp MeshDepthMaterial (a separate
+        // program from the mediump beauty material that must NOT compile under
+        // shadowMap.enabled) — so a caster foliage type stays mediump for its COLOR
+        // pass. The bake is DEPTH-ONLY (see MobileCrispBoardPipeline) so no mediump
+        // beauty material is ever compiled under shadow injection. Ground never casts
+        // (it is the RECEIVER); mountains are excluded (huge frustum — deferred). The
+        // caster-signature re-bake in the pipeline notices the castShadow count jump
+        // when these chunks mount and re-fires the bake to capture them.
+        //
+        // DESKTOP + toggle-OFF: `false` — identical to the desktop default (byte-
+        // identical) and the pre-feature mobile path. rebuildForestAsChunks copies
+        // castShadow onto every rebuilt chunk, so chunks inherit this per-type.
+        m.castShadow =
+          isMobile && MOBILE_FOREST_SHADOWS_ENABLED && FOREST_CASTER_RE.test(m.name);
         m.frustumCulled = false;
         // Per-fragment near-camera dither-fade + board-footprint clip so trees
         // close to the camera dissolve out of the way of the board and no terrain
@@ -1373,11 +1426,21 @@ export function ForestEnvironment({ isMobile = false }: { isMobile?: boolean }):
         // matches "grass" — only meadow/path/lake reach the ground branch.
         for (const c of chunks) {
           const isFoliage = (c.userData as { forestLod?: ForestChunkLod }).forestLod != null;
-          c.material = isFoliage
-            ? forestFadeMat
-            : isForestGroundMesh(c.name)
-              ? forestGroundClipMat
-              : forestOpaqueMat;
+          if (isFoliage) {
+            c.material = forestFadeMat;
+          } else if (isForestGroundMesh(c.name)) {
+            c.material = forestGroundClipMat;
+            // SHADOW RECEIVER: move the terrain ground onto its OWN layer so the
+            // pipeline draws it in a shadowMap.enabled=true sub-pass (highp, receives
+            // the real tree/board/city shadows) SEPARATELY from the mediump foliage/
+            // rocks drawn shadows-off — the split that keeps the iOS/Metal compiler from
+            // ever seeing a mediump material under shadow injection. layers.set()
+            // disables layer 0, so the ground draws ONLY in the ground sub-pass. Toggle
+            // off → stays on layer 0 (single pass, revert-identical).
+            if (MOBILE_FOREST_SHADOWS_ENABLED) c.layers.set(FOREST_GROUND_LAYER);
+          } else {
+            c.material = forestOpaqueMat;
+          }
         }
         mobileChunks = chunks;
         // DEV-ONLY LOD-tier tint materials (green LOD1 / red LOD2), built once

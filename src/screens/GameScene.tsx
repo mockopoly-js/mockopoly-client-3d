@@ -28,7 +28,7 @@ import { ShaderWarmup } from '../board/ShaderWarmup';
 import { MobileRenderController } from '../board/MobileRenderController';
 import { MobileCrispBoardPipeline } from '../board/MobileCrispBoardPipeline';
 import { RenderStatsReadout } from '../board/RenderStatsReadout';
-import { BOARD_ROTATION } from '../board/positions';
+import { BOARD_ROTATION, MOBILE_FOREST_SHADOWS_ENABLED } from '../board/positions';
 import { useIsMobile } from '../ui/useIsMobile';
 
 /**
@@ -318,8 +318,38 @@ const MOBILE_AMBIENT_INTENSITY = 0.06;
  * softer; revert 2048 for crisper. The larger 1536 texels are paired with a small
  * shadow-normalBias bump on the KEY light (0.03 → 0.035) as acne safety. Desktop's
  * KEY light keeps its own 1024².
+ *
+ * FOREST-SHADOW WIDENING (MOBILE_FOREST_SHADOWS_ENABLED): when tree shadows are on the
+ * ortho frame widens 12 → 25 (MOBILE_SHADOW_ORTHO_HALF) to cover the near treeline
+ * (~±23) around the board, so the map is BUMPED 1536 → 2048 to hold detail over the
+ * ~4× larger area. Even so texel density drops 64 → ~41 texels/unit, so the board + city
+ * cast shadows read ~36% SOFTER than before — the accepted tradeoff. IF board/city
+ * shadows look too soft on-device, this is the crispness knob: raise to 3072 (~61
+ * texels/unit at ±25) or narrow MOBILE_SHADOW_ORTHO_HALF (not below ~23 — clips the near
+ * treeline). Still a FREE one-shot bake (autoUpdate off) — only ~+7MB one-time depth VRAM,
+ * zero/frame. Toggle OFF → 1536 / ±12.
  */
-const MOBILE_SHADOW_MAP_SIZE = 1536;
+const MOBILE_SHADOW_MAP_SIZE = MOBILE_FOREST_SHADOWS_ENABLED ? 2048 : 1536;
+
+/**
+ * MOBILE-ONLY KEY-sun ORTHO shadow-frustum HALF-EXTENT (world units). The frozen shadow
+ * camera is [-H, H, H, -H, near, far]; H is the half-width of the world square the map
+ * covers.
+ *
+ * WIDENED 12 → 25 when MOBILE_FOREST_SHADOWS_ENABLED so the surrounding TREE shadows land
+ * on the VISIBLE near terrain around the board (the board is 10 units; ±12 barely cleared
+ * the board's own long tower shadows, so trees ringing the ~46-unit clearing fell outside
+ * it). The INNERMOST treeline ringing the clearing sits at ~±23, so ±25 captures the
+ * trees NEAREST the board (the ones the user is looking at) with margin — ±22 would clip
+ * them. The far plane also widens (30 → 45) so the low ~31° sun's frustum brackets the
+ * ±25 corners without clipping (a ±25 corner at [25,0,-25] is ~35 units from the light —
+ * past the old far=30). Toggle OFF → ±12 / far 30 (the pre-feature frame, revert-identical).
+ * Tunable: SHRINK toward 18–20 for crisper board/city shadows (fewer trees covered — but
+ * do not drop below ~23 or the near treeline clips), GROW for more distant tree shadows
+ * (softer everything). Pair with MOBILE_SHADOW_MAP_SIZE.
+ */
+const MOBILE_SHADOW_ORTHO_HALF = MOBILE_FOREST_SHADOWS_ENABLED ? 25 : 12;
+const MOBILE_SHADOW_CAMERA_FAR = MOBILE_FOREST_SHADOWS_ENABLED ? 45 : 30;
 
 /**
  * ── MOBILE ADAPTIVE DPR (mobile only; desktop stays dpr={[1, 1.5]}) ───────────
@@ -932,9 +962,10 @@ export function GameScene() {
           gets hemi(0.44×0.5) + ambient(0.17) + env(1.0) fill (~1.1 luma), so 0.90 reads
           as a deep-but-COLORED occlusion, and the 10% key bleed keeps a hair of
           softness (go 1.0 for max — still non-black via fill). Tunable 0.88–0.95. EDGE
-          softness is HELD, not sharpened: 1536² PCFSoftShadowMap penumbra, bias
-          −0.0004, normalBias 0.035 and the ±12 ortho frame are all unchanged, so this
-          is darker, NOT harder, with no acne/peter-panning retune. Desktop's KEY (above)
+          softness: PCFSoftShadowMap penumbra, bias −0.0004, normalBias 0.035. The ortho
+          frame + map size come from MOBILE_SHADOW_ORTHO_HALF / MOBILE_SHADOW_MAP_SIZE
+          (±25 / 2048² when forest shadows are on so near tree shadows land on the
+          visible ground, else the ±12 / 1536² pre-feature frame). Desktop's KEY (above)
           is untouched → byte-identical. */}
       {isMobile && (
         <directionalLight
@@ -947,7 +978,17 @@ export function GameScene() {
           shadow-normalBias={0.035}
           shadow-intensity={0.9}
         >
-          <orthographicCamera attach="shadow-camera" args={[-12, 12, 12, -12, 0.5, 30]} />
+          <orthographicCamera
+            attach="shadow-camera"
+            args={[
+              -MOBILE_SHADOW_ORTHO_HALF,
+              MOBILE_SHADOW_ORTHO_HALF,
+              MOBILE_SHADOW_ORTHO_HALF,
+              -MOBILE_SHADOW_ORTHO_HALF,
+              0.5,
+              MOBILE_SHADOW_CAMERA_FAR,
+            ]}
+          />
         </directionalLight>
       )}
       {/* FILL: cool, low, opposite-ish angle — softens the shadow side without

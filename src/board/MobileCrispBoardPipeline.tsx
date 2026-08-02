@@ -23,7 +23,7 @@ import { SharpenEffectImpl } from '../screens/SharpenEffect';
 import { WarmGradeEffectImpl } from '../screens/WarmGradeEffect';
 import { PreExposureEffectImpl } from '../screens/PreExposureEffect';
 import { useGameStore } from '../state/gameStore';
-import { BOARD_LAYER, CITY_LAYER } from './positions';
+import { BOARD_LAYER, CITY_LAYER, FOREST_GROUND_LAYER, MOBILE_FOREST_SHADOWS_ENABLED } from './positions';
 
 /**
  * ── MOBILE BLOOM REMOVED (perf) ──────────────────────────────────────────────
@@ -734,14 +734,29 @@ export function MobileCrispBoardPipeline({
     // future-proof: the mobile-active lights (hemisphere / ambient / KEY) all need
     // to reach the board + city; FILL/RIM are desktop-only so the traverse simply
     // won't find them on mobile — no special-casing needed.
+    // FOREST_GROUND_LAYER is enabled here too (when MOBILE_FOREST_SHADOWS_ENABLED) so
+    // the KEY/hemi/ambient lights are collected in the GROUND shadow sub-pass — a light
+    // is only gathered if `light.layers.test(camera.layers)`, and that sub-pass sets
+    // camera.layers to FOREST_GROUND_LAYER, so without this the terrain ground would
+    // render UNLIT (black) and receive no shadow. Cleanup disables all three.
     const litLights: THREE.Object3D[] = [];
     scene.traverse((o) => {
       const isLight = (o as Partial<THREE.Light>).isLight === true;
-      if (isLight && (!o.layers.isEnabled(BOARD_LAYER) || !o.layers.isEnabled(CITY_LAYER))) {
+      if (!isLight) return;
+      let touched = false;
+      if (!o.layers.isEnabled(BOARD_LAYER)) {
         o.layers.enable(BOARD_LAYER);
-        o.layers.enable(CITY_LAYER);
-        litLights.push(o);
+        touched = true;
       }
+      if (!o.layers.isEnabled(CITY_LAYER)) {
+        o.layers.enable(CITY_LAYER);
+        touched = true;
+      }
+      if (MOBILE_FOREST_SHADOWS_ENABLED && !o.layers.isEnabled(FOREST_GROUND_LAYER)) {
+        o.layers.enable(FOREST_GROUND_LAYER);
+        touched = true;
+      }
+      if (touched) litLights.push(o);
     });
 
     return () => {
@@ -758,6 +773,7 @@ export function MobileCrispBoardPipeline({
       for (const light of litLights) {
         light.layers.disable(BOARD_LAYER);
         light.layers.disable(CITY_LAYER);
+        if (MOBILE_FOREST_SHADOWS_ENABLED) light.layers.disable(FOREST_GROUND_LAYER);
       }
       lastNative.current = { w: 0, h: 0 };
       rig.sceneFBO.dispose();
@@ -863,61 +879,130 @@ export function MobileCrispBoardPipeline({
     // render target inside shadowMap.render, so every subsequent frame
     // reuses the frozen map.
     //
-    // enableAll() enables camera-layer bits 0,1,2 so the caster layer-test inside
+    // enableAll() enables camera-layer bits 0,1,2,3 so the caster layer-test inside
     // shadowMap.render (`object.layers.test(camera.layers)`) passes for casters on
-    // ALL display layers at once — the board slab (BOARD_LAYER), city (CITY_LAYER)
-    // and buildings (layer 0) are captured into the KEY light's single frozen
-    // depth map. Tokens are excluded via castShadow=false (no stuck token shadow —
-    // they use blob decals); the FOREST is also castShadow=false now (its ground
-    // shadows are deferred), so it is not a caster.
+    // ALL display layers at once — board slab (BOARD_LAYER), city (CITY_LAYER),
+    // buildings + forest trees/rocks (layer 0), and the ground layer (which never
+    // casts) are all reachable in the KEY light's single frozen depth map. Tokens are
+    // excluded via castShadow=false (blob decals instead).
     //
-    // The one gl.render also does a THROWAWAY beauty pass into sceneFBO (pass 1
-    // overwrites it this same frame). We HIDE the forest for it so its beauty
-    // material is never compiled under enabled=true — that mixed-precision
-    // shadow-receive program is exactly the one the iOS/Metal compiler rejects, so
-    // we keep it from ever being built even in the throwaway. Buildings share the
-    // forest's layer 0, so we cannot exclude the forest via camera.layers without
-    // losing the building casters — hide the group by name instead, restoring it
-    // immediately (before pass 1 draws it with enabled=false). If the name ever
-    // changes the lookup no-ops and the fix degrades only to the still-correct
-    // enabled=false display path.
+    // FOREST TREE/ROCK SHADOWS (MOBILE_FOREST_SHADOWS_ENABLED): the trees + rocks now
+    // castShadow=true (see ForestEnvironment), and the caster-signature trigger above
+    // re-fires this bake the instant those chunks mount (the castShadow count jumps).
+    // The old bake did a THROWAWAY BEAUTY gl.render into sceneFBO and had to HIDE the
+    // forest first, because the forest's mediump beauty material compiled under
+    // enabled=true is exactly the program iOS/Metal rejects (the invisible-forest bug)
+    // — but hiding it also lost the tree casters. FIX: bake DEPTH-ONLY via
+    // `shadowMap.render(casters,…)`, which renders ONLY the shadow depth map (casters
+    // via their highp MeshDepthMaterial — casting needs no highp RECEIVE GLSL) and runs
+    // NO beauty pass, so no mediump material is EVER compiled under shadow injection.
+    // The forest stays VISIBLE → trees/rocks are captured. shadowMap.render restores
+    // the previous render target itself (no sceneFBO write here).
+    //
+    // TOGGLE OFF (revert path): the pre-feature THROWAWAY-BEAUTY bake with the forest
+    // HIDDEN — board/city/buildings cast, forest does not, forest mediump beauty never
+    // compiles under enabled=true. Byte-identical to the current shipped behavior.
     if (!progressActive && progressTotal > 0 && (!baked.current || casterSig !== lastCasterSig.current)) {
       const prevMask = camera.layers.mask;
       camera.layers.enableAll();
-      const forest = scene.getObjectByName('forest-environment');
-      const forestPrevVisible = forest?.visible ?? true;
-      if (forest) forest.visible = false;
       gl.shadowMap.enabled = true;
       gl.shadowMap.needsUpdate = true;
-      gl.setRenderTarget(rig.sceneFBO);
-      gl.render(scene, camera);
-      if (forest) forest.visible = forestPrevVisible;
+      if (MOBILE_FOREST_SHADOWS_ENABLED) {
+        // Gather the shadow-casting lights (the mobile KEY sun). shadowMap.render needs
+        // a non-empty light array and reads each light.shadow, so filter on it.
+        const casters: THREE.Light[] = [];
+        scene.traverse((o) => {
+          const light = o as THREE.Light;
+          if (
+            (light as Partial<THREE.Light>).isLight === true &&
+            light.castShadow &&
+            (light as unknown as { shadow?: THREE.LightShadow }).shadow != null
+          ) {
+            casters.push(light);
+          }
+        });
+        // FORCE-RESOLVE world matrices first. The old throwaway `gl.render` bake did
+        // this implicitly; a raw `shadowMap.render` does NOT. Freshly-mounted, group-
+        // SCALED forest chunks carry an identity LOCAL matrix (their transform lives
+        // only in matrixWorld, which lags a frame — the exact reason the LOD loop has a
+        // "matrixWorld not ready yet" guard). Baking against a STALE/identity matrixWorld
+        // would place the trees at origin/un-scaled, so their world bounding spheres fall
+        // OUTSIDE the ±ortho shadow frustum → renderObject skips them → the frozen map
+        // freezes EMPTY forever (autoUpdate off). Resolving here restores the guarantee.
+        scene.updateMatrixWorld(true);
+        // DEPTH-ONLY: renders the frozen shadow map (trees/rocks/board/city/buildings)
+        // with the forest VISIBLE — no beauty pass, no sceneFBO write, no mediump
+        // material compiled under enabled=true.
+        gl.shadowMap.render(casters, scene, camera);
+      } else {
+        // Throwaway beauty bake (forest hidden) — pre-feature behavior.
+        const forest = scene.getObjectByName('forest-environment');
+        const forestPrevVisible = forest?.visible ?? true;
+        if (forest) forest.visible = false;
+        gl.setRenderTarget(rig.sceneFBO);
+        gl.render(scene, camera);
+        if (forest) forest.visible = forestPrevVisible;
+      }
       camera.layers.mask = prevMask;
       lastCasterSig.current = casterSig;
       baked.current = true;
     }
 
-    // 1. SCENE pass — everything on layer 0 (board + city EXCLUDED), at scene dpr.
-    //    shadowMap.enabled = FALSE: every layer-0 material — critically the forest
-    //    — compiles/selects the USE_SHADOWMAP-UNDEFINED program, i.e. the exact
-    //    pre-regression program (no shadow struct/sampler, no mediump-underflowing
-    //    depth-unpack constants for the iOS compiler to reject). This is what makes
-    //    the terrain deterministically VISIBLE again. autoUpdate=false means this
-    //    enabled toggle never re-renders/clears the frozen map. Keeps
-    //    scene.background (HDRI sky) so the sky renders here at the cheap dpr.
-    gl.shadowMap.enabled = false;
-    camera.layers.set(0);
-    gl.setRenderTarget(rig.sceneFBO);
-    gl.render(scene, camera);
+    // 1. SCENE pass(es) → sceneFBO at scene dpr (board + city EXCLUDED).
+    //
+    // MOBILE_FOREST_SHADOWS_ENABLED — TWO sub-passes so the terrain GROUND RECEIVES
+    // real tree/board/city shadows without EVER compiling a mediump material under
+    // shadow injection (the iOS invisible-forest bug):
+    //   1a GROUND sub-pass — FOREST_GROUND_LAYER only, shadowMap.enabled=TRUE. Clears
+    //      sceneFBO, draws the HDRI sky (background is not layer-gated so it renders
+    //      here at the cheap scene dpr, exactly as the old single pass) + the HIGHP
+    //      terrain ground sampling the FROZEN shadow map → tree/board/city shadows land
+    //      on the clearing floor. ONLY highp materials draw under enabled=true. autoUpdate
+    //      + needsUpdate are false → shadowMap.render early-returns (frozen map reused,
+    //      never re-baked); setupLights still uploads the frozen map + matrix so the
+    //      ground receives (same mechanism as the board/city passes). The KEY/hemi/
+    //      ambient lights reach layer 3 (enabled in the layout effect) so it is lit.
+    //   1b REST sub-pass — layer 0 (mediump foliage/rocks + tokens/buildings),
+    //      shadowMap.enabled=FALSE, so every layer-0 material selects the pre-regression
+    //      USE_SHADOWMAP-UNDEFINED program the iOS/Metal compiler accepts (no shadow
+    //      struct/sampler, no mediump-underflowing depth-unpack constants). autoClear=
+    //      false + background=null PRESERVES the ground+sky COLOR and DEPTH from 1a
+    //      (three skips the clear and draws no sky box when background is null and
+    //      autoClear is false), so foliage depth-sorts against the ground and the sky
+    //      is NOT re-drawn (no double sky fill, no depth wipe). Restore background +
+    //      autoClear for the board/city passes below.
+    //
+    // TOGGLE OFF (revert): the single pre-feature scene pass — layer 0, shadows off,
+    // sky kept — byte-identical to the current shipped behavior.
+    if (MOBILE_FOREST_SHADOWS_ENABLED) {
+      gl.shadowMap.enabled = true;
+      camera.layers.set(FOREST_GROUND_LAYER);
+      gl.setRenderTarget(rig.sceneFBO);
+      gl.render(scene, camera);
 
-    // 1b. SSAO — depth-only ambient occlusion over the SCENE tier. Reconstructs
+      gl.shadowMap.enabled = false;
+      scene.background = null;
+      gl.autoClear = false;
+      camera.layers.set(0);
+      gl.render(scene, camera);
+      gl.autoClear = true;
+      scene.background = prevBackground;
+    } else {
+      gl.shadowMap.enabled = false;
+      camera.layers.set(0);
+      gl.setRenderTarget(rig.sceneFBO);
+      gl.render(scene, camera);
+    }
+
+    // 1c. SSAO — depth-only ambient occlusion over the SCENE tier. Reconstructs
     //     normals from the scene DEPTH (no NormalPass), samples occlusion at
     //     ssaoRadius world-units (half-res when ssaoHalfRes), denoises, and
     //     MULTIPLIES the AO into the scene colour → aoSceneFBO, which is the
     //     composite's `sceneColor` base (wired at build). Reads sceneFBO.texture +
     //     sceneDepthTex and writes a SEPARATE target (no read/write feedback).
-    //     shadowMap.enabled is still FALSE here (from pass 1) and only full-screen
-    //     quads run — no camera.layers / shadow / background state is touched, so the
+    //     shadowMap.enabled is FALSE here (left false by the scene pass — the single
+    //     pass, or sub-pass 1b when forest shadows are on) and only full-screen quads
+    //     run — no camera.layers / shadow / background state is touched, so the
     //     per-pass shadow scoping (pass 2/3 set enabled=true) is unaffected. Sky
     //     pixels carry far-plane depth → no occluder found + fog-attenuated → the
     //     HDRI sky is left unchanged (no dark halo). Skipped entirely when SSAO off.
