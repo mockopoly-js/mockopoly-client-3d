@@ -123,25 +123,36 @@ const CONTRAST = 0.12;
  * sky.webp env raises directional ambient — see MOBILE_ENV_INTENSITY). Because the
  * multiplicative pre-exposure now does the lifting, these are trimmed to finishing
  * nudges, not drivers:
- * - BRIGHTNESS +0.02 → 0.0 — the old +0.02 was an ADDITIVE black-lift to un-crush
- *   the shaded side. With the pre-exposure MULTIPLY now lifting the whole range, an
- *   additive offset double-lifts the floor and risks milky/washed blacks; a multiply
+ * - BRIGHTNESS 0.0 — HELD. The pre-exposure MULTIPLY lifts the whole range and the
+ *   re-activated WarmGrade shadow term adds a gentle lift, so an ADDITIVE brightness
+ *   offset would double-lift the floor and risk milky/washed blacks; a multiply
  *   preserves the black point far better, so let exposure do the lifting.
- * - CONTRAST 0.05 → 0.08 — the brighter exposure + ACES rolloff soften midtone snap
- *   slightly; a gentle bump (1/0.92 = ×1.087, still far below the old crushing
- *   ×1.124) restores punch without burying the darks.
- * - SATURATION 0.15 — HELD: a brighter, real-sky env already reads slightly more
- *   saturated; only drop toward 0.12 on-device if it looks garish.
- * Tune ON-DEVICE together with MOBILE_EXPOSURE (1.25–1.5) and MOBILE_ENV_INTENSITY
- * (0.85–1.2) — exposure + real env are the primary fixes; this is a finishing trim.
- * Paired with ACES_FILMIC tone, a NEUTRAL split-tone seam (no teal-orange), NO
- * vignette, and the strong directional daylight rig. Desktop
- * <HueSaturation>/<BrightnessContrast> still read SATURATION/BRIGHTNESS/CONTRAST →
- * byte-identical.
+ * - CONTRAST 0.08 → 0.10 — REBALANCE for the palette mute below. Desaturation slightly
+ *   flattens vibrancy/value; the stylized low-poly references are muted but NOT grey —
+ *   they hold value contrast from the one key. A small BrightnessContrast bump
+ *   (1/0.90 = ×1.11, still well below the desktop ×1.124 crush) re-establishes midtone
+ *   snap so the muted palette does not read flat.
+ * - SATURATION 0.15 → -0.08 — the REFERENCE-MATCH palette lever. The good stylized
+ *   low-poly renders share MUTED, harmonious, DESATURATED palettes; our neon-uniform
+ *   green is the #1 "cheap" tell. postprocessing 6.39.3 HueSaturation runs
+ *   `color += (average − color) · −saturation` for saturation<0 — a clean LINEAR pull
+ *   toward per-pixel grey — so −0.08 ≈ 8% global desaturation (a ~24% swing DOWN from
+ *   the old +17.5% boost), the single biggest lever against the flat green. It mutes
+ *   the board too (the board is composited BEFORE this single grade pass), so it is
+ *   PAIRED with the board-preserving MOBILE_BOARD_SATURATION boost in BoardTiles so
+ *   the branded tiles stay vivid/readable. On-device range −0.05..−0.14. NO global
+ *   `hue` nudge — that would rotate the branded board tiles' hues. Cohesive warm/cool
+ *   harmony is added separately by the now-active WarmGrade split-tone seam (luma-keyed,
+ *   board-safe — see WarmGradeEffect), not by a hue rotation.
+ * Tune ON-DEVICE together with MOBILE_EXPOSURE (1.25–1.5), MOBILE_ENV_INTENSITY
+ * (0.85–1.2) and MOBILE_BOARD_SATURATION. Paired with ACES_FILMIC tone, the ACTIVE
+ * warm/cool split-tone seam, NO vignette, and the raking directional daylight rig.
+ * Desktop <HueSaturation>/<BrightnessContrast> still read SATURATION/BRIGHTNESS/
+ * CONTRAST → byte-identical.
  */
-const MOBILE_SATURATION = 0.15;
+const MOBILE_SATURATION = -0.08;
 const MOBILE_BRIGHTNESS = 0.0;
-const MOBILE_CONTRAST = 0.08;
+const MOBILE_CONTRAST = 0.1;
 
 /**
  * MOBILE-ONLY PRE-EXPOSURE — the PRIMARY "too-dark" fix. A linear-HDR MULTIPLY
@@ -282,16 +293,20 @@ const MOBILE_AMBIENT_COLOR = '#eef1f4';
 const MOBILE_AMBIENT_INTENSITY = 0.2;
 /**
  * MOBILE-ONLY frozen shadow-map resolution for the KEY sun. The map is baked
- * ONCE at load (autoUpdate off — see MobileCrispBoardPipeline), so 2048² costs a
- * single extra shadow render at load + ~16 MB depth VRAM and ZERO per-frame cost.
- * The lower ~31° sun throws LONGER shadows (~2× the old ≈50°), so the ortho frame is
- * WIDENED to ±12 (see the shadow-camera below) to contain them without clipping;
- * 2048 over ±12 gives ~85 texels/unit — plenty crisp for the soft PCF receive (the
- * known-good old baseline was ~73 over ±28). Do NOT bump the map size to chase the
- * wider frame — 2048 is enough and a larger map only adds load-time VRAM for no
- * frame benefit. Desktop's KEY light keeps its own 1024².
+ * ONCE at load (autoUpdate off — see MobileCrispBoardPipeline), so it costs a single
+ * extra shadow render at load + depth VRAM and ZERO per-frame cost.
+ *
+ * SOFT-SHADOW TUNING (reference-match): LOWERED 2048 → 1536 to WIDEN the PCF
+ * penumbra for soft grounding. Penumbra width is ∝ 1/resolution for the fixed ±12
+ * ortho frame, so 1536 (~64 texels/unit) widens PCFSoftShadowMap's penumbra ~33% —
+ * clearly softer grounding while staying clean on the long ~31° tower shadows. This
+ * is FREE: lowering the map makes the one-time load bake slightly CHEAPER (never more)
+ * and there is no per-frame shadow cost (frozen, autoUpdate off). Drop to 1024 for
+ * softer; revert 2048 for crisper. The larger 1536 texels are paired with a small
+ * shadow-normalBias bump on the KEY light (0.03 → 0.035) as acne safety. Desktop's
+ * KEY light keeps its own 1024².
  */
-const MOBILE_SHADOW_MAP_SIZE = 2048;
+const MOBILE_SHADOW_MAP_SIZE = 1536;
 
 /**
  * ── MOBILE ADAPTIVE DPR (mobile only; desktop stays dpr={[1, 1.5]}) ───────────
@@ -382,20 +397,29 @@ const MOBILE_CITY_DEPTH_BIAS = 0.03;
  * is still live. `scene.fog` is NEVER nulled per-pass (that would thrash the
  * shader-program cache); the board simply opts out at the material level.
  *
- * COLOR: light cool-neutral haze (#dbe8f0) that sits coherently against the new
- * pale-blue sky horizon (ProceduralSky SKY_MID #e4f0f7), so fogged far terrain
- * melts into a cool aerial-perspective haze — the daylight-reference look — and
- * the ring-cull cut edge (already fog=1.0) is invisible. Removes the old amber
- * cast (the golden-hour look is superseded). MOBILE ONLY (the <fog> below is
- * isMobile-gated), so desktop scene.fog stays null → byte-identical.
+ * COLOR (reference-match ATMOSPHERIC PERSPECTIVE lever): light desaturated
+ * cool-sage-grey haze (#c9d0cb). The old #dbe8f0 was a leftover matched to the
+ * now-DEAD ProceduralSky (SKY_MID #e4f0f7 — no longer imported); it was too light
+ * and too BLUE for the real sky.webp actually assigned to scene.background/
+ * environment on mobile. Sampled sky.webp's horizon band (v≈0.5) is #b6c1ae grading
+ * to #8ca6a9 lower-horizon — a muted green-grey/teal, NOT blue. #c9d0cb is slightly
+ * lighter than that horizon terrain (the aerial-lightening cue) and sits in the sky's
+ * real green-grey horizon family, so the far treeline melts into the ACTUAL sky and
+ * the ring-cull cut edge (already fog=1.0) stays invisible. Atmospheric perspective
+ * strengthens WITHOUT moving near/far because (i) fog now matches the true horizon so
+ * the dissolve is seamless and (ii) the palette mute further desaturates the fogged
+ * distance. On-device range #bfc8c4 (denser) .. #d2d8d4 (lighter); nudge blue toward
+ * #c4cfce if the sage reads too green. MOBILE ONLY (the <fog> below is isMobile-gated),
+ * so desktop scene.fog stays null → byte-identical.
  * NEAR/FAR (world units): board/city/near treeline (fogDepth ~10-20) stay clear;
  * the deep forest is fully hazed by FOG_FAR. Kept at 24/52 — the forest ring-cull
  * (FOREST_CULL_DISTANCE ≈ FOG_FAR×1.27) and ForestEnvironment's density-band math
- * are tuned to these exact numbers, so DO NOT move them (only the color changes;
- * the art brief's "far-only haze" is already satisfied at near=24 — board, city,
- * tokens and near treeline stay fully clear and only the far ring hazes).
+ * are tuned to these exact numbers (forestChunking.test.ts hardcodes them) and rely
+ * on LINEAR fog reaching fogFactor=1.0 EXACTLY at FOG_FAR, so DO NOT move them and do
+ * NOT switch to FogExp2 (asymptotic — removes the deterministic cutoff). Only the
+ * color changes.
  */
-const FOG_COLOR = '#dbe8f0';
+const FOG_COLOR = '#c9d0cb';
 const FOG_NEAR = 24;
 const FOG_FAR = 52;
 
@@ -761,7 +785,7 @@ export function GameScene() {
       {/* MOBILE KEY twin — a LOWERED ~31° neutral warm-white raking sun (intensity
           2.1) so the boxy city walls get a bright side + a dark side and stop reading
           flat. It is the mobile shadow CASTER: its map is BAKED ONCE (frozen) by
-          MobileCrispBoardPipeline (renderer autoUpdate off), so castShadow + a 2048²
+          MobileCrispBoardPipeline (renderer autoUpdate off), so castShadow + a 1536²
           map cost a single shadow render at load and nothing per frame. POSITION
           moved (Y 11→5.5), so the frozen map RE-BAKES ONCE at load from the light's
           live world matrix — no offline step, no per-frame cost. The lower sun throws
@@ -770,10 +794,16 @@ export function GameScene() {
           city tower's shadow tip reaches ~(-8.8,-8.3) world — outside the old ±8, so
           ±12 contains it with margin. Far plane 30 still brackets the light (it moved
           CLOSER, dist √115≈10.74) ± the ±12 frame; near 0.5 clears the nearest caster.
-          shadow-normalBias raised 0.02→0.03 to kill the extra grazing-angle acne the
-          lower incidence adds (bias stays -0.0004 — normalBias is the correct lever,
-          deepening depth-bias would risk contact detachment). Desktop's KEY (above) is
-          untouched → byte-identical. */}
+          shadow-normalBias raised 0.02→0.035 to kill the extra grazing-angle acne the
+          lower incidence adds — now paired with the softer 1536² map, whose larger
+          texels need a touch more normal offset (bias stays -0.0004 — normalBias is
+          the correct lever, deepening depth-bias would risk contact detachment).
+          SOFT-SHADOW VALUE (reference-match): shadow-intensity={0.75} sets the receive
+          to 75% strength (three 0.169 LightShadow.intensity — a receive-time
+          mix(1.0, shadow, intensity) in the shadow chunk, fully compatible with the
+          frozen/autoUpdate-off map and FREE) so board+city grounding reads SOFT, not
+          crushed-black, matching the hazy non-crushed reference shadows. Desktop's KEY
+          (above) is untouched → byte-identical. */}
       {isMobile && (
         <directionalLight
           color={MOBILE_KEY_COLOR}
@@ -782,7 +812,8 @@ export function GameScene() {
           castShadow
           shadow-mapSize={[MOBILE_SHADOW_MAP_SIZE, MOBILE_SHADOW_MAP_SIZE]}
           shadow-bias={-0.0004}
-          shadow-normalBias={0.03}
+          shadow-normalBias={0.035}
+          shadow-intensity={0.75}
         >
           <orthographicCamera attach="shadow-camera" args={[-12, 12, 12, -12, 0.5, 30]} />
         </directionalLight>

@@ -2,18 +2,21 @@ import { Effect, BlendFunction } from 'postprocessing';
 import { wrapEffect } from '@react-three/postprocessing';
 
 /**
- * Mobile-only split-tone grade — currently NEUTRAL (identity). The realistic /
- * grounded-PBR look does NOT stylize colour, so every knob below is zeroed: no
- * warm-temp push, no highlight/shadow tint. The effect stays fully WIRED and
- * MERGEABLE in the single mobile grade EffectPass, so a split-tone can be dialled
- * back in later purely by editing the consts — no pass / plumbing change.
+ * Mobile-only split-tone grade — ACTIVE at a SUBTLE, board-safe setting for cohesive
+ * warm/cool colour harmony (the reference-match look: warm sunlit highlights over
+ * gently-cooled shade, breaking the flat neon-green uniformity that reads "cheap").
+ * This is NOT the rejected teal-orange cinematic split — the pushes are whispers
+ * (highlight tint ×0.12, shadow tint ×0.06, temp +0.02). The effect stays fully WIRED
+ * and MERGEABLE in the single mobile grade EffectPass, so it can be re-tuned (or
+ * dialled back to identity) purely by editing the consts — no pass / plumbing change.
  *
- * WHAT IT DOES (when non-zero): a classic split — a small warm temperature push
- * plus a luminance-keyed tint that pushes HIGHLIGHTS one way and SHADOWS the
- * other. BOARD-SAFE: the split keys highlights on smoothstep(0.5,1.0,luma) and
- * shadows on 1-smoothstep(0.0,0.5,luma), so mid-tones (board text / token faces
- * at luma≈0.4–0.6) get ≈0 push and stay readable. At the current all-zero values
- * the shader collapses to a passthrough (×1.0 temp, mix strengths 0) → identity.
+ * WHAT IT DOES: a classic split — a small warm temperature push plus a luminance-keyed
+ * tint that pushes HIGHLIGHTS one way (warm, toward the #fff4ea key) and SHADOWS the
+ * other (cool). BOARD-SAFE: the split keys highlights on smoothstep(0.5,1.0,luma) and
+ * shadows on 1-smoothstep(0.0,0.5,luma), so mid-tones (board text / token faces at
+ * luma≈0.4–0.6) fall between both smoothsteps and get ≈0 push → board text/tile faces
+ * stay true. Setting every knob to 0 / tint [1,1,1] collapses the shader to a
+ * passthrough (×1.0 temp, mix strengths 0) → identity, if a neutral seam is ever wanted.
  *
  * HOW / COST: like SharpenEffect this is a per-fragment `postprocessing` Effect
  * (a `mainImage` function, NOT a convolution effect), so it MERGES into the
@@ -32,11 +35,11 @@ import { wrapEffect } from '@react-three/postprocessing';
  * - SHADOW_TINT / SHADOW_STRENGTH: multiply applied to SHADOWS. Tint [1,1,1] /
  *   strength 0 = neutral (the ·1.6 built-in lift is inert while strength is 0).
  */
-const WARM_TEMP = 0.0; // neutral: no colour-temperature push
-const HIGH_TINT: readonly [number, number, number] = [1.0, 1.0, 1.0]; // neutral highlights
-const HIGH_STRENGTH = 0.0;
-const SHADOW_TINT: readonly [number, number, number] = [1.0, 1.0, 1.0]; // neutral shadows
-const SHADOW_STRENGTH = 0.0;
+const WARM_TEMP = 0.02; // whisper of global warmth (reds up 2%, blues down 1.6%)
+const HIGH_TINT: readonly [number, number, number] = [1.0, 0.99, 0.96]; // warm the sunlit highlights toward the #fff4ea key
+const HIGH_STRENGTH = 0.12;
+const SHADOW_TINT: readonly [number, number, number] = [0.97, 0.99, 1.05]; // gently cool the shadows (blue over red)
+const SHADOW_STRENGTH = 0.06; // ·1.6 built-in → also lifts deep shadows ~3-4% (hazy, non-crushed)
 
 /** Bakes a numeric vec3 const into a GLSL literal (no uniform cost). */
 const glslVec3 = (c: readonly [number, number, number]): string =>

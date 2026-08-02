@@ -64,8 +64,27 @@ const EDGE_COLOR = '#c9a06a';
  * 1.0 = unchanged; >1 = more saturated. Applied AFTER tonemapping_fragment on
  * gl_FragColor.rgb (post-lighting, post-tonemap) so lighting/IBL cannot wash
  * it back out. Board-only — edge, city, forest, tokens are unaffected.
+ *
+ * DESKTOP value — SHARED-const HARD-FROZEN. The mobile path uses
+ * MOBILE_BOARD_SATURATION below instead (selected by isMobile at the shader-patch
+ * injection), so raising the mobile boost never touches desktop.
  */
 const BOARD_SATURATION = 1.6;
+
+/**
+ * MOBILE-ONLY board saturation. The mobile grade pass pulls the WHOLE composite
+ * toward grey (MOBILE_SATURATION −0.08 — the reference-match palette mute), which
+ * would also mute the branded board tiles because the board is composited BEFORE
+ * that single grade pass. So the mobile board OVER-BOOSTS its LINEAR saturation
+ * (~1.9 vs desktop 1.6) so it survives the −0.08 LDR grade pull and reads as
+ * vivid/readable as today. Injected at the same shader seam as BOARD_SATURATION via
+ * `isMobile ? MOBILE_BOARD_SATURATION : BOARD_SATURATION`, so desktop stays
+ * byte-identical (still 1.6). The shader clamps the result to [0,1], so deep
+ * reds/greens stay in gamut. TUNABLE 1.75..2.05 on-device against the final
+ * MOBILE_SATURATION. This board-preserving boost is why the global mute can mute the
+ * flat-green ENVIRONMENT without killing the board.
+ */
+const MOBILE_BOARD_SATURATION = 1.9;
 
 /**
  * Shared slab renderer. Takes a fully-configured board `texture` (webp on
@@ -138,10 +157,13 @@ function BoardSlab({ texture }: { texture: THREE.Texture }) {
       if (top.userData._satPatchApplied) return;
       top.userData._satPatchApplied = true;
 
-      // Inject the tunable constant just after #include <common>.
+      // Inject the tunable constant just after #include <common>. MOBILE over-boosts
+      // (MOBILE_BOARD_SATURATION) so the branded tiles survive the mobile grade's
+      // global desaturation; DESKTOP keeps BOARD_SATURATION (1.6) → byte-identical.
+      const boardSat = isMobile ? MOBILE_BOARD_SATURATION : BOARD_SATURATION;
       shader.fragmentShader = shader.fragmentShader.replace(
         '#include <common>',
-        `#include <common>\nconst float BOARD_SATURATION = ${BOARD_SATURATION.toFixed(4)};`,
+        `#include <common>\nconst float BOARD_SATURATION = ${boardSat.toFixed(4)};`,
       );
 
       // Replace the tonemapping chunk with itself + a luminance-mix saturation
@@ -156,7 +178,11 @@ function BoardSlab({ texture }: { texture: THREE.Texture }) {
     };
 
     return { edge, top };
-  }, [texture]);
+    // isMobile is a dep so a desktop<->mobile resize rebuilds the material with the
+    // correct BOARD_SATURATION vs MOBILE_BOARD_SATURATION baked into the patch. On
+    // desktop isMobile is a stable false → the memo recomputes only on texture change
+    // exactly as before, so desktop output is byte-identical.
+  }, [texture, isMobile]);
 
   // DEV-ONLY: subscribe to the shared debug flags and flip the slab group's
   // `.visible` on toggle. No per-frame cost — only fires on tap. Entirely
