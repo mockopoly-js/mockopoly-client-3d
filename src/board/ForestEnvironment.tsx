@@ -970,11 +970,31 @@ const MOBILE_FOREST_ROUGHNESS = 1.0; // fully matte forest/terrain — kills the
 const FOREST_AO_URL_MOBILE = '/images/forest.mobile.ao.webp';
 
 /**
- * TUNABLE — how strongly the baked AO darkens the ground. Runtime factor =
- * 1 - (1 - aoTex.r) * INTENSITY, so 1.0 = the full baked occlusion (0.25 floor in
- * the densest clusters), lower = gentler. Kept at 1.0 since the bake already
- * softened (blur σ=6px) and lifted a 0.25 black floor. MOBILE-ONLY.
+ * ── TUNABLES — how the baked forest-ground shadow map reads on the terrain ────────
+ * The baked webp (forest.mobile.ao.webp) carries DIRECTIONAL SUN CAST-SHADOWS of the
+ * trees/rocks (Cycles bake, sun dir matched to the KEY light [7,5.5,6]) plus contact
+ * AO, as ONE grayscale map: 1.0 = open clearing (no darkening), down to ~0.25 in the
+ * densest shadow cores. This is the STATIC tree-shadow-on-ground the game shows — no
+ * shader shadow-map, no mediump landmine, ~0 fps (one texture tap + multiply on the
+ * ground albedo).
+ *
+ * The bake's penumbra is SOFT (most shadowed ground is only light-gray ~0.6–0.85), so
+ * on the matte terrain under the scene's ambient/env/grade lift the tree shadows read
+ * FAINT at a flat 1.0 intensity. Two knobs deepen them so they clearly show:
+ *
+ *   FOREST_AO_CONTRAST — a gamma (pow) applied to the raw map BEFORE intensity. >1
+ *     DEEPENS the soft mid/penumbra (e.g. 0.75 → 0.6 at 1.8) while leaving OPEN ground
+ *     (1.0 → 1.0) untouched and pushing the dark cores darker — i.e. it makes the tree
+ *     shadows READ without dimming the open clearing. This is the primary "show the
+ *     shadows" lever. 1.0 = the raw bake (pre-existing look). Tune 1.4–2.4 on-device.
+ *   FOREST_AO_INTENSITY — overall darkening scale AFTER the contrast: runtime factor =
+ *     1 - (1 - shaped) * INTENSITY. 1.0 = full, lower = gentler globally. Raise toward
+ *     1.3 for even stronger shadows (cores clamp to black), lower if too heavy.
+ *
+ * Both are MOBILE-ONLY (desktop forest never binds this map). Pure albedo multiply →
+ * no shadow GLSL, mediump-safe, zero new pass/RT/draw-call.
  */
+const FOREST_AO_CONTRAST = 1.8;
 const FOREST_AO_INTENSITY = 1.0;
 
 /**
@@ -1035,7 +1055,11 @@ function applyForestGroundAo(material: THREE.Material, aoTex: THREE.Texture): vo
             (vWorldPos.z - (${AO_ISLAND_MIN_Z.toFixed(5)})) / ${AO_ISLAND_SIZE_Z.toFixed(5)}
           );
           float forestAoRaw = texture2D(uForestAoMap, forestAoUv).r;
-          float forestAo = 1.0 - (1.0 - forestAoRaw) * ${FOREST_AO_INTENSITY.toFixed(3)};
+          // CONTRAST (gamma): deepen the soft baked penumbra so the tree cast-shadows
+          // READ, while open ground (raw≈1.0 → 1.0) stays unchanged. Then INTENSITY
+          // scales the overall darkening. clamp guards pow() against any >1 sample.
+          float forestAoShaped = pow(clamp(forestAoRaw, 0.0, 1.0), ${FOREST_AO_CONTRAST.toFixed(3)});
+          float forestAo = 1.0 - (1.0 - forestAoShaped) * ${FOREST_AO_INTENSITY.toFixed(3)};
           diffuseColor.rgb *= forestAo;
         }
       `,
