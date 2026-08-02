@@ -133,20 +133,22 @@ const CONTRAST = 0.12;
  *   offset would double-lift the floor and risk milky/washed blacks; a multiply
  *   preserves the black point far better, so let exposure do the lifting.
  * - CONTRAST 0.10 → 0.13 — SHADOW-DRAMA round. Widen the highlight/shadow separation
- *   after ACES so the muted palette (MOBILE_SATURATION −0.08) reads as VALUE drama, not
+ *   after ACES so the muted palette (MOBILE_SATURATION −0.18) reads as VALUE drama, not
  *   oversaturation. The stylized low-poly references are muted but NOT grey — they hold
  *   value contrast from the one key. The BrightnessContrast bump is now 1/0.87 = ×1.149
  *   (a hair above the desktop ×1.124 crush), pairing with the raised KEY + darker baked
  *   shadow to re-establish midtone snap. Tunable 0.10–0.15.
- * - SATURATION 0.15 → -0.08 — the REFERENCE-MATCH palette lever. The good stylized
- *   low-poly renders share MUTED, harmonious, DESATURATED palettes; our neon-uniform
- *   green is the #1 "cheap" tell. postprocessing 6.39.3 HueSaturation runs
+ * - SATURATION 0.15 → -0.08 → -0.18 — the REFERENCE-MATCH palette lever. The good
+ *   stylized low-poly renders share MUTED, harmonious, DESATURATED palettes; our
+ *   neon-uniform green is the #1 "cheap" tell. postprocessing 6.39.3 HueSaturation runs
  *   `color += (average − color) · −saturation` for saturation<0 — a clean LINEAR pull
- *   toward per-pixel grey — so −0.08 ≈ 8% global desaturation (a ~24% swing DOWN from
- *   the old +17.5% boost), the single biggest lever against the flat green. It mutes
+ *   toward per-pixel grey — so −0.18 ≈ 18% global desaturation (deepened from −0.08 for
+ *   the "smooth/blended" pass — grass reads sage/muted rather than neon-green). It mutes
  *   the board too (the board is composited BEFORE this single grade pass), so it is
  *   PAIRED with the board-preserving MOBILE_BOARD_SATURATION boost in BoardTiles so
- *   the branded tiles stay vivid/readable. On-device range −0.05..−0.14. NO global
+ *   the branded tiles stay vivid/readable. Previously validated on-device range was
+ *   −0.05..−0.14; −0.18 is intentionally past that range for this pass — re-verify
+ *   on-device that the board still reads vivid/legible through the boost. NO global
  *   `hue` nudge — that would rotate the branded board tiles' hues. Cohesive warm/cool
  *   harmony is added separately by the now-active WarmGrade split-tone seam (luma-keyed,
  *   board-safe — see WarmGradeEffect), not by a hue rotation.
@@ -156,7 +158,7 @@ const CONTRAST = 0.12;
  * Desktop <HueSaturation>/<BrightnessContrast> still read SATURATION/BRIGHTNESS/
  * CONTRAST → byte-identical.
  */
-const MOBILE_SATURATION = -0.08;
+const MOBILE_SATURATION = -0.18;
 const MOBILE_BRIGHTNESS = 0.0;
 const MOBILE_CONTRAST = 0.20;
 
@@ -482,8 +484,21 @@ const MOBILE_TILTSHIFT_KERNEL_SIZE = KernelSize.MEDIUM;
  * on LINEAR fog reaching fogFactor=1.0 EXACTLY at FOG_FAR, so DO NOT move them and do
  * NOT switch to FogExp2 (asymptotic — removes the deterministic cutoff). Only the
  * color changes.
+ *
+ * UPDATE (atmospheric-perspective pass): nudged COLOR further toward the cooler
+ * grey-blue end of the on-device range called out above (#c9d0cb → #c4ccd4) for a
+ * hazier, more cohesive horizon read. NEAR/FAR are intentionally UNCHANGED (still
+ * 24/52) — see the hard coupling above: FOREST_CULL_DISTANCE (ForestEnvironment.tsx,
+ * = 66 = FOG_FAR × 1.27, NOT re-derived from FOG_FAR) and DENSITY_BAND_DISTS
+ * ([36, 48, 58], also hand-tuned against FOG_FAR=52) both assume this exact FOG_FAR.
+ * Moving FOG_FAR out to 72 without retuning those two constants in lockstep would
+ * make the forest ring-cull and density-thinning bands fire well before the chunks
+ * are fog-opaque (e.g. at FOG_FAR=72 the current cull ring's nearest fragment would
+ * only reach ~63% fog opacity, not 100%), i.e. chunks/foliage popping or thinning
+ * visibly instead of dissolving into haze — the opposite of this pass's goal. That
+ * retune is out of scope here; flagged for the orchestrator rather than guessed.
  */
-const FOG_COLOR = '#c9d0cb';
+const FOG_COLOR = '#c4ccd4';
 const FOG_NEAR = 24;
 const FOG_FAR = 52;
 
