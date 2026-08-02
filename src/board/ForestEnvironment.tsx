@@ -1,6 +1,6 @@
-import { useEffect, useMemo, useRef } from 'react';
+import { Suspense, useEffect, useLayoutEffect, useMemo, useRef } from 'react';
 import * as THREE from 'three';
-import { useGLTF } from '@react-three/drei';
+import { useGLTF, useTexture } from '@react-three/drei';
 import { useFrame } from '@react-three/fiber';
 import { BOARD_WORLD_SIZE } from './positions';
 import {
@@ -918,6 +918,170 @@ const LOD1_SUFFIX = '_LOD1';
 const LOD2_SUFFIX = '_LOD2';
 
 /**
+ * ── MOBILE-ONLY: baked island-wide TOP-DOWN forest CONTACT-AO ground decal ────
+ * A 1024² grayscale occlusion map baked (Blender, scripts/gen-forest-mobile-ao.mjs)
+ * as a TOP-DOWN orthographic occluder-coverage render of the forest's trees/birch/
+ * rocks, softened offline into a soft contact penumbra (1 = open clearing → no
+ * change, ~0.25 = densest cluster). It adds grounding contact-shadow depth under
+ * the tree/rock clusters onto the forest GROUND floor for the cost of ONE extra
+ * texture tap folded into the ground clip material's EXISTING mediump MeshStandard
+ * program — NO new render pass / render target / draw call / transparency / SSAO /
+ * per-frame shadow. Bound ONLY on mobile, by <ForestGroundAO> below; the desktop-
+ * frozen forest.glb + materials never reference it.
+ *
+ * WHY A WORLD-XZ SAMPLER (not three's aoMap): the forest ground is GPU-instanced
+ * (EXT_mesh_gpu_instancing), so every instance shares ONE geometry's UVs — there
+ * is no per-instance lightmap UV like the city's TEXCOORD_1 aoMap. Instead the AO
+ * is sampled by the fragment's WORLD XZ (reusing the vWorldPos varying the board-
+ * clip already computes) mapped through the island's world bounds. The island is
+ * centred at world origin, so islandMin = -islandSize/2; the texture is SQUARE and
+ * the true world aspect (108.6 × 92.0) lives in islandSize, so [0,1]² sampling un-
+ * stretches it. Loaded flipY=false so PNG row 0 (min.z) sits at v=0 → v maps
+ * (worldZ - min.z)/sizeZ with no extra flip.
+ *
+ * iOS-SAFE (see the mediump/shadow gotcha): this only ADDS a plain `sampler2D` +
+ * a `texture2D` tap + a `diffuseColor` multiply to the mediump ground program. It
+ * introduces NO shadow GLSL, NO new varying (vWorldPos already exists), and NO new
+ * precision-sensitive compare — the UV is a subtract+scale of the SAME world
+ * position the shipped board-clip already compares at mediump.
+ */
+const FOREST_AO_URL_MOBILE = '/images/forest.mobile.ao.webp';
+
+/**
+ * TUNABLE — how strongly the baked AO darkens the ground. Runtime factor =
+ * 1 - (1 - aoTex.r) * INTENSITY, so 1.0 = the full baked occlusion (0.25 floor in
+ * the densest clusters), lower = gentler. Kept at 1.0 since the bake already
+ * softened (blur σ=6px) and lifted a 0.25 black floor. MOBILE-ONLY.
+ */
+const FOREST_AO_INTENSITY = 1.0;
+
+/**
+ * World-XZ → AO-UV mapping constants (world units). The island is centred at the
+ * world origin, so islandMin = -islandSize/2. Emitted by the bake runner + meta
+ * JSON at bake time — re-read them (npm run models:forest:ao) if forest.mobile.glb
+ * is ever regenerated with a different crop/layout.
+ */
+const AO_ISLAND_MIN_X = -54.30967;
+const AO_ISLAND_MIN_Z = -46.0;
+const AO_ISLAND_SIZE_X = 108.61934;
+const AO_ISLAND_SIZE_Z = 92.0;
+
+/**
+ * MOBILE GROUND-ONLY: fold the baked TOP-DOWN contact-AO decal into the forest
+ * GROUND clip material as ONE extra world-XZ texture tap. Chains onto the material's
+ * existing onBeforeCompile (board-clip + mediump), so it runs AFTER vWorldPos is
+ * declared/computed and the mediump override is in place. The AO factor multiplies
+ * the LINEAR albedo (diffuseColor) right after <color_fragment> — pre-lighting,
+ * pre-fog — so tree/rock clusters read as a soft contact shadow on the clearing
+ * floor. Idempotent per material (guard flag). See the block comment above for the
+ * iOS-safety rationale (plain sampler + multiply, no new varying, no shadow GLSL).
+ */
+function applyForestGroundAo(material: THREE.Material, aoTex: THREE.Texture): void {
+  const mat = material as THREE.Material & { userData: { forestGroundAoApplied?: boolean } };
+  if (mat.userData.forestGroundAoApplied) return;
+  mat.userData.forestGroundAoApplied = true;
+
+  const prevOnBeforeCompile = mat.onBeforeCompile.bind(mat);
+  mat.onBeforeCompile = (shader, renderer) => {
+    prevOnBeforeCompile(shader, renderer); // board-clip + mediump already chained
+
+    // Bind the AO sampler as a custom uniform. three uploads uniforms added to
+    // shader.uniforms in onBeforeCompile every frame; the value is a fixed texture
+    // ref (never changes), so this is effectively static.
+    shader.uniforms.uForestAoMap = { value: aoTex };
+
+    // Declare the sampler on the always-present <common> include (the board-clip
+    // chain replaced <common> with a string that STARTS with the same include, so
+    // it is still present to match here).
+    shader.fragmentShader = shader.fragmentShader.replace(
+      '#include <common>',
+      /* glsl */ `#include <common>
+        uniform sampler2D uForestAoMap;
+      `,
+    );
+
+    // Multiply the AO factor into the LINEAR albedo right after <color_fragment>
+    // (diffuseColor holds base albedo there; still linear, pre-lighting/tonemap/fog).
+    // vWorldPos is the instancing-aware world position the board-clip chain set.
+    // ClampToEdge (set on the texture) handles world positions just outside [0,1].
+    shader.fragmentShader = shader.fragmentShader.replace(
+      '#include <color_fragment>',
+      /* glsl */ `#include <color_fragment>
+        {
+          vec2 forestAoUv = vec2(
+            (vWorldPos.x - (${AO_ISLAND_MIN_X.toFixed(5)})) / ${AO_ISLAND_SIZE_X.toFixed(5)},
+            (vWorldPos.z - (${AO_ISLAND_MIN_Z.toFixed(5)})) / ${AO_ISLAND_SIZE_Z.toFixed(5)}
+          );
+          float forestAoRaw = texture2D(uForestAoMap, forestAoUv).r;
+          float forestAo = 1.0 - (1.0 - forestAoRaw) * ${FOREST_AO_INTENSITY.toFixed(3)};
+          diffuseColor.rgb *= forestAo;
+        }
+      `,
+    );
+  };
+
+  // DISTINCT program cache key so this AO variant compiles as its OWN program and
+  // never collides with the plain ground-clip program (three APPENDS this to its
+  // built-in instancing/lights key). Different string from the ground-clip key.
+  mat.customProgramCacheKey = () => 'mobile-forest-ground-clip-ao-mediump';
+  mat.needsUpdate = true;
+}
+
+/**
+ * MOBILE-ONLY child — binds the baked contact-AO decal onto the forest GROUND clip
+ * material. Split into its own component (rather than loading inline in
+ * ForestEnvironment) mirrors the repo's CityAO / BoardTiles / HdriSky splits:
+ *
+ *   1. HOOKS: useTexture SUSPENDS and cannot be called conditionally after the
+ *      mobile/desktop fork; calling it unconditionally would fetch the AO on
+ *      desktop. Mounting <ForestGroundAO> only when isMobile keeps the DESKTOP
+ *      path hook-free (byte-identical) and the AO fetch never happens there.
+ *   2. PERF-NEUTRAL: it receives the already-built `object` and just injects one
+ *      sampler tap into the EXISTING shared ground material — NO new geometry /
+ *      mesh / render pass / render target / draw call / transparency. Draw count
+ *      is unchanged; the only one-time cost is a single extra program compile
+ *      (ground-clip-with-AO), the same accepted cost as CityAO.
+ *
+ * Renders nothing. Suspends inside its own Suspense boundary (wrapped in
+ * ForestEnvironment) so a slow/failed AO load can never blank the rest of the scene.
+ */
+function ForestGroundAO({ object }: { object: THREE.Object3D }): React.JSX.Element | null {
+  // Grayscale WEBP via useTexture (no transcoder, no KTX2 transcode risk on iOS
+  // Safari — mirrors CityAO). flipY=false + linear colorSpace set below.
+  const aoTex = useTexture(FOREST_AO_URL_MOBILE);
+
+  useLayoutEffect(() => {
+    aoTex.colorSpace = THREE.NoColorSpace; // linear occlusion data, never sRGB
+    aoTex.flipY = false; // PNG row 0 = min.z at v=0 (see the world-XZ mapping note)
+    aoTex.wrapS = aoTex.wrapT = THREE.ClampToEdgeWrapping; // a decal must not tile
+    aoTex.needsUpdate = true;
+
+    // Inject the AO tap into the SHARED ground clip material (all ground/floor
+    // chunks — meadow/path/lake — reference the same instance, so applyForestGroundAo
+    // is idempotent). Foliage (fade/opaque) + non-ground chunks are never touched.
+    object.traverse((o) => {
+      const im = o as THREE.InstancedMesh;
+      // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- runtime narrowing: only actual InstancedMeshes carry isInstancedMesh===true
+      if (!im.isInstancedMesh) return;
+      // FOLIAGE-FIRST guard (mirrors the material-assignment loop's `isFoliage`
+      // branch): grass FOLIAGE chunks (PP_Grass_11/PP_Grass_15) carry `forestLod`
+      // and were routed to the SHARED `forestFadeMat`, yet their names ALSO match
+      // isForestGroundMesh (/grass/). Without this skip, applyForestGroundAo would
+      // patch the shared fade material — hijacking its program cache key onto the
+      // ground+AO key (a program collision) AND darkening the trees/flowers/grass
+      // themselves instead of the floor beneath them. Only NON-foliage
+      // meadow/path/lake (→ forestGroundClipMat) must receive the AO tap.
+      if ((im.userData as { forestLod?: ForestChunkLod }).forestLod != null) return;
+      if (!isForestGroundMesh(im.name)) return; // ground floor only (meadow/path/lake)
+      const mat = Array.isArray(im.material) ? im.material[0] : im.material;
+      applyForestGroundAo(mat, aoTex);
+    });
+  }, [object, aoTex]);
+
+  return null;
+}
+
+/**
  * @param isMobile When true, the forest is rebuilt into frustum-cullable spatial
  *   chunks, the far ring is statically thinned, and eligible relief chunks carry
  *   `_LOD1`/`_LOD2` geometry tiers swapped DYNAMICALLY by camera distance at
@@ -1427,6 +1591,15 @@ export function ForestEnvironment({ isMobile = false }: { isMobile?: boolean }):
       scale={groupScale}
     >
       <primitive object={object} />
+      {/* MOBILE-ONLY: bind the baked contact-AO decal onto the forest GROUND clip
+          material. Rendered only when isMobile so useTexture never fetches on
+          desktop and the desktop material path stays byte-identical. Own Suspense
+          boundary so a slow/failed AO load can never blank the rest of the scene. */}
+      {isMobile && (
+        <Suspense fallback={null}>
+          <ForestGroundAO object={object} />
+        </Suspense>
+      )}
     </group>
   );
 }
@@ -1441,3 +1614,6 @@ const preloadMobileForest =
   typeof window.matchMedia === 'function' &&
   window.matchMedia('(max-width: 768px), (max-height: 600px)').matches;
 useGLTF.preload(preloadMobileForest ? FOREST_URL_MOBILE : FOREST_URL);
+// Kick the AO webp fetch in parallel with the mobile forest glb (mobile only) so it
+// is usually cached by the time <ForestGroundAO> mounts. Desktop never fetches it.
+if (preloadMobileForest) useTexture.preload(FOREST_AO_URL_MOBILE);
