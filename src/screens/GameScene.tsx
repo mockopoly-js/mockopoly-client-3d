@@ -384,6 +384,53 @@ const MOBILE_CITY_DPR = 1.5;
 const MOBILE_CITY_DEPTH_BIAS = 0.03;
 
 /**
+ * ── MOBILE-ONLY SOFT AMBIENT OCCLUSION / SSAO (depth-only N8AO) ────────────────
+ * The headline realism unlock: soft, blended contact darkening under trees, rocks,
+ * buildings, hill valleys and board-on-ground so the low-poly scene reads GROUNDED
+ * instead of flat/floating. Runs INSIDE <MobileCrispBoardPipeline> (isMobile
+ * branch): a depth-only N8AOPostPass reconstructs normals from the SCENE FBO's
+ * DEPTH (the landscape/forest/mountains — the ~90% of screen the flat look afflicts)
+ * — NO NormalPass / full-screen normal render, so no extra geometry pass — and
+ * MULTIPLIES the occlusion into the scene colour BEFORE the board/city depth
+ * composite and the single grade pass. Desktop is BYTE-IDENTICAL: it keeps its own
+ * <N8AO> inside its <EffectComposer> (AO_* consts above); these MOBILE_SSAO_* values
+ * are decoupled and consumed ONLY by the mobile pipeline.
+ *
+ * The device idles ~98fps under an iOS-Safari ~120 cap, so there is headroom for a
+ * moderate AO cost; every knob below is a live tunable for on-device A/B.
+ *
+ * - MOBILE_SSAO_ENABLED: master on/off. false → the AO pass + its target are NOT
+ *   built and the per-frame AO render is skipped (byte-for-byte the pre-SSAO path) —
+ *   the instant A/B / kill-switch.
+ * - MOBILE_SSAO_INTENSITY: AO darkening strength (1.0 = natural). Conservative so it
+ *   reads as SOFT grounding, not black halos.
+ * - MOBILE_SSAO_RADIUS: sample radius in WORLD units. WIDER than desktop's 0.7 (the
+ *   scene is ~10 units across) so AO catches hill valleys + tree/building clusters,
+ *   not just tiny crevices. Raise for broader/softer, lower to tighten.
+ * - MOBILE_SSAO_DISTANCE_FALLOFF: occlusion fade with view-distance (fraction of
+ *   radius); ~1.0 keeps it local and avoids dark halos across depth gaps.
+ * - MOBILE_SSAO_HALF_RES: compute AO at HALF res then depth-aware upsample
+ *   (resolutionScale 0.5) — the dominant fill knob (¼ the AO-loop pixels). true =
+ *   briefed default. iOS NOTE: the half-res path uses an internal float MRT (R32F +
+ *   RGBA16F); if it ever misbehaves on-device, flip to false for the MRT-free
+ *   full-res fallback (reads only the depth texture the composite already samples).
+ * - MOBILE_SSAO_AO_SAMPLES / _DENOISE_SAMPLES / _DENOISE_RADIUS: quality/softness of
+ *   the AO loop + bilateral denoise. More denoise = smoother/softer (kept generous
+ *   for the "blended" look); fewer AO samples = cheaper.
+ * - MOBILE_SSAO_COLOR: occlusion tint, multiplied with the scene colour — a dark cool
+ *   navy biases contact shadows COOL to match the cool-shadow grade; '#000000' = neutral.
+ */
+const MOBILE_SSAO_ENABLED = true;
+const MOBILE_SSAO_INTENSITY = 1.0;
+const MOBILE_SSAO_RADIUS = 1.5;
+const MOBILE_SSAO_DISTANCE_FALLOFF = 1.0;
+const MOBILE_SSAO_HALF_RES = true;
+const MOBILE_SSAO_AO_SAMPLES = 16;
+const MOBILE_SSAO_DENOISE_SAMPLES = 4;
+const MOBILE_SSAO_DENOISE_RADIUS = 12;
+const MOBILE_SSAO_COLOR = '#0a0f1e';
+
+/**
  * ── MOBILE-ONLY TILT-SHIFT / MINIATURE-DIORAMA (see MobileCrispBoardPipeline) ──
  * A screen-vertical band blur merged into the mobile grade EffectPass: the board +
  * centre city stay razor-sharp while the far terrain/mountains (top of frame) and
@@ -1006,6 +1053,15 @@ export function GameScene() {
           cityDpr={MOBILE_CITY_DPR}
           depthBias={MOBILE_BOARD_DEPTH_BIAS}
           cityDepthBias={MOBILE_CITY_DEPTH_BIAS}
+          ssaoEnabled={MOBILE_SSAO_ENABLED}
+          ssaoIntensity={MOBILE_SSAO_INTENSITY}
+          ssaoRadius={MOBILE_SSAO_RADIUS}
+          ssaoDistanceFalloff={MOBILE_SSAO_DISTANCE_FALLOFF}
+          ssaoHalfRes={MOBILE_SSAO_HALF_RES}
+          ssaoAoSamples={MOBILE_SSAO_AO_SAMPLES}
+          ssaoDenoiseSamples={MOBILE_SSAO_DENOISE_SAMPLES}
+          ssaoDenoiseRadius={MOBILE_SSAO_DENOISE_RADIUS}
+          ssaoColor={MOBILE_SSAO_COLOR}
           tiltShiftEnabled={MOBILE_TILTSHIFT_ENABLED}
           tiltShiftOffset={MOBILE_TILTSHIFT_OFFSET}
           tiltShiftFocusArea={MOBILE_TILTSHIFT_FOCUS_AREA}

@@ -12,6 +12,13 @@ import {
   TiltShiftEffect,
 } from 'postprocessing';
 import { FullScreenQuad } from 'three-stdlib';
+// DEPTH-ONLY SSAO (MOBILE-ONLY). N8AOPostPass reconstructs normals from DEPTH
+// alone — no NormalPass / full-screen normal render, i.e. no extra full-screen
+// geometry pass, which is exactly the fill cost this pipeline must avoid. It is
+// driven imperatively here (setDepthTexture + render) against the SCENE FBO's
+// depth. Desktop is untouched: it uses the <N8AO> REACT wrapper inside its own
+// <EffectComposer> (see GameScene.tsx, !isMobile branch) — a separate entry point.
+import { N8AOPostPass } from 'n8ao';
 import { SharpenEffectImpl } from '../screens/SharpenEffect';
 import { WarmGradeEffectImpl } from '../screens/WarmGradeEffect';
 import { PreExposureEffectImpl } from '../screens/PreExposureEffect';
@@ -129,6 +136,57 @@ interface MobileCrispBoardPipelineProps {
    * small and the 1.5-vs-native contact shimmer returns.
    */
   cityDepthBias: number;
+  /**
+   * ── SOFT AMBIENT OCCLUSION / SSAO (MOBILE-ONLY, DEPTH-ONLY N8AO) ────────────
+   * MASTER on/off (MOBILE_SSAO_ENABLED). When false the N8AOPostPass is NOT
+   * constructed, its extra colour target is NOT allocated, and the per-frame AO
+   * render is skipped — the pipeline is byte-for-byte the pre-SSAO path (a pure
+   * perf/A-B kill-switch). When true, the AO is computed from the SCENE FBO's DEPTH
+   * (the landscape / forest / mountains / hills — the 90% of screen), multiplied
+   * over the scene colour into its own linear-HDR target, and that AO-darkened scene
+   * colour becomes the composite's `sceneColor` base — so contact darkening lands
+   * under trees, rocks, hill valleys and board-on-ground BEFORE the board + city
+   * tiers are depth-composited on top and BEFORE the single grade pass. Board/city
+   * are separate FBOs (their own depth) so they are NOT self-occluded here — the
+   * landscape AO is the headline unlock; per-tier AO would need a merged-depth MRT
+   * (the same fill cost that ruled out DoF, see the grade-pass note).
+   */
+  ssaoEnabled: boolean;
+  /** N8AO `intensity` — AO darkening strength (1.0 = natural; higher = deeper). */
+  ssaoIntensity: number;
+  /**
+   * N8AO `aoRadius` — occlusion sample radius in WORLD units. The board/scene is
+   * ~10 units across; ~1.5 is deliberately WIDER than desktop's 0.7 so the AO reads
+   * as SOFT blended grounding in hill valleys + under tree/building clusters, not
+   * just tiny crevices. Raise for broader/softer occlusion, lower to tighten.
+   */
+  ssaoRadius: number;
+  /**
+   * N8AO `distanceFalloff` — how quickly occlusion fades with view-space distance
+   * (fraction of radius). ~1.0 keeps AO local and avoids dark halos across depth gaps.
+   */
+  ssaoDistanceFalloff: number;
+  /**
+   * N8AO `halfRes` — compute AO at HALF resolution then depth-aware upsample
+   * (resolutionScale 0.5): the dominant fill knob (¼ the AO-loop pixels). true is the
+   * briefed default. NOTE (iOS): the half-res path uses an internal MRT with an R32F +
+   * RGBA16F attachment (float render targets); if that ever fails on-device, flip to
+   * false for the MRT-FREE full-res fallback (normals reconstructed in-shader, reads
+   * only the depth texture the composite already samples — no float RTs, no MRT).
+   */
+  ssaoHalfRes: boolean;
+  /** N8AO `aoSamples` — AO samples/pixel (quality vs cost). 16 = balanced. */
+  ssaoAoSamples: number;
+  /** N8AO `denoiseSamples` — bilateral denoise taps; more = smoother/softer AO. */
+  ssaoDenoiseSamples: number;
+  /** N8AO `denoiseRadius` — bilateral denoise radius (px); widens the soft blur. */
+  ssaoDenoiseRadius: number;
+  /**
+   * N8AO `color` (hex) — occlusion tint, MULTIPLIED with the scene colour
+   * (colorMultiply). A slightly cool/dark navy biases contact shadows COOL to match
+   * the cool-shadow grade direction; '#000000' = neutral (darken toward black).
+   */
+  ssaoColor: string;
   /**
    * ── TILT-SHIFT / MINIATURE-DIORAMA (MOBILE-ONLY) ───────────────────────────
    * MASTER on/off (MOBILE_TILTSHIFT_ENABLED). When false the TiltShiftEffect is NOT
@@ -274,6 +332,15 @@ export function MobileCrispBoardPipeline({
   cityDpr,
   depthBias,
   cityDepthBias,
+  ssaoEnabled,
+  ssaoIntensity,
+  ssaoRadius,
+  ssaoDistanceFalloff,
+  ssaoHalfRes,
+  ssaoAoSamples,
+  ssaoDenoiseSamples,
+  ssaoDenoiseRadius,
+  ssaoColor,
   tiltShiftEnabled,
   tiltShiftOffset,
   tiltShiftFocusArea,
@@ -337,6 +404,44 @@ export function MobileCrispBoardPipeline({
     const cityFBO = makeTarget(cityDepthTex);
     const compositeFBO = makeTarget(null);
 
+    // ── SOFT SSAO (MOBILE-ONLY, DEPTH-ONLY) ──────────────────────────────────
+    // Built ONLY when enabled (null slot otherwise → zero cost / zero VRAM). The
+    // AO reads the SCENE FBO's colour + DEPTH and writes the AO-MULTIPLIED scene
+    // colour into aoSceneFBO (its own linear-HDR target — a separate buffer is
+    // mandatory: N8AO reads sceneFBO.texture while writing, so writing back into
+    // sceneFBO would be a read/write feedback on the same attachment). The
+    // composite then uses aoSceneFBO as its `sceneColor` base (see below).
+    //
+    // gammaCorrection is left at its default (autosetGamma), and renderToScreen is
+    // forced false → N8AO emits LINEAR (no sRGB OETF), matching this pipeline's
+    // NoColorSpace HalfFloat buffers, so the AO'd scene stays in the same linear-HDR
+    // space the composite + single grade pass expect (ACES/grade run once, downstream).
+    // renderMode 0 (Combined) + colorMultiply true → occlusion multiplies the scene
+    // colour (preserving texture in shadow) toward the cool `color` tint.
+    //
+    // NORMALS: N8AO reconstructs them from DEPTH — no NormalPass / full-screen normal
+    // render — so this adds no extra geometry pass; the only new fill is the AO sample
+    // loop (half-res when ssaoHalfRes) + denoise + one composite over the scene buffer.
+    const aoSceneFBO = ssaoEnabled ? makeTarget(null) : null;
+    let aoPass: N8AOPostPass | null = null;
+    if (ssaoEnabled) {
+      aoPass = new N8AOPostPass(scene, camera);
+      aoPass.renderToScreen = false;
+      const cfg = aoPass.configuration;
+      cfg.aoSamples = ssaoAoSamples;
+      cfg.denoiseSamples = ssaoDenoiseSamples;
+      cfg.denoiseRadius = ssaoDenoiseRadius;
+      cfg.aoRadius = ssaoRadius;
+      cfg.distanceFalloff = ssaoDistanceFalloff;
+      cfg.intensity = ssaoIntensity;
+      cfg.screenSpaceRadius = false; // aoRadius is in WORLD units
+      cfg.colorMultiply = true; // multiply occlusion into the scene colour
+      cfg.color = new THREE.Color(ssaoColor); // cool/dark shadow tint
+      cfg.halfRes = ssaoHalfRes; // resolutionScale 0.5 (MRT float path when true)
+      cfg.depthAwareUpsampling = true;
+      (cfg as any).transparencyAware = false;
+    }
+
     const compositeMat = new THREE.RawShaderMaterial({
       glslVersion: THREE.GLSL3,
       vertexShader: compositeVertexShader,
@@ -346,7 +451,10 @@ export function MobileCrispBoardPipeline({
       uniforms: {
         // Texture objects are stable across WebGLRenderTarget.setSize (only the GPU
         // storage is reallocated), so these references stay valid after a resize.
-        sceneColor: { value: sceneFBO.texture },
+        // SSAO: when enabled, the scene BASE is the AO-darkened scene colour
+        // (aoSceneFBO), otherwise the raw scene FBO — a build-time swap, so the
+        // composite shader itself is unchanged (sceneDepth stays the scene depth).
+        sceneColor: { value: (aoSceneFBO ?? sceneFBO).texture },
         sceneDepth: { value: sceneDepthTex },
         boardColor: { value: boardFBO.texture },
         boardDepth: { value: boardDepthTex },
@@ -508,6 +616,8 @@ export function MobileCrispBoardPipeline({
       boardFBO,
       cityFBO,
       compositeFBO,
+      aoSceneFBO,
+      aoPass,
       sceneDepthTex,
       boardDepthTex,
       cityDepthTex,
@@ -517,6 +627,7 @@ export function MobileCrispBoardPipeline({
     };
   }, [
     camera,
+    scene,
     saturation,
     brightness,
     contrast,
@@ -524,6 +635,15 @@ export function MobileCrispBoardPipeline({
     fxaaSubpixelQuality,
     depthBias,
     cityDepthBias,
+    ssaoEnabled,
+    ssaoIntensity,
+    ssaoRadius,
+    ssaoDistanceFalloff,
+    ssaoHalfRes,
+    ssaoAoSamples,
+    ssaoDenoiseSamples,
+    ssaoDenoiseRadius,
+    ssaoColor,
     tiltShiftEnabled,
     tiltShiftOffset,
     tiltShiftFocusArea,
@@ -549,6 +669,11 @@ export function MobileCrispBoardPipeline({
   useLayoutEffect(() => {
     const alpha = gl.getContext().getContextAttributes()?.alpha ?? false;
     rig.gradePass.initialize(gl, alpha, THREE.HalfFloatType);
+
+    // SSAO: feed the AO the SCENE FBO's DEPTH once. The DepthTexture object is
+    // stable across setSize (only its GPU storage reallocates), so this reference
+    // stays valid for the pipeline's life — no need to re-set on resize.
+    if (rig.aoPass) rig.aoPass.setDepthTexture(rig.sceneDepthTex);
 
     const prevToneMapping = gl.toneMapping;
     gl.toneMapping = THREE.NoToneMapping;
@@ -624,6 +749,8 @@ export function MobileCrispBoardPipeline({
       rig.boardFBO.dispose();
       rig.cityFBO.dispose();
       rig.compositeFBO.dispose();
+      rig.aoSceneFBO?.dispose();
+      rig.aoPass?.dispose();
       rig.sceneDepthTex.dispose();
       rig.boardDepthTex.dispose();
       rig.cityDepthTex.dispose();
@@ -651,6 +778,14 @@ export function MobileCrispBoardPipeline({
     // re-syncs the attached depth texture to the new size on the next bind.
     if (rig.sceneFBO.width !== sceneW || rig.sceneFBO.height !== sceneH) {
       rig.sceneFBO.setSize(sceneW, sceneH);
+    }
+    // SSAO target + pass track the SCENE resolution (they read/write scene-space
+    // buffers), so the AO'd scene colour stays 1:1 with sceneDepth for the
+    // composite. aoPass.setSize reallocates its internal AO/denoise/output targets
+    // (and, when halfRes, the half-res MRT) — cheap, fires only on an actual resize.
+    if (rig.aoSceneFBO && rig.aoPass && (rig.aoSceneFBO.width !== sceneW || rig.aoSceneFBO.height !== sceneH)) {
+      rig.aoSceneFBO.setSize(sceneW, sceneH);
+      rig.aoPass.setSize(sceneW, sceneH);
     }
     if (rig.boardFBO.width !== nativeW || rig.boardFBO.height !== nativeH) {
       rig.boardFBO.setSize(nativeW, nativeH);
@@ -726,6 +861,21 @@ export function MobileCrispBoardPipeline({
     camera.layers.set(0);
     gl.setRenderTarget(rig.sceneFBO);
     gl.render(scene, camera);
+
+    // 1b. SSAO — depth-only ambient occlusion over the SCENE tier. Reconstructs
+    //     normals from the scene DEPTH (no NormalPass), samples occlusion at
+    //     ssaoRadius world-units (half-res when ssaoHalfRes), denoises, and
+    //     MULTIPLIES the AO into the scene colour → aoSceneFBO, which is the
+    //     composite's `sceneColor` base (wired at build). Reads sceneFBO.texture +
+    //     sceneDepthTex and writes a SEPARATE target (no read/write feedback).
+    //     shadowMap.enabled is still FALSE here (from pass 1) and only full-screen
+    //     quads run — no camera.layers / shadow / background state is touched, so the
+    //     per-pass shadow scoping (pass 2/3 set enabled=true) is unaffected. Sky
+    //     pixels carry far-plane depth → no occluder found + fog-attenuated → the
+    //     HDRI sky is left unchanged (no dark halo). Skipped entirely when SSAO off.
+    if (rig.aoPass && rig.aoSceneFBO) {
+      rig.aoPass.render(gl, rig.sceneFBO, rig.aoSceneFBO);
+    }
 
     // 2. BOARD pass — ONLY the board layer, at native dpr. shadowMap.enabled = TRUE
     //    (kept true through the CITY pass below) so the board + city SAMPLE the
