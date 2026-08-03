@@ -122,6 +122,15 @@ interface MobileCrispBoardPipelineProps {
    * scene FBO). false (DAY) leaves the pipeline byte-identical to before.
    */
   nightMode: boolean;
+  /**
+   * Mobile NIGHT sky SOURCE (GameScene NIGHT_SKY_MODE). 'procedural' (default) draws
+   * the crisp per-pixel procedural night sky in the composite (no texture, no OOM);
+   * 'hdri' samples the equirect night HDRI bound as scene.background (the 34a08a6
+   * path). Only consulted when nightMode && MOBILE_NIGHT_SKY_NATIVE; DAY/desktop
+   * ignore it. In 'procedural' mode scene.background is null (env-only IBL), so the
+   * native-sky path is armed from THIS prop rather than a background texture.
+   */
+  skyMode: 'procedural' | 'hdri';
   /** HueSaturation `saturation` — same value the mobile composer used. */
   saturation: number;
   /** BrightnessContrast `brightness` — same value the mobile composer used. */
@@ -311,6 +320,12 @@ uniform sampler2D uSky;
 uniform float uSkyIntensity;
 uniform mat4 uInvViewProj;
 uniform vec3 uCamPos;
+// ── PROCEDURAL NIGHT SKY (uProcedural == 1 && uNightSky == 1) ────────────────
+// When 1, the sky base is generated PER-PIXEL from dir (no texture fetch) —
+// crisp at any dpr, zero VRAM. uSky is NOT read in this branch (it stays bound to
+// a valid fallback texture). When 0 the equirect HDRI (uSky) is sampled instead
+// (the 34a08a6 native-HDRI path). Both are gated behind uNightSky.
+uniform float uProcedural;
 in vec2 vUv;
 out vec4 fragColor;
 
@@ -332,6 +347,130 @@ float viewZ(float depth) {
   return (cameraNear * cameraFar) / ((cameraFar - cameraNear) * depth - cameraFar);
 }
 
+// ═══════════════════════════════════════════════════════════════════════════
+// PROCEDURAL NIGHT SKY — reproduces the LOOK of night-sky-008.webp (deep navy +
+// a warm-dusty Milky Way arch + a dense field of fine cool-white stars) entirely
+// from the world view-ray dir. No texture, ~0 VRAM, crisp at any dpr → also
+// eliminates the 8K-background OOM crash class. Everything below is LINEAR-space
+// radiance (the composite FBO is HalfFloat / NoColorSpace), so it feeds the same
+// ACES + grade the HDRI sky did and lands at a consistent brightness/gamma.
+//
+// ── TUNABLES (art knobs — tune on device) ──────────────────────────────────
+// Base sky (linear). Deep navy overhead, a touch lighter/warmer toward horizon.
+const vec3  SKY_ZENITH_COL  = vec3(0.0040, 0.0080, 0.0200); // ~sRGB #0a1024 navy
+const vec3  SKY_HORIZON_COL = vec3(0.0100, 0.0160, 0.0320); // slightly lifted horizon
+// Milky Way band: a GREAT-CIRCLE band, bright where dot(dir,BAND_NORMAL)≈0. The
+// normal is (near-)unit and roughly horizontal so the band ARCHES over the sky
+// (through the upper hemisphere) like the HDRI, from any orbit azimuth.
+const vec3  BAND_NORMAL     = vec3(0.1495, 0.2492, 0.9568); // = normalize(0.15,0.25,0.96)
+const float BAND_SIGMA      = 0.22;  // gaussian half-width of the band (in dot units)
+const float BAND_INTENSITY  = 1.00;  // overall band brightness multiplier
+const vec3  BAND_CORE_COL   = vec3(0.32, 0.34, 0.40); // cool-white bright core
+const vec3  BAND_DUST_COL   = vec3(0.16, 0.10, 0.06); // warm-brown dust tint
+const float BAND_CLOUD_FREQ = 3.5;   // low-freq mottled cloud structure
+const float BAND_DUST_FREQ  = 9.0;   // higher-freq dust-lane structure
+const float BAND_DUST_LO    = 0.45;  // dust-lane carve ramp (start)
+const float BAND_DUST_HI    = 0.78;  // dust-lane carve ramp (end)
+const float BAND_DUST_STR   = 0.90;  // how hard the dust lanes darken the core
+#define     BAND_OCTAVES      3       // FBM octaves — the main sky ALU knob (2..4)
+// Stars. Fine field (crisp ~1px points) + sparse bright hero stars, both denser
+// on the band. Power-law brightness (many faint, few bright) via pow(hash, POW).
+const vec3  STAR_COL        = vec3(1.5, 1.6, 1.9);  // fine-star colour+gain (cool white)
+const float STAR_DENSITY    = 200.0; // spherical cell frequency (higher = more/finer)
+const float STAR_RAD        = 0.14;  // point radius in cell units (smaller = tighter)
+const float STAR_POW        = 3.5;   // brightness power law (higher = fewer bright)
+const float STAR_PROB       = 0.55;  // fraction of cells that hold a star (off-band)
+const float STAR_BAND_MULT  = 1.8;   // density boost factor ON the band
+const vec3  HERO_COL        = vec3(3.0, 3.2, 3.6); // bright hero stars (HDR, ACES rolls off)
+const float HERO_DENSITY    = 42.0;  // sparse
+const float HERO_RAD        = 0.10;
+const float HERO_POW        = 1.5;   // less steep → heroes are genuinely bright
+const float HERO_PROB       = 0.16;
+const float HERO_GLOW       = 0.5;   // soft halo around hero stars (0 = none)
+
+// 1D hash of a 3D cell → [0,1) (Dave Hoskins-style, cheap, tap-free).
+float hash13(vec3 p3) {
+  p3 = fract(p3 * 0.1031);
+  p3 += dot(p3, p3.zyx + 31.32);
+  return fract((p3.x + p3.y) * p3.z);
+}
+// 3D→3D hash for star existence / sub-cell position / brightness.
+vec3 hash33(vec3 p3) {
+  p3 = fract(p3 * vec3(0.1031, 0.1030, 0.0973));
+  p3 += dot(p3, p3.yxz + 33.33);
+  return fract((p3.xxy + p3.yzz) * p3.zyx);
+}
+// Value noise (trilinear over 8 hashed corners).
+float vnoise(vec3 p) {
+  vec3 i = floor(p);
+  vec3 f = fract(p);
+  f = f * f * (3.0 - 2.0 * f);
+  float n000 = hash13(i + vec3(0.0, 0.0, 0.0));
+  float n100 = hash13(i + vec3(1.0, 0.0, 0.0));
+  float n010 = hash13(i + vec3(0.0, 1.0, 0.0));
+  float n110 = hash13(i + vec3(1.0, 1.0, 0.0));
+  float n001 = hash13(i + vec3(0.0, 0.0, 1.0));
+  float n101 = hash13(i + vec3(1.0, 0.0, 1.0));
+  float n011 = hash13(i + vec3(0.0, 1.0, 1.0));
+  float n111 = hash13(i + vec3(1.0, 1.0, 1.0));
+  return mix(mix(mix(n000, n100, f.x), mix(n010, n110, f.x), f.y),
+             mix(mix(n001, n101, f.x), mix(n011, n111, f.x), f.y), f.z);
+}
+// FBM → normalised ~[0,1]. BAND_OCTAVES bounds the cost (main sky ALU knob).
+float fbm(vec3 p) {
+  float a = 0.5;
+  float s = 0.0;
+  float norm = 0.0;
+  for (int i = 0; i < BAND_OCTAVES; i++) {
+    s += a * vnoise(p);
+    norm += a;
+    p = p * 2.02 + vec3(11.7, 3.1, 7.3);
+    a *= 0.5;
+  }
+  return s / norm;
+}
+// One star field layer. Samples ONLY the cell containing dir (the star is placed
+// away from cell edges so its whole footprint stays inside one cell → no neighbour
+// taps). Returns a scalar the caller tints. bandBoost raises density on the band.
+float starLayer(vec3 dir, float density, float rad, float pw, float prob,
+                float bandBoost, float glowAmt) {
+  vec3 gp = dir * density;
+  vec3 cell = floor(gp);
+  vec3 f = fract(gp);
+  vec3 h = hash33(cell);
+  if (h.z > prob * mix(1.0, STAR_BAND_MULT, bandBoost)) return 0.0;
+  vec3 sp = 0.25 + 0.5 * h;            // sub-cell position, kept off the edges
+  float d = length(f - sp);
+  float core = smoothstep(rad, rad * 0.35, d); // crisp point
+  float glow = glowAmt * exp(-d * d / (rad * rad * 8.0));
+  return (core + glow) * pow(h.x, pw); // power-law brightness
+}
+vec3 proceduralNightSky(vec3 dir) {
+  // BASE: navy gradient, a touch lighter toward the horizon.
+  vec3 col = mix(SKY_HORIZON_COL, SKY_ZENITH_COL, smoothstep(-0.10, 0.60, dir.y));
+
+  // MILKY WAY: gaussian falloff from the great-circle band axis, modulated by a
+  // low-freq cloud FBM (mottled structure) and carved by a higher-freq dust FBM
+  // (dark lanes). Warm-brown in the dust, cool-white in the bright core.
+  float bc = dot(dir, BAND_NORMAL);
+  float band = exp(-(bc * bc) / (2.0 * BAND_SIGMA * BAND_SIGMA));
+  float cloud = fbm(dir * BAND_CLOUD_FREQ + vec3(4.3, 1.7, 9.2));
+  float dust = fbm(dir * BAND_DUST_FREQ + vec3(19.1, 7.4, 2.8));
+  float glow = band * mix(0.25, 1.0, cloud);
+  float lane = smoothstep(BAND_DUST_LO, BAND_DUST_HI, dust);
+  glow *= (1.0 - BAND_DUST_STR * lane * band);       // dust lanes darken the core
+  vec3 bandCol = mix(BAND_DUST_COL, BAND_CORE_COL, cloud);
+  bandCol = mix(bandCol, BAND_DUST_COL, lane * 0.6); // warm the dusty regions
+  col += bandCol * glow * BAND_INTENSITY;
+
+  // STARS: fine field + sparse hero stars, both denser along the band.
+  float bandBoost = smoothstep(0.15, 0.90, band);
+  col += STAR_COL * starLayer(dir, STAR_DENSITY, STAR_RAD, STAR_POW, STAR_PROB, bandBoost, 0.0);
+  col += HERO_COL * starLayer(dir, HERO_DENSITY, HERO_RAD, HERO_POW, HERO_PROB, bandBoost, HERO_GLOW);
+  return col;
+}
+// ═══════════════════════════════════════════════════════════════════════════
+
 void main() {
   // BASE: the scene tier. DAY/desktop: the scene FBO has full coverage (HDRI sky
   // fills the background) so it is the fallback everywhere. COLOR bilinear (smooth
@@ -348,7 +487,11 @@ void main() {
   if (uNightSky > 0.5 && sd >= 0.999999) {
     vec4 wp = uInvViewProj * vec4(vUv * 2.0 - 1.0, 1.0, 1.0);
     vec3 dir = normalize(wp.xyz / wp.w - uCamPos);
-    outC = texture(uSky, equirectUv(dir)).rgb * uSkyIntensity;
+    // PROCEDURAL (default): per-pixel sky from dir — crisp, no texture. HDRI:
+    // sample the equirect night HDRI verbatim (the 34a08a6 path). Same LINEAR
+    // output × uSkyIntensity so both grade identically downstream.
+    vec3 sky = uProcedural > 0.5 ? proceduralNightSky(dir) : texture(uSky, equirectUv(dir)).rgb;
+    outC = sky * uSkyIntensity;
   }
   float zS  = viewZ(sd);
   float outZ = zS;
@@ -422,6 +565,7 @@ export function MobileCrispBoardPipeline({
   tiltShiftFeather,
   tiltShiftResolutionScale,
   tiltShiftKernelSize,
+  skyMode,
 }: MobileCrispBoardPipelineProps): null {
   const gl = useThree((s) => s.gl);
   const scene = useThree((s) => s.scene);
@@ -550,6 +694,9 @@ export function MobileCrispBoardPipeline({
         // seeded with a VALID fallback texture (the scene FBO) so the sampler is
         // always bound even when unused.
         uNightSky: { value: 0 },
+        // uProcedural 0 = sample the equirect HDRI (uSky); 1 = per-pixel procedural
+        // sky (uSky unused). Set per-frame from NIGHT_SKY_MODE via the skyMode prop.
+        uProcedural: { value: 0 },
         uSky: { value: sceneFBO.texture },
         uSkyIntensity: { value: 1 },
         uInvViewProj: { value: new THREE.Matrix4() },
@@ -924,24 +1071,39 @@ export function MobileCrispBoardPipeline({
     // use it). Any other case (DAY sky, a Color/CubeTexture background, the sky not
     // yet loaded) → useNativeSky stays false → the EXACT pre-feature path (sky drawn
     // into the reduced-dpr scene FBO), so DAY and the toggle-off fallback are safe.
+    // PROCEDURAL: armed purely on nightMode + toggle + skyMode (scene.background is
+    // null in this mode — the sky is drawn per-pixel in the composite, not from a
+    // texture). HDRI: armed only when scene.background IS the equirect night HDRI.
     const bgTex = prevBackground as THREE.Texture | null;
-    const skyTex =
+    const proceduralNight = nightMode && MOBILE_NIGHT_SKY_NATIVE && skyMode === 'procedural';
+    const hdriTex =
       nightMode &&
       MOBILE_NIGHT_SKY_NATIVE &&
+      skyMode === 'hdri' &&
       bgTex != null &&
       (bgTex as Partial<THREE.Texture>).isTexture === true &&
       bgTex.mapping === THREE.EquirectangularReflectionMapping
         ? bgTex
         : null;
-    const useNativeSky = skyTex !== null;
+    const useNativeSky = proceduralNight || hdriTex !== null;
     if (useNativeSky) {
       rig.compositeMat.uniforms.uNightSky.value = 1;
-      rig.compositeMat.uniforms.uSky.value = skyTex;
       // three multiplies the background by scene.backgroundIntensity in linear space
-      // (WebGLBackground) — match it so brightness is identical to the old FBO sky.
+      // (WebGLBackground) — match it so the procedural/HDRI sky brightness is
+      // consistent with the old FBO sky. In procedural mode scene.background is null
+      // but backgroundIntensity is still set (MOBILE_NIGHT_BG_INTENSITY) as the knob.
       rig.compositeMat.uniforms.uSkyIntensity.value = scene.backgroundIntensity ?? 1;
+      if (proceduralNight) {
+        rig.compositeMat.uniforms.uProcedural.value = 1;
+        // uSky unused by the procedural branch; keep it bound to a valid texture.
+        rig.compositeMat.uniforms.uSky.value = rig.sceneFBO.texture;
+      } else {
+        rig.compositeMat.uniforms.uProcedural.value = 0;
+        rig.compositeMat.uniforms.uSky.value = hdriTex;
+      }
     } else {
       rig.compositeMat.uniforms.uNightSky.value = 0;
+      rig.compositeMat.uniforms.uProcedural.value = 0;
       // Keep the sampler bound to a valid 2D texture even when unused.
       rig.compositeMat.uniforms.uSky.value = rig.sceneFBO.texture;
     }

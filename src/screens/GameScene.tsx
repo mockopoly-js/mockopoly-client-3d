@@ -29,7 +29,6 @@ import { MobileRenderController } from '../board/MobileRenderController';
 import { MobileCrispBoardPipeline } from '../board/MobileCrispBoardPipeline';
 import { RenderStatsReadout } from '../board/RenderStatsReadout';
 import { BOARD_ROTATION, MOBILE_FOREST_SHADOWS_ENABLED } from '../board/positions';
-import { getProceduralNightSky } from '../board/ProceduralSky';
 import { NightStreetLights } from '../board/NightStreetLights';
 import { useIsMobile } from '../ui/useIsMobile';
 
@@ -351,14 +350,18 @@ const MOBILE_NIGHT_BG_INTENSITY = 1.0; // the procedural night gradient is alrea
 
 /**
  * ── MOBILE NIGHT SKY SOURCE (toggle) ──────────────────────────────────────────
- * Real night-sky HDRI (tonemapped, real stars + Milky Way baked in) vs. the
- * cheap procedural dark-navy gradient (getProceduralNightSky). 'hdri' loads a
- * pre-generated 2048×1024 equirect webp (scripts/gen-night-sky.mjs, sourced
- * from 8K tonemapped HDRI renders); 'procedural' keeps the EXACT prior
- * CanvasTexture path as a no-asset fallback. Mobile/night only — day and
- * desktop never read this.
+ * 'procedural' (DEFAULT) draws the night sky PER-PIXEL in the composite highp
+ * shader (MobileCrispBoardPipeline: proceduralNightSky) — deep navy + a warm-dusty
+ * Milky Way arch + a dense field of fine cool-white stars, reproducing the LOOK of
+ * night-sky-008.webp but EXTREMELY CRISP at any resolution and with ~0 background
+ * VRAM (no big texture → the 8K-OOM crash class is eliminated). The 4K night HDRI is
+ * STILL loaded as scene.environment for IBL/LIGHTING only (~33MB, stable); it is NOT
+ * used as scene.background in this mode.
+ * 'hdri' instead binds the pre-generated equirect night webp as BOTH scene.background
+ * (sampled crisp per-pixel in the composite, the 34a08a6 path) and scene.environment.
+ * Mobile/night only — day and desktop never read this.
  */
-const NIGHT_SKY_MODE: 'hdri' | 'procedural' = 'hdri';
+const NIGHT_SKY_MODE: 'procedural' | 'hdri' = 'procedural';
 // Which pre-generated night-sky equirect to use: '003' = moonlit clean sky,
 // '008' = Milky Way band (default — the more dramatic real-sky read).
 const NIGHT_SKY_HDRI: '003' | '008' = '008';
@@ -788,27 +791,41 @@ function HdriSkyMobileNightHdri() {
 }
 
 /**
- * MOBILE NIGHT sky/env — PROCEDURAL fallback branch (NIGHT_SKY_MODE='procedural').
- * Byte-identical to the pre-HDRI-swap component: swaps the day equirect for a cheap
- * PROCEDURAL dark-navy night gradient (see getProceduralNightSky), assigned to BOTH
- * scene.background (visible dark sky) and scene.environment (a DARK cool IBL at
- * MOBILE_NIGHT_ENV_INTENSITY so the moon/warm-light rig drives the look). NO asset, no
- * useTexture, no Suspense, no KTX2 — the module-cached CanvasTexture is built on first
- * use and reused. Kept as the no-asset fallback (see NIGHT_SKY_MODE).
+ * MOBILE NIGHT sky/env — PROCEDURAL shader branch (NIGHT_SKY_MODE='procedural', DEFAULT).
+ * The VISIBLE night sky is generated PER-PIXEL in the composite highp shader
+ * (MobileCrispBoardPipeline: proceduralNightSky) — deep navy + a warm-dusty Milky Way
+ * arch + a dense fine star field, reproducing the LOOK of night-sky-008.webp but crisp
+ * at any dpr and with ~0 background VRAM (no big background texture → the 8K-OOM crash
+ * class is gone). This component ONLY sets scene.environment = the 4K night HDRI for
+ * IBL/LIGHTING (~33MB, the stable env texture the task keeps) and deliberately leaves
+ * scene.background NULL so the pipeline's scene pass clears transparent (far-plane
+ * depth) and the procedural sky fills those pixels. backgroundIntensity is still set
+ * (MOBILE_NIGHT_BG_INTENSITY) so the shader's uSkyIntensity has a matching knob.
+ * Texture setup mirrors the HDRI branch (EquirectangularReflectionMapping, SRGB, no
+ * mips + max anisotropy). Wrapped in <Suspense> by the selector (useTexture suspends).
  */
 function HdriSkyMobileNightProcedural() {
   const scene = useThree((s) => s.scene);
+  const gl = useThree((s) => s.gl);
+  const tex = useTexture(NIGHT_SKY_URL);
   useEffect(() => {
-    const tex = getProceduralNightSky();
+    tex.mapping = THREE.EquirectangularReflectionMapping;
+    tex.colorSpace = THREE.SRGBColorSpace;
+    tex.magFilter = THREE.LinearFilter;
+    tex.minFilter = THREE.LinearFilter;
+    tex.generateMipmaps = false;
+    tex.anisotropy = gl.capabilities.getMaxAnisotropy();
+    tex.needsUpdate = true;
     scene.environment = tex;
     scene.environmentIntensity = MOBILE_NIGHT_ENV_INTENSITY;
-    scene.background = tex;
+    // NO scene.background — the visible sky is procedural (drawn in the composite).
+    scene.background = null;
     scene.backgroundIntensity = MOBILE_NIGHT_BG_INTENSITY;
     return () => {
       scene.environment = null;
       scene.background = null;
     };
-  }, [scene]);
+  }, [tex, scene, gl]);
   return null;
 }
 
@@ -831,7 +848,14 @@ function HdriSkyMobileNight() {
       </Suspense>
     );
   }
-  return <HdriSkyMobileNightProcedural />;
+  // 'procedural' — env-only IBL texture (useTexture suspends), visible sky drawn in
+  // the composite shader. Own Suspense boundary so a slow/failed env load only
+  // suspends this leaf (mirrors the 'hdri' branch), never blanking the scene.
+  return (
+    <Suspense fallback={null}>
+      <HdriSkyMobileNightProcedural />
+    </Suspense>
+  );
 }
 
 /**
@@ -1300,6 +1324,7 @@ export function GameScene() {
         */
         <MobileCrispBoardPipeline
           nightMode={MOBILE_NIGHT_MODE}
+          skyMode={NIGHT_SKY_MODE}
           saturation={MOBILE_NIGHT_MODE ? MOBILE_NIGHT_SATURATION : MOBILE_SATURATION}
           brightness={MOBILE_BRIGHTNESS}
           contrast={MOBILE_NIGHT_MODE ? MOBILE_NIGHT_CONTRAST : MOBILE_CONTRAST}
