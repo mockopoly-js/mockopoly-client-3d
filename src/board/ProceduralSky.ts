@@ -96,3 +96,55 @@ export function getProceduralSky(): THREE.CanvasTexture {
   cached = tex;
   return tex;
 }
+
+/**
+ * ── PROCEDURAL MOONLIT-NIGHT SKY (MOBILE ONLY, night mode) ────────────────────
+ * The night sibling of {@link getProceduralSky}: a deep-navy VERTICAL gradient
+ * equirect (dark zenith → slightly-lighter dark-blue horizon) used by
+ * HdriSkyMobileNight as BOTH scene.background (visible dark sky) AND scene.environment
+ * (a DARK, cool IBL so the moon/warm-light rig — not the sky — drives the look). Same
+ * cheap 16×512 canvas mechanism (vertical gradient only → width-1px carries no detail),
+ * ZERO asset (no webp/KTX2), module-cached singleton. No sun glow — moonlight comes from
+ * the directional KEY, not a sky disc. A faint moon disc / star speckle is DEFERRED: a
+ * 16px-wide equirect smears any point feature into a horizontal band, so stars/moon would
+ * need a wider canvas — not worth the cost/risk for this first night pass.
+ */
+const NIGHT_ZENITH = '#0a1024'; // deep navy overhead
+const NIGHT_MID = '#0e1730'; // dark blue mid-band
+const NIGHT_HORIZON = '#16203c'; // slightly-lighter dark blue at the horizon
+
+let cachedNight: THREE.CanvasTexture | null = null;
+
+/**
+ * Returns the shared procedural moonlit-night equirect texture, building it on the
+ * first call. Safe to call repeatedly (module-cached, separate from the day cache).
+ */
+export function getProceduralNightSky(): THREE.CanvasTexture {
+  if (cachedNight) return cachedNight;
+
+  const canvas = document.createElement('canvas');
+  canvas.width = CANVAS_W;
+  canvas.height = CANVAS_H;
+  const ctx = canvas.getContext('2d');
+  if (ctx) {
+    // Same vertical-gradient convention as the day sky (stop 0 = canvas TOP = v=1 =
+    // zenith with flipY=true; stop 1 = horizon). Deep navy overhead → dark blue horizon.
+    const grad = ctx.createLinearGradient(0, 0, 0, CANVAS_H);
+    grad.addColorStop(0.0, NIGHT_ZENITH);
+    grad.addColorStop(0.5, NIGHT_MID);
+    grad.addColorStop(1.0, NIGHT_HORIZON);
+    ctx.fillStyle = grad;
+    ctx.fillRect(0, 0, CANVAS_W, CANVAS_H);
+  }
+
+  const tex = new THREE.CanvasTexture(canvas);
+  tex.mapping = THREE.EquirectangularReflectionMapping;
+  tex.colorSpace = THREE.SRGBColorSpace;
+  tex.minFilter = THREE.LinearFilter;
+  tex.magFilter = THREE.LinearFilter;
+  tex.generateMipmaps = false;
+  tex.needsUpdate = true;
+
+  cachedNight = tex;
+  return tex;
+}

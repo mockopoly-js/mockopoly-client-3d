@@ -29,6 +29,7 @@ import { MobileRenderController } from '../board/MobileRenderController';
 import { MobileCrispBoardPipeline } from '../board/MobileCrispBoardPipeline';
 import { RenderStatsReadout } from '../board/RenderStatsReadout';
 import { BOARD_ROTATION, MOBILE_FOREST_SHADOWS_ENABLED } from '../board/positions';
+import { getProceduralNightSky } from '../board/ProceduralSky';
 import { useIsMobile } from '../ui/useIsMobile';
 
 /**
@@ -304,6 +305,65 @@ const MOBILE_HEMI_INTENSITY = 0.16;
 // "too dark" floor the last round fixed. Hold 0.20 if any muddiness appears.
 const MOBILE_AMBIENT_COLOR = '#aeb8cc';
 const MOBILE_AMBIENT_INTENSITY = 0.06;
+
+/**
+ * ── MOBILE NIGHT MODE (toggle) ────────────────────────────────────────────────
+ * A moody moonlit-night look for the mobile scene: cool dark-blue moonlight, deep
+ * navy shadows, and a WARM central glow over the board (the "campfire valley" read)
+ * that also keeps the board + city readable. It REUSES the entire day pipeline
+ * unchanged — real forest shadows (highp/layer split), matte terrain, SSAO, matte
+ * forest — and only RE-LIGHTS / RE-TINTS (sky, fog, lighting rig, grade) + adds one
+ * warm non-shadow board light. The moon KEY stays the SOLE shadow caster (same highp
+ * shadow pipeline; no new mediump-shadow exposure), so it is iOS-safe.
+ *
+ * TOGGLE: when MOBILE_NIGHT_MODE is FALSE the day look is BYTE-IDENTICAL to before —
+ * every night branch below is a `MOBILE_NIGHT_MODE ? night : day` select that resolves
+ * to the untouched day const, the warm light is not mounted, and HdriSkyMobile renders
+ * its day (sky.webp) child. Mobile-only; the desktop path is never touched either way.
+ * All values are named consts so they can be tuned on-device.
+ *
+ * DEFERRED (later pass, not built here): emissive city windows, fireflies, bloom on
+ * emissives.
+ *
+ * Typed `boolean` (not literal `true`) so both day and night branches type-check and
+ * survive in the bundle for a rebuild-flip A/B, matching MOBILE_FOREST_SHADOWS_ENABLED.
+ */
+const MOBILE_NIGHT_MODE: boolean = true;
+
+// Moon KEY — stays the SOLE shadow caster (same position + the whole highp/layer-split
+// shadow pipeline); night only recolors it cool + dims it, and softens the receive.
+const MOBILE_NIGHT_KEY_COLOR = '#9fb4d8'; // cool moonlight
+const MOBILE_NIGHT_KEY_INTENSITY = 1.1;
+const MOBILE_NIGHT_KEY_SHADOW_INTENSITY = 0.6; // softer receive than day's 0.9
+// Hemisphere / ambient — cool, dark night fill (deep navy shadow side).
+const MOBILE_NIGHT_HEMI_SKY = '#2a3a5c';
+const MOBILE_NIGHT_HEMI_GROUND = '#171c2b';
+const MOBILE_NIGHT_HEMI_INTENSITY = 0.22;
+const MOBILE_NIGHT_AMBIENT_COLOR = '#1b2338';
+const MOBILE_NIGHT_AMBIENT_INTENSITY = 0.12;
+// Env / background intensity — dark sky IBL (keep it from washing out the night).
+const MOBILE_NIGHT_ENV_INTENSITY = 0.15;
+const MOBILE_NIGHT_BG_INTENSITY = 1.0; // the procedural night gradient is already dark
+// WARM FOCAL BOARD LIGHT (night-only, NEW) — a warm point light above the board CENTER
+// that lights the BOARD + CITY (readability) and falls off into the dark surroundings
+// (campfire-valley glow). castShadow=FALSE — the moon is the sole caster; this is pure
+// warm fill/ambiance. Physical point light (three r0.169): intensity is candela with
+// inverse-square decay, so the number is large; `distance` windows it to fade out beyond
+// the board/city into the dark forest. All tuned on-device.
+const MOBILE_NIGHT_WARM_COLOR = '#ffd39a'; // warm campfire tone
+const MOBILE_NIGHT_WARM_INTENSITY = 70; // candela (decay 2) — moderate glow, tune on-device
+const MOBILE_NIGHT_WARM_POSITION: [number, number, number] = [0, 7, 0]; // above board centre
+const MOBILE_NIGHT_WARM_DISTANCE = 40; // world units — fades to 0 by here (into the dark)
+const MOBILE_NIGHT_WARM_DECAY = 2; // physical inverse-square falloff
+// Fog — recolor to dark blue ONLY (near/far are coupled to FOREST_CULL_DISTANCE +
+// density bands + a test, so FOG_FAR/FOG_NEAR are left exactly as day; see the fog note).
+const MOBILE_NIGHT_FOG_COLOR = '#0e1830';
+// Grade (passed to MobileCrispBoardPipeline) — moody darks; board stays readable. A cool
+// tint is intentionally NOT done in the grade (it would need a pipeline change); the cool
+// mood comes from the moon + navy sky + blue fog instead.
+const MOBILE_NIGHT_EXPOSURE = 0.95;
+const MOBILE_NIGHT_CONTRAST = 0.22;
+const MOBILE_NIGHT_SATURATION = -0.1;
 /**
  * MOBILE-ONLY frozen shadow-map resolution for the KEY sun. The map is baked
  * ONCE at load (autoUpdate off — see MobileCrispBoardPipeline), so it costs a single
@@ -637,7 +697,7 @@ function HdriSkyDesktop() {
  * sample scene.environment for IBL, so this is a texture SWAP with the same
  * per-fragment sample count. Desktop keeps sky.webp untouched.
  */
-function HdriSkyMobile() {
+function HdriSkyMobileDay() {
   const scene = useThree((s) => s.scene);
   const gl = useThree((s) => s.gl);
   const tex = useTexture('/images/sky.webp');
@@ -662,6 +722,43 @@ function HdriSkyMobile() {
     };
   }, [tex, scene, gl]);
   return null;
+}
+
+/**
+ * MOBILE NIGHT sky/env (MOBILE_NIGHT_MODE) — swaps the day equirect for a cheap
+ * PROCEDURAL dark-navy night gradient (see getProceduralNightSky), assigned to BOTH
+ * scene.background (visible dark sky) and scene.environment (a DARK cool IBL at
+ * MOBILE_NIGHT_ENV_INTENSITY so the moon/warm-light rig drives the look). NO asset, no
+ * useTexture, no Suspense, no KTX2 — the module-cached CanvasTexture is built on first
+ * use and reused. Split into its OWN component (vs. branching inside one) so the day
+ * child's useTexture hook is never conditionally skipped (rules-of-hooks safe); the
+ * selector picks exactly one on the compile-time flag. Mirrors HdriSkyMobileDay's
+ * background/environment wiring so the 3-pass mobile composite inherits it identically.
+ */
+function HdriSkyMobileNight() {
+  const scene = useThree((s) => s.scene);
+  useEffect(() => {
+    const tex = getProceduralNightSky();
+    scene.environment = tex;
+    scene.environmentIntensity = MOBILE_NIGHT_ENV_INTENSITY;
+    scene.background = tex;
+    scene.backgroundIntensity = MOBILE_NIGHT_BG_INTENSITY;
+    return () => {
+      scene.environment = null;
+      scene.background = null;
+    };
+  }, [scene]);
+  return null;
+}
+
+/**
+ * MOBILE sky selector — day (sky.webp equirect) vs night (procedural navy gradient) on
+ * the compile-time MOBILE_NIGHT_MODE flag. Split so the day child's useTexture hook is
+ * never conditionally called. When MOBILE_NIGHT_MODE is false this is byte-identical to
+ * the previous HdriSkyMobile (renders the day child only).
+ */
+function HdriSkyMobile() {
+  return MOBILE_NIGHT_MODE ? <HdriSkyMobileNight /> : <HdriSkyMobileDay />;
 }
 
 /**
@@ -881,7 +978,12 @@ export function GameScene() {
           exactly at FOG_FAR (deterministic cutoff for the forest ring cull). Only
           the SCENE pass consumes it; the board opts out via material.fog=false. On
           desktop this is not mounted → scene.fog stays null → byte-identical. */}
-      {isMobile && <fog attach="fog" args={[FOG_COLOR, FOG_NEAR, FOG_FAR]} />}
+      {isMobile && (
+        <fog
+          attach="fog"
+          args={[MOBILE_NIGHT_MODE ? MOBILE_NIGHT_FOG_COLOR : FOG_COLOR, FOG_NEAR, FOG_FAR]}
+        />
+      )}
       {/* Soft shadow injection (must be early in the scene, no assets).
           Desktop only: SoftShadows (drei PCSS) costs a per-fragment sample loop
           on every shadow-receiving pixel. On mobile we skip it so Canvas
@@ -912,7 +1014,13 @@ export function GameScene() {
           reads — the raking KEY sun ANGLE does the shaping, not starved fill. */}
       {!isMobile && <hemisphereLight args={['#cbe8f5', '#8a9a5b', HEMI_INTENSITY]} />}
       {isMobile && (
-        <hemisphereLight args={[MOBILE_HEMI_SKY, MOBILE_HEMI_GROUND, MOBILE_HEMI_INTENSITY]} />
+        <hemisphereLight
+          args={[
+            MOBILE_NIGHT_MODE ? MOBILE_NIGHT_HEMI_SKY : MOBILE_HEMI_SKY,
+            MOBILE_NIGHT_MODE ? MOBILE_NIGHT_HEMI_GROUND : MOBILE_HEMI_GROUND,
+            MOBILE_NIGHT_MODE ? MOBILE_NIGHT_HEMI_INTENSITY : MOBILE_HEMI_INTENSITY,
+          ]}
+        />
       )}
       {/* Ambient floor. DESKTOP: 0.15 neutral — AO now darkens crevices the flat
           ambient was washing out; this just lifts pure black. MOBILE twin: a
@@ -921,7 +1029,10 @@ export function GameScene() {
           the darkening, so depth comes from direction not from crushed darks. */}
       {!isMobile && <ambientLight intensity={AMBIENT_INTENSITY} />}
       {isMobile && (
-        <ambientLight color={MOBILE_AMBIENT_COLOR} intensity={MOBILE_AMBIENT_INTENSITY} />
+        <ambientLight
+          color={MOBILE_NIGHT_MODE ? MOBILE_NIGHT_AMBIENT_COLOR : MOBILE_AMBIENT_COLOR}
+          intensity={MOBILE_NIGHT_MODE ? MOBILE_NIGHT_AMBIENT_INTENSITY : MOBILE_AMBIENT_INTENSITY}
+        />
       )}
       {/* KEY (the sun). DESKTOP: warm, the ONLY shadow caster; position + ortho
           shadow-camera bounds kept exactly as before. castShadow is now a bare
@@ -969,14 +1080,14 @@ export function GameScene() {
           is untouched → byte-identical. */}
       {isMobile && (
         <directionalLight
-          color={MOBILE_KEY_COLOR}
+          color={MOBILE_NIGHT_MODE ? MOBILE_NIGHT_KEY_COLOR : MOBILE_KEY_COLOR}
           position={MOBILE_KEY_POSITION}
-          intensity={MOBILE_KEY_INTENSITY}
+          intensity={MOBILE_NIGHT_MODE ? MOBILE_NIGHT_KEY_INTENSITY : MOBILE_KEY_INTENSITY}
           castShadow
           shadow-mapSize={[MOBILE_SHADOW_MAP_SIZE, MOBILE_SHADOW_MAP_SIZE]}
           shadow-bias={-0.0004}
           shadow-normalBias={0.05}
-          shadow-intensity={0.9}
+          shadow-intensity={MOBILE_NIGHT_MODE ? MOBILE_NIGHT_KEY_SHADOW_INTENSITY : 0.9}
         >
           <orthographicCamera
             attach="shadow-camera"
@@ -990,6 +1101,22 @@ export function GameScene() {
             ]}
           />
         </directionalLight>
+      )}
+      {/* WARM FOCAL BOARD LIGHT (mobile NIGHT only) — a warm point light above the board
+          CENTER that keeps the board + city readable and glows the near terrain, falling
+          off into the dark surroundings (the campfire-valley read). castShadow=FALSE: the
+          moon KEY is the SOLE shadow caster, so the frozen shadow bake is unchanged and no
+          second caster/mediump-shadow exposure is added. The mobile pipeline additively
+          enables BOARD/CITY/GROUND layers on every light, so this reaches those passes. */}
+      {isMobile && MOBILE_NIGHT_MODE && (
+        <pointLight
+          color={MOBILE_NIGHT_WARM_COLOR}
+          position={MOBILE_NIGHT_WARM_POSITION}
+          intensity={MOBILE_NIGHT_WARM_INTENSITY}
+          distance={MOBILE_NIGHT_WARM_DISTANCE}
+          decay={MOBILE_NIGHT_WARM_DECAY}
+          castShadow={false}
+        />
       )}
       {/* FILL: cool, low, opposite-ish angle — softens the shadow side without
           flattening the form. No shadow (perf + avoids double shadows). Dropped on
@@ -1085,10 +1212,10 @@ export function GameScene() {
           / CONTRAST), applied by a hand-built EffectPass.
         */
         <MobileCrispBoardPipeline
-          saturation={MOBILE_SATURATION}
+          saturation={MOBILE_NIGHT_MODE ? MOBILE_NIGHT_SATURATION : MOBILE_SATURATION}
           brightness={MOBILE_BRIGHTNESS}
-          contrast={MOBILE_CONTRAST}
-          exposure={MOBILE_EXPOSURE}
+          contrast={MOBILE_NIGHT_MODE ? MOBILE_NIGHT_CONTRAST : MOBILE_CONTRAST}
+          exposure={MOBILE_NIGHT_MODE ? MOBILE_NIGHT_EXPOSURE : MOBILE_EXPOSURE}
           fxaaSubpixelQuality={MOBILE_FXAA_SUBPIXEL_QUALITY}
           sceneDpr={MOBILE_SCENE_DPR}
           cityDpr={MOBILE_CITY_DPR}
