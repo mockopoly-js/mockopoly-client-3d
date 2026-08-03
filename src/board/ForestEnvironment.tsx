@@ -668,16 +668,24 @@ function buildMobileForestFadeMaterial(base: THREE.Material): THREE.Material {
   (mat as THREE.MeshStandardMaterial).metalness = 0.0;
   (mat as THREE.MeshStandardMaterial).envMapIntensity = MOBILE_FOREST_ENV_INTENSITY;
   applyForestFade(mat); // same fade + board-clip discard program as desktop
-  injectMobileMediump(mat);
-  // DISTINCT program cache key. three's DEFAULT customProgramCacheKey returns
-  // onBeforeCompile.toString(), which is IDENTICAL for the fade and opaque
-  // variants (both end in the SAME injectMobileMediump arrow) — so they collided
-  // on ONE cached WebGLProgram, making the opaque↔fade swap a silent no-op. The
-  // fade program has the near-camera dither + board-clip discard and the opaque
-  // one has neither, so they are genuinely different programs and MUST key apart.
-  // three APPENDS this to its own key (instancing / lights / shadowMap.enabled
-  // still vary independently), so the enabled=false display variant is unaffected.
-  mat.customProgramCacheKey = () => 'mobile-forest-fade-mediump';
+  // PRECISION (MOBILE_FOREST_SHADOWS_ENABLED): the forest is drawn ONCE under
+  // shadowMap.enabled=true — the throwaway shadow-bake's beauty pass renders every
+  // caster-layer object (forest included, so trees CAST) — which injects the shadow-
+  // depth-unpack GLSL (~6e-8 constants) into THIS program; those underflow mediump so
+  // the iOS/Metal compiler REJECTS it → INVISIBLE foliage (the on-device symptom). So
+  // when the toggle is on we drop the mediump override → HIGHP (exactly like the
+  // ground-clip receiver). Foliage still renders in the shadow-OFF pass 1b (it does NOT
+  // receive shadows), but it must be highp so its shadow-VARIANT program stays valid on
+  // iOS. Toggle OFF keeps the cheap mediump override (revert-identical).
+  if (!MOBILE_FOREST_SHADOWS_ENABLED) injectMobileMediump(mat);
+  // DISTINCT program cache key so the fade and opaque variants never collide on ONE
+  // cached WebGLProgram (three's DEFAULT key = onBeforeCompile.toString(), and the fade
+  // program has the near-camera dither + board-clip discard while the opaque one has
+  // neither). three APPENDS this to its own key (instancing / lights / shadowMap.enabled
+  // still vary independently). The 'highp'/'mediump' suffix tracks the precision so a
+  // precision flip never re-uses a stale mediump-keyed program.
+  mat.customProgramCacheKey = () =>
+    MOBILE_FOREST_SHADOWS_ENABLED ? 'mobile-forest-fade-highp' : 'mobile-forest-fade-mediump';
   mat.needsUpdate = true;
   return mat;
 }
@@ -695,22 +703,27 @@ function buildMobileForestOpaqueMaterial(base: THREE.Material): THREE.Material {
   (mat as THREE.MeshStandardMaterial).roughness = MOBILE_FOREST_ROUGHNESS;
   (mat as THREE.MeshStandardMaterial).metalness = 0.0;
   (mat as THREE.MeshStandardMaterial).envMapIntensity = MOBILE_FOREST_ENV_INTENSITY;
-  injectMobileMediump(mat);
-  // Pin a CLEAN SOLID. This material's compiled program has NO `discard` at all
-  // (only injectMobileMediump runs onBeforeCompile — the fade dither and the
-  // board-footprint clip are NEVER injected), so early-Z is fully restored and
-  // the surface can never be seen through. It is the PERMANENT material for the
-  // non-foliage terrain (ground/mountains/rocks) as well as the far-tree opaque
-  // swap target, so set the solid state EXPLICITLY rather than trusting the cloned
-  // base's defaults: opaque, always depth-tested + depth-writing, no polygon offset.
+  // PRECISION (MOBILE_FOREST_SHADOWS_ENABLED): HIGHP for the same reason as the fade
+  // material — this opaque program (rocks/mountains + far-tree swap target) is compiled
+  // under shadowMap.enabled=true during the throwaway shadow bake, and a mediump
+  // shadow-variant is iOS-rejected → invisible rocks/mountains. Drop the mediump
+  // override when the toggle is on; keep it OFF for the revert path.
+  if (!MOBILE_FOREST_SHADOWS_ENABLED) injectMobileMediump(mat);
+  // Pin a CLEAN SOLID. This material's compiled program has NO `discard` at all (the
+  // fade dither and the board-footprint clip are NEVER injected), so early-Z is fully
+  // restored and the surface can never be seen through. It is the PERMANENT material for
+  // the non-foliage terrain (mountains/rocks) as well as the far-tree opaque swap
+  // target, so set the solid state EXPLICITLY rather than trusting the cloned base's
+  // defaults: opaque, always depth-tested + depth-writing, no polygon offset.
   mat.transparent = false;
   mat.depthWrite = true;
   mat.depthTest = true;
   mat.polygonOffset = false;
-  // DISTINCT program cache key (see buildMobileForestFadeMaterial) so the opaque
-  // variant no longer shares the fade variant's cached program — this is what
-  // un-breaks the opaque/fade swap. Different string from the fade key.
-  mat.customProgramCacheKey = () => 'mobile-forest-opaque-mediump';
+  // DISTINCT program cache key (see buildMobileForestFadeMaterial) so the opaque variant
+  // never shares the fade variant's cached program. The 'highp'/'mediump' suffix tracks
+  // the precision so a precision flip never re-uses a stale mediump-keyed program.
+  mat.customProgramCacheKey = () =>
+    MOBILE_FOREST_SHADOWS_ENABLED ? 'mobile-forest-opaque-highp' : 'mobile-forest-opaque-mediump';
   mat.needsUpdate = true;
   return mat;
 }
