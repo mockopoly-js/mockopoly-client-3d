@@ -30,6 +30,7 @@ import { MobileCrispBoardPipeline } from '../board/MobileCrispBoardPipeline';
 import { RenderStatsReadout } from '../board/RenderStatsReadout';
 import { BOARD_ROTATION, MOBILE_FOREST_SHADOWS_ENABLED } from '../board/positions';
 import { getProceduralNightSky } from '../board/ProceduralSky';
+import { NightStreetLights } from '../board/NightStreetLights';
 import { useIsMobile } from '../ui/useIsMobile';
 
 /**
@@ -355,6 +356,9 @@ const MOBILE_NIGHT_WARM_INTENSITY = 70; // candela (decay 2) — moderate glow, 
 const MOBILE_NIGHT_WARM_POSITION: [number, number, number] = [0, 7, 0]; // above board centre
 const MOBILE_NIGHT_WARM_DISTANCE = 40; // world units — fades to 0 by here (into the dark)
 const MOBILE_NIGHT_WARM_DECAY = 2; // physical inverse-square falloff
+// Sub-toggle: cheap warm street-lamp emissive markers around the board (see
+// NightStreetLights). Emissive-only (no real light) → ~0 fps. A/B knob.
+const MOBILE_NIGHT_STREETLIGHTS = true;
 // Fog — recolor to dark blue ONLY (near/far are coupled to FOREST_CULL_DISTANCE +
 // density bands + a test, so FOG_FAR/FOG_NEAR are left exactly as day; see the fog note).
 const MOBILE_NIGHT_FOG_COLOR = '#0e1830';
@@ -1179,7 +1183,10 @@ export function GameScene() {
           <PlayerTokens />
           <Buildings />
           {/* CityDressing (city.glb) is the low-poly city in the board center. */}
-          <CityDressing isMobile={isMobile} />
+          <CityDressing isMobile={isMobile} night={isMobile && MOBILE_NIGHT_MODE} />
+          {/* MOBILE NIGHT-ONLY: cheap warm street-lamp glow markers around the board
+              perimeter (emissive-only, no real light). Day + desktop never mount it. */}
+          {isMobile && MOBILE_NIGHT_MODE && MOBILE_NIGHT_STREETLIGHTS && <NightStreetLights />}
         </Suspense>
       </group>
       <Suspense fallback={null}>

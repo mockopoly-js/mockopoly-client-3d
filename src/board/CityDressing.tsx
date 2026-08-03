@@ -249,6 +249,25 @@ const CITY_AO_URL_MOBILE = '/images/city.mobile.ao.webp';
 // for deeper crevices, lower for even gentler. MOBILE-ONLY — desktop never reads it.
 const CITY_AO_INTENSITY = 0; // DISABLED: the baked city.mobile.ao.webp is noisy/un-denoised -> streak artifacts on building faces; real-time shadows carry the depth. Re-enable only after a clean re-bake.
 
+// ── MOBILE NIGHT: lit building windows (emissive map) ────────────────────────
+// A warm EMISSIVE MAP keyed off the atlas (scripts/gen-city-mobile-emissive.mjs):
+// window grids / storefront glass / sign text glow, flat walls stay black. Applied at
+// NIGHT only, mobile-only, as the buildings material's emissiveMap (SAME UV0 as the
+// atlas — channel 0) tinted by a warm `emissive` and scaled by the intensity below.
+// Grayscale-safe wiring: it is just an extra emissive term on the highp city material —
+// no new pass / RT / draw call, no shadow-pipeline touch. Loaded via useTexture in its
+// OWN <Suspense fallback={null}> so a slow/failed load can never blank the scene. WEBP
+// (no KTX2). Desktop + day never reference it. Gated by MOBILE_NIGHT_WINDOW_LIGHTS.
+const CITY_EMISSIVE_URL_MOBILE = '/images/city.mobile.emissive.webp';
+const MOBILE_NIGHT_WINDOW_LIGHTS = true; // sub-toggle: lit windows/signs at night (A/B)
+// Warm tint the emissive map is multiplied by (three: emissive * emissiveIntensity *
+// emissiveMap). The map itself carries warm windows + hued signs; this biases the whole
+// glow warm. Near-white-warm so baked sign hues survive.
+const MOBILE_NIGHT_WINDOW_EMISSIVE_COLOR = '#fff0e0';
+// Master brightness of the lit windows/signs (three emissiveIntensity). Start ~2 so they
+// read as clearly LIT at night (bloom in wave 2 will bloom them further). Tune on-device.
+const MOBILE_NIGHT_WINDOW_EMISSIVE_INTENSITY = 2.0;
+
 /**
  * MOBILE-ONLY REALISTIC/PBR SPECULAR on the CITY BUILDINGS material — replaces the
  * rejected cinematic fresnel RIM. Instead of a stylized additive edge-glow, the
@@ -455,12 +474,67 @@ function CityAO({
 }
 
 /**
+ * MOBILE NIGHT-ONLY child — binds the warm window/sign EMISSIVE MAP onto the city
+ * BUILDINGS material so windows/glass/signs glow at night. Mirrors <CityAO>'s pattern:
+ * loads the webp via useTexture (its OWN <Suspense fallback={null}> in the parent, so a
+ * slow/failed load never blanks the scene), then CLONES the buildings material —
+ * identified by the presence of the TEXCOORD_1 lightmap UV (uv1), exactly as CityAO does,
+ * so the cars mesh (no uv1) keeps the shared, un-emissive material.
+ *
+ * The emissiveMap samples UV0 (channel 0 default — the SAME atlas UV as baseColor), so
+ * NO channel override (unlike CityAO's aoMap which needs channel=1). flipY=false +
+ * SRGBColorSpace match the glTF atlas convention the map was generated against.
+ *
+ * COMPOSES with CityAO regardless of effect ORDER: both clone the CURRENT buildings
+ * material and reassign, and emissiveMap / aoMap / env / roughness are independent props,
+ * so whichever runs second clones the other's result and both survive. Mounted ONLY at
+ * night (see the parent) → day + desktop never build this program (emissive stays black).
+ */
+function CityWindowLights({ object }: { object: THREE.Object3D }): React.JSX.Element | null {
+  const emTex = useTexture(CITY_EMISSIVE_URL_MOBILE);
+
+  useLayoutEffect(() => {
+    // Emissive is COLOR (warm windows + hued signs) → sRGB. Same UV0 as the atlas
+    // (channel 0 default), flipY=false to match the glTF atlas convention (the map was
+    // baked in the atlas image's top-left orientation).
+    emTex.colorSpace = THREE.SRGBColorSpace;
+    emTex.flipY = false;
+    emTex.needsUpdate = true;
+
+    object.traverse((o) => {
+      const m = o as THREE.Mesh;
+      // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- runtime narrowing: only actual meshes have isMesh===true
+      if (!m.isMesh) return;
+      const uv1 = m.geometry.attributes.uv1;
+      // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- identifier: only the buildings primitive carries the TEXCOORD_1 lightmap UV; cars lack it
+      if (!uv1) return; // buildings only (same identifier CityAO uses); cars keep the shared material
+      const std = (Array.isArray(m.material) ? m.material[0] : m.material) as THREE.MeshStandardMaterial;
+      const lit = std.clone();
+      lit.emissiveMap = emTex;
+      lit.emissive = new THREE.Color(MOBILE_NIGHT_WINDOW_EMISSIVE_COLOR);
+      lit.emissiveIntensity = MOBILE_NIGHT_WINDOW_EMISSIVE_INTENSITY;
+      lit.needsUpdate = true;
+      m.material = lit;
+    });
+  }, [object, emTex]);
+
+  return null;
+}
+
+/**
  * @param isMobile When true, city meshes are frustum-cullable (their instanced
  *   bounds are LOCAL and compact in the board center, so three culls them when
  *   they leave the view — e.g. looking at empty sky). When false/absent the
  *   desktop path is byte-identical to before (frustumCulled stays false).
  */
-export function CityDressing({ isMobile = false }: { isMobile?: boolean }): React.JSX.Element {
+export function CityDressing({
+  isMobile = false,
+  night = false,
+}: {
+  isMobile?: boolean;
+  /** MOBILE NIGHT: when true (and MOBILE_NIGHT_WINDOW_LIGHTS), mount the lit-window emissive map. */
+  night?: boolean;
+}): React.JSX.Element {
   // Mobile loads the atlased+joined draco variant (needs the self-hosted draco
   // decoder); desktop loads the plain city.glb with no decoder. drei's useGLTF
   // caches per-url, so the two paths never collide.
@@ -647,6 +721,14 @@ export function CityDressing({ isMobile = false }: { isMobile?: boolean }): Reac
           desktop material path stays byte-identical. Wrapped in its own Suspense
           boundary so a slow/failed AO load can never blank the rest of the scene. */}
       {isMobile && (<Suspense fallback={null}><CityAO object={object} isMobile={isMobile} /></Suspense>)}
+      {/* MOBILE NIGHT-ONLY: warm lit-window/sign emissive map on the buildings material.
+          Its OWN Suspense (mirrors CityAO) so a slow/failed emissive load never blanks the
+          scene. Only mounted at night → day + desktop build no emissive program. */}
+      {isMobile && night && MOBILE_NIGHT_WINDOW_LIGHTS && (
+        <Suspense fallback={null}>
+          <CityWindowLights object={object} />
+        </Suspense>
+      )}
       {isMobile && (
         // MOBILE-ONLY: inverse-scale wrapper. The outer group's `scale` prop
         // (groupScale, non-uniform per axis) is what maps the city's

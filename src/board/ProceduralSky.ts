@@ -99,19 +99,38 @@ export function getProceduralSky(): THREE.CanvasTexture {
 
 /**
  * ── PROCEDURAL MOONLIT-NIGHT SKY (MOBILE ONLY, night mode) ────────────────────
- * The night sibling of {@link getProceduralSky}: a deep-navy VERTICAL gradient
- * equirect (dark zenith → slightly-lighter dark-blue horizon) used by
- * HdriSkyMobileNight as BOTH scene.background (visible dark sky) AND scene.environment
- * (a DARK, cool IBL so the moon/warm-light rig — not the sky — drives the look). Same
- * cheap 16×512 canvas mechanism (vertical gradient only → width-1px carries no detail),
- * ZERO asset (no webp/KTX2), module-cached singleton. No sun glow — moonlight comes from
- * the directional KEY, not a sky disc. A faint moon disc / star speckle is DEFERRED: a
- * 16px-wide equirect smears any point feature into a horizontal band, so stars/moon would
- * need a wider canvas — not worth the cost/risk for this first night pass.
+ * The night sibling of {@link getProceduralSky}: a deep-navy VERTICAL gradient equirect
+ * used by HdriSkyMobileNight as BOTH scene.background (visible dark sky) AND
+ * scene.environment (a DARK, cool IBL so the moon/warm-light rig — not the sky — drives
+ * the look). Baked ONCE into a canvas, ZERO asset (no webp/KTX2), module-cached singleton.
+ *
+ * WHY A WIDER CANVAS THAN THE DAY SKY: the day sky is a pure vertical gradient (16px
+ * wide). The night sky adds STARS + a MOON DISC — point features that a 16px-wide
+ * equirect would smear into horizontal bands — so it uses its OWN wider
+ * NIGHT_CANVAS_W×NIGHT_CANVAS_H canvas (the day 16×512 path is untouched). Stars scatter
+ * across the UPPER hemisphere (canvas top half = v>0.5), DENSER toward the zenith and
+ * sparse near the horizon so the fog/horizon stays clean; varied size + faint brightness.
+ * A soft cool-white moon disc with a faint halo sits toward the moon-KEY direction. Plain
+ * Math.random is fine — this is baked runtime canvas art, not a reproducible asset script.
  */
 const NIGHT_ZENITH = '#0a1024'; // deep navy overhead
 const NIGHT_MID = '#0e1730'; // dark blue mid-band
 const NIGHT_HORIZON = '#16203c'; // slightly-lighter dark blue at the horizon
+
+// Night canvas is wider than the day sky so stars/moon are point-like, not smeared.
+const NIGHT_CANVAS_W = 1024;
+const NIGHT_CANVAS_H = 512;
+
+// ── STAR / MOON art knobs (tasteful, not a planetarium) ──────────────────────
+const NIGHT_STARS_ENABLED = true; // draw the star field (A/B)
+const NIGHT_STAR_COUNT = 340; // total stars scattered in the upper hemisphere
+const NIGHT_MOON_ENABLED = true; // draw the moon disc + halo (A/B)
+const NIGHT_MOON_U = 0.6; // equirect azimuth (0-1), roughly toward the moon KEY [7,5.5,6]
+const NIGHT_MOON_V = 0.8; // equirect elevation (0-1); higher = nearer zenith
+const NIGHT_MOON_RADIUS = 13; // disc radius (px on the 1024-wide canvas)
+const NIGHT_MOON_HALO = 64; // soft halo radius (px)
+const NIGHT_MOON_CORE = '#e8eeff'; // cool-white moon disc
+const NIGHT_MOON_HALO_TINT = 'rgba(180, 200, 255, 0.22)'; // faint cool halo (inner)
 
 let cachedNight: THREE.CanvasTexture | null = null;
 
@@ -123,18 +142,50 @@ export function getProceduralNightSky(): THREE.CanvasTexture {
   if (cachedNight) return cachedNight;
 
   const canvas = document.createElement('canvas');
-  canvas.width = CANVAS_W;
-  canvas.height = CANVAS_H;
+  canvas.width = NIGHT_CANVAS_W;
+  canvas.height = NIGHT_CANVAS_H;
   const ctx = canvas.getContext('2d');
   if (ctx) {
-    // Same vertical-gradient convention as the day sky (stop 0 = canvas TOP = v=1 =
-    // zenith with flipY=true; stop 1 = horizon). Deep navy overhead → dark blue horizon.
-    const grad = ctx.createLinearGradient(0, 0, 0, CANVAS_H);
+    // Vertical gradient (stop 0 = canvas TOP = v=1 = zenith with flipY=true; stop 1 =
+    // horizon). Deep navy overhead → dark blue horizon.
+    const grad = ctx.createLinearGradient(0, 0, 0, NIGHT_CANVAS_H);
     grad.addColorStop(0.0, NIGHT_ZENITH);
     grad.addColorStop(0.5, NIGHT_MID);
     grad.addColorStop(1.0, NIGHT_HORIZON);
     ctx.fillStyle = grad;
-    ctx.fillRect(0, 0, CANVAS_W, CANVAS_H);
+    ctx.fillRect(0, 0, NIGHT_CANVAS_W, NIGHT_CANVAS_H);
+
+    // STARS — upper hemisphere only (canvas top half), density DECREASING toward the
+    // horizon so the fogged horizon stays clean. For each star pick a canvas-y biased
+    // toward the top (y = topHalf * random²), varied size (1-2px) + faint brightness.
+    if (NIGHT_STARS_ENABLED) {
+      for (let i = 0; i < NIGHT_STAR_COUNT; i++) {
+        const x = Math.random() * NIGHT_CANVAS_W;
+        // random² biases toward 0 (top = zenith); scaled to the top ~45% of the canvas.
+        const y = Math.random() * Math.random() * (NIGHT_CANVAS_H * 0.45);
+        const size = Math.random() < 0.8 ? 1 : 2; // mostly 1px, a few 2px
+        const b = 0.3 + Math.random() * 0.6; // faint → moderate
+        ctx.fillStyle = `rgba(230, 236, 255, ${b.toFixed(3)})`;
+        ctx.fillRect(Math.round(x), Math.round(y), size, size);
+      }
+    }
+
+    // MOON — a soft cool-white disc with a faint halo toward the moon-KEY direction.
+    // Painted ON TOP of stars/gradient (source-over). u→canvas-x, v→canvas-y via
+    // (1-v) because flipY=true maps canvas-top to v=1.
+    if (NIGHT_MOON_ENABLED) {
+      const cx = NIGHT_MOON_U * NIGHT_CANVAS_W;
+      const cy = (1 - NIGHT_MOON_V) * NIGHT_CANVAS_H;
+      const halo = ctx.createRadialGradient(cx, cy, 0, cx, cy, NIGHT_MOON_HALO);
+      halo.addColorStop(0.0, NIGHT_MOON_HALO_TINT);
+      halo.addColorStop(1.0, 'rgba(180, 200, 255, 0)');
+      ctx.fillStyle = halo;
+      ctx.fillRect(0, 0, NIGHT_CANVAS_W, NIGHT_CANVAS_H);
+      ctx.fillStyle = NIGHT_MOON_CORE;
+      ctx.beginPath();
+      ctx.arc(cx, cy, NIGHT_MOON_RADIUS, 0, Math.PI * 2);
+      ctx.fill();
+    }
   }
 
   const tex = new THREE.CanvasTexture(canvas);
