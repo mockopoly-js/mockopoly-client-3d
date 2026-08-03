@@ -729,6 +729,41 @@ function buildMobileForestOpaqueMaterial(base: THREE.Material): THREE.Material {
 }
 
 /**
+ * MOBILE GROUND-ONLY: zero the MeshStandard DIELECTRIC specular lobe so the terrain
+ * reads fully MATTE (no view-dependent Fresnel grazing sheen). MeshStandardMaterial keeps
+ * `material.specularColor = vec3(0.04)` + `material.specularF90 = 1.0` even at
+ * roughness=1 (see three's `<lights_physical_fragment>` chunk), which on the big smooth
+ * highp terrain reads as a bright sheen band. We CHAIN onto the material's existing
+ * onBeforeCompile (board-clip → this → later the ground-AO) — calling the previous handler
+ * first, then appending a replace that injects RIGHT AFTER `#include <lights_physical_
+ * fragment>` (where the `PhysicalMaterial material` struct is built): setting
+ * specularColor/F90 to 0 makes both the direct AND indirect specular terms evaluate to 0
+ * (`totalSpecular → 0`), leaving pure diffuse. Diffuse shading, shadow-receive (the shadow
+ * mask modulates diffuse), and the baked AO are untouched — specular is a separate BRDF
+ * term. Idempotent per material via a guard flag. GROUND ONLY; trees/rocks are not touched.
+ */
+function killGroundSpecular(material: THREE.Material): void {
+  const mat = material as THREE.Material & { userData: { groundSpecKilled?: boolean } };
+  if (mat.userData.groundSpecKilled) return;
+  mat.userData.groundSpecKilled = true;
+
+  const prevOnBeforeCompile = mat.onBeforeCompile.bind(mat);
+  mat.onBeforeCompile = (shader, renderer) => {
+    prevOnBeforeCompile(shader, renderer); // board-clip (+ later ground-AO) already chained
+    // Inject after the PhysicalMaterial struct is built. vec3(0.0)/0.0 are precision-safe
+    // (no tiny constants), so this composes with the highp ground with no mediump concern.
+    shader.fragmentShader = shader.fragmentShader.replace(
+      '#include <lights_physical_fragment>',
+      /* glsl */ `#include <lights_physical_fragment>
+        material.specularColor = vec3( 0.0 );
+        material.specularF90 = 0.0;
+      `,
+    );
+  };
+  mat.needsUpdate = true;
+}
+
+/**
  * MOBILE GROUND-ONLY material: OPAQUE + board-footprint clip ONLY (no near-camera
  * fade). Solid/depth-writing everywhere EXCEPT where terrain would poke up through
  * the board slab, where it discards. The clip IS a `discard`, so early-Z is defeated
@@ -756,13 +791,22 @@ function buildMobileForestGroundClipMaterial(base: THREE.Material): THREE.Materi
   // keeps the cheap mediump override (revert-identical). The 'highp'/'mediump' cache-key
   // suffix tracks this so a precision change never re-uses a stale cached program.
   if (!MOBILE_FOREST_SHADOWS_ENABLED) injectMobileMediump(mat);
+  // MATTE TERRAIN: zero the direct/indirect spec lobe (see killGroundSpecular). Only when
+  // the ground is highp (the mediump revert path keeps the pre-feature spec). Chains onto
+  // the board-clip onBeforeCompile; the later ground-AO (ForestGroundAO) chains on top.
+  const killSpec = MOBILE_FOREST_SHADOWS_ENABLED && MOBILE_TERRAIN_KILL_SPECULAR;
+  if (killSpec) killGroundSpecular(mat);
   mat.transparent = false;
   mat.depthWrite = true;
   mat.depthTest = true;
   mat.polygonOffset = false;
+  // Cache key: '-matte' marks the spec-killed program so it never re-uses a spec-ON
+  // program across a toggle (three APPENDS this to its instancing/lights/shadowMap key).
   mat.customProgramCacheKey = () =>
     MOBILE_FOREST_SHADOWS_ENABLED
-      ? 'mobile-forest-ground-clip-highp'
+      ? killSpec
+        ? 'mobile-forest-ground-clip-highp-matte'
+        : 'mobile-forest-ground-clip-highp'
       : 'mobile-forest-ground-clip-mediump';
   mat.needsUpdate = true;
   return mat;
@@ -982,10 +1026,21 @@ const MOBILE_SMOOTH_TERRAIN = true; // smooth vertex normals on ground geoms (ki
 const MOBILE_FOREST_ROUGHNESS = 1.0; // fully matte forest/terrain — kills the plastic specular sheen the smoothed normals exposed
 // ZERO env reflection on forest/terrain — kills the residual HDRI grazing sheen the
 // user still saw at 0.08 (matte grass/dirt/rock). NOTE: this removes the ENV specular
-// only; the KEY light's DIRECT specular lobe (Fresnel-boosted at grazing angles) can
-// still add a faint edge sheen on the now-highp ground — if it shows on-device that is
-// the next lever (kill the spec term), not this const. Applies to ALL forest materials.
+// only; the KEY light's DIRECT specular lobe (Fresnel-boosted at grazing angles) still
+// added a faint edge sheen on the highp ground — that is killed separately by
+// MOBILE_TERRAIN_KILL_SPECULAR below. Applies to ALL forest materials.
 const MOBILE_FOREST_ENV_INTENSITY = 0.0;
+
+// MATTE TERRAIN: MeshStandardMaterial keeps the dielectric spec lobe (F0=0.04) even at
+// roughness=1, and on the big smooth HIGHP terrain the Fresnel-boosted grazing term reads
+// as a bright view-dependent sheen band (the references are matte). When true, the GROUND
+// material only (meadow/path/lake) zeroes material.specularColor + specularF90 in-shader
+// → pure diffuse/Lambert terrain, no sheen. Only EFFECTIVE when the ground is highp
+// (MOBILE_FOREST_SHADOWS_ENABLED); the mediump revert path is untouched. Trees (fade) and
+// rocks (opaque) are NOT touched — the user is happy with those. A/B knob: set false to
+// restore the spec lobe. Diffuse shading, shadow-receive, and the baked AO are unaffected
+// (specular is a separate BRDF term → totalSpecular becomes 0).
+const MOBILE_TERRAIN_KILL_SPECULAR = true;
 
 /**
  * ── MOBILE-ONLY: baked island-wide TOP-DOWN forest CONTACT-AO ground decal ────
@@ -1129,11 +1184,15 @@ function applyForestGroundAo(material: THREE.Material, aoTex: THREE.Texture): vo
   // never collides with the plain ground-clip program (three APPENDS this to its
   // built-in instancing/lights/shadowMap key). The precision suffix MUST track the
   // ground material's precision (highp when MOBILE_FOREST_SHADOWS_ENABLED — the ground
-  // is a shadow RECEIVER then, so it drops the mediump override) so a precision change
-  // never re-uses a stale cached program.
+  // is a shadow RECEIVER then, so it drops the mediump override), and the '-matte'
+  // suffix MUST track MOBILE_TERRAIN_KILL_SPECULAR (killGroundSpecular is chained onto
+  // this SAME material before the AO), so neither a precision nor a spec change ever
+  // re-uses a stale cached program.
   mat.customProgramCacheKey = () =>
     MOBILE_FOREST_SHADOWS_ENABLED
-      ? 'mobile-forest-ground-clip-ao-highp'
+      ? MOBILE_TERRAIN_KILL_SPECULAR
+        ? 'mobile-forest-ground-clip-ao-highp-matte'
+        : 'mobile-forest-ground-clip-ao-highp'
       : 'mobile-forest-ground-clip-ao-mediump';
   mat.needsUpdate = true;
 }
