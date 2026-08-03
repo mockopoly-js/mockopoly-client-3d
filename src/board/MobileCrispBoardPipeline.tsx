@@ -889,15 +889,39 @@ export function MobileCrispBoardPipeline({
     // FOREST TREE/ROCK SHADOWS (MOBILE_FOREST_SHADOWS_ENABLED): the trees + rocks now
     // castShadow=true (see ForestEnvironment), and the caster-signature trigger above
     // re-fires this bake the instant those chunks mount (the castShadow count jumps).
-    // The old bake did a THROWAWAY BEAUTY gl.render into sceneFBO and had to HIDE the
-    // forest first, because the forest's mediump beauty material compiled under
-    // enabled=true is exactly the program iOS/Metal rejects (the invisible-forest bug)
-    // — but hiding it also lost the tree casters. FIX: bake DEPTH-ONLY via
-    // `shadowMap.render(casters,…)`, which renders ONLY the shadow depth map (casters
-    // via their highp MeshDepthMaterial — casting needs no highp RECEIVE GLSL) and runs
-    // NO beauty pass, so no mediump material is EVER compiled under shadow injection.
-    // The forest stays VISIBLE → trees/rocks are captured. shadowMap.render restores
-    // the previous render target itself (no sceneFBO write here).
+    //
+    // The bake MUST be driven by a real `gl.render(scene, camera)` (with enabled=true +
+    // needsUpdate=true set FIRST), NOT a bare `gl.shadowMap.render(...)`. shadowMap.render
+    // is NOT a supported standalone entry point: its caster draws call renderBufferDirect
+    // → setProgram, which dereferences three's MODULE-SCOPED `currentRenderState` (built
+    // only inside renderer.render() and reset to null at every top-level render end). At
+    // the top of useFrame currentRenderState===null → `Cannot read 'state' of null` throws
+    // before `baked.current` latches → it re-fires + re-throws every frame → 0-tris frozen
+    // canvas. gl.render sets currentRenderState up, runs three's INTERNAL shadow sub-pass
+    // first (captures every castShadow caster via MeshDepthMaterial), THEN a throwaway
+    // beauty pass into sceneFBO (overwritten by the real 1a/1b passes this same frame).
+    //
+    // FOREST VISIBLE so the internal shadow sub-pass actually captures the tree/rock
+    // casters — that is the whole point. (Layer-exclusion can't help: the shadow sub-pass
+    // gates casters on the MAIN `camera.layers` — three r0.169 WebGLShadowMap.renderObject,
+    // `object.layers.test(camera.layers)` — not the light's shadow-camera layers, so
+    // hiding the mediump foliage from the main camera would also drop it as a caster.)
+    // scene.updateMatrixWorld(true) first so freshly-mounted, group-SCALED forest chunks
+    // bake at their REAL world transform: their local matrix is identity and the transform
+    // lives only in matrixWorld, which lags a frame (the exact reason the LOD loop has a
+    // "matrixWorld not ready yet" guard) — a stale/identity matrixWorld would place trees
+    // at origin/un-scaled, OUTSIDE the ±ortho frustum → renderObject skips them → the
+    // frozen map freezes EMPTY forever (autoUpdate off). gl.render refreshes matrices
+    // anyway, but the explicit call guarantees it even if matrixWorldAutoUpdate is off.
+    //
+    // iOS LANDMINE (accepted): the throwaway beauty pass compiles the forest's mediump
+    // foliage material UNDER shadow-GLSL injection → that program is iOS-rejected
+    // (invisible geometry, NOT a JS crash). But it is a DISTINCT program-cache entry (the
+    // shadow params are part of three's built-in key, appended to our
+    // customProgramCacheKey), and the REAL display never uses it: the real 1b foliage pass
+    // runs shadowMap.enabled=false → the numShadows=0 / no-USE_SHADOWMAP key → the working
+    // shadow-OFF program. So the broken program is UNUSED + harmless; the forest renders
+    // correctly in 1b. (Cleaner layer-exclusion was ruled out above — it loses the casters.)
     //
     // TOGGLE OFF (revert path): the pre-feature THROWAWAY-BEAUTY bake with the forest
     // HIDDEN — board/city/buildings cast, forest does not, forest mediump beauty never
@@ -908,32 +932,11 @@ export function MobileCrispBoardPipeline({
       gl.shadowMap.enabled = true;
       gl.shadowMap.needsUpdate = true;
       if (MOBILE_FOREST_SHADOWS_ENABLED) {
-        // Gather the shadow-casting lights (the mobile KEY sun). shadowMap.render needs
-        // a non-empty light array and reads each light.shadow, so filter on it.
-        const casters: THREE.Light[] = [];
-        scene.traverse((o) => {
-          const light = o as THREE.Light;
-          if (
-            (light as Partial<THREE.Light>).isLight === true &&
-            light.castShadow &&
-            (light as unknown as { shadow?: THREE.LightShadow }).shadow != null
-          ) {
-            casters.push(light);
-          }
-        });
-        // FORCE-RESOLVE world matrices first. The old throwaway `gl.render` bake did
-        // this implicitly; a raw `shadowMap.render` does NOT. Freshly-mounted, group-
-        // SCALED forest chunks carry an identity LOCAL matrix (their transform lives
-        // only in matrixWorld, which lags a frame — the exact reason the LOD loop has a
-        // "matrixWorld not ready yet" guard). Baking against a STALE/identity matrixWorld
-        // would place the trees at origin/un-scaled, so their world bounding spheres fall
-        // OUTSIDE the ±ortho shadow frustum → renderObject skips them → the frozen map
-        // freezes EMPTY forever (autoUpdate off). Resolving here restores the guarantee.
+        // Real gl.render bake, forest VISIBLE → three's internal shadow sub-pass captures
+        // the tree/rock casters. Throwaway sceneFBO beauty is overwritten by 1a/1b below.
         scene.updateMatrixWorld(true);
-        // DEPTH-ONLY: renders the frozen shadow map (trees/rocks/board/city/buildings)
-        // with the forest VISIBLE — no beauty pass, no sceneFBO write, no mediump
-        // material compiled under enabled=true.
-        gl.shadowMap.render(casters, scene, camera);
+        gl.setRenderTarget(rig.sceneFBO);
+        gl.render(scene, camera);
       } else {
         // Throwaway beauty bake (forest hidden) — pre-feature behavior.
         const forest = scene.getObjectByName('forest-environment');
