@@ -247,7 +247,7 @@ const CITY_AO_URL_MOBILE = '/images/city.mobile.ao.webp';
 // 0.5 the measured buildings surface retains ~76% indirect on average and ≥50% in
 // the deepest crevices: subtle contact depth without the grime. Raise toward 1.0
 // for deeper crevices, lower for even gentler. MOBILE-ONLY — desktop never reads it.
-const CITY_AO_INTENSITY = 0.5;
+const CITY_AO_INTENSITY = 0; // DISABLED: the baked city.mobile.ao.webp is noisy/un-denoised -> streak artifacts on building faces; real-time shadows carry the depth. Re-enable only after a clean re-bake.
 
 /**
  * MOBILE-ONLY REALISTIC/PBR SPECULAR on the CITY BUILDINGS material — replaces the
