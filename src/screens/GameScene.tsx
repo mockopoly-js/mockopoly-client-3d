@@ -343,8 +343,30 @@ const MOBILE_NIGHT_HEMI_INTENSITY = 0.22;
 const MOBILE_NIGHT_AMBIENT_COLOR = '#1b2338';
 const MOBILE_NIGHT_AMBIENT_INTENSITY = 0.12;
 // Env / background intensity — dark sky IBL (keep it from washing out the night).
-const MOBILE_NIGHT_ENV_INTENSITY = 0.15;
+// Bumped 0.15 → 0.25 for the real HDRI (NIGHT_SKY_MODE='hdri'): the tonemapped
+// source is darker than the old procedural gradient, so the IBL needs a touch
+// more gain to keep the board/city equally lit. Exposed for on-device tuning.
+const MOBILE_NIGHT_ENV_INTENSITY = 0.25;
 const MOBILE_NIGHT_BG_INTENSITY = 1.0; // the procedural night gradient is already dark
+
+/**
+ * ── MOBILE NIGHT SKY SOURCE (toggle) ──────────────────────────────────────────
+ * Real night-sky HDRI (tonemapped, real stars + Milky Way baked in) vs. the
+ * cheap procedural dark-navy gradient (getProceduralNightSky). 'hdri' loads a
+ * pre-generated 2048×1024 equirect webp (scripts/gen-night-sky.mjs, sourced
+ * from 8K tonemapped HDRI renders); 'procedural' keeps the EXACT prior
+ * CanvasTexture path as a no-asset fallback. Mobile/night only — day and
+ * desktop never read this.
+ */
+const NIGHT_SKY_MODE: 'hdri' | 'procedural' = 'hdri';
+// Which pre-generated night-sky equirect to use: '003' = moonlit clean sky,
+// '008' = Milky Way band (default — the more dramatic real-sky read).
+const NIGHT_SKY_HDRI: '003' | '008' = '008';
+const NIGHT_SKY_HDRI_URLS: Record<'003' | '008', string> = {
+  '003': '/images/night-sky-003.webp',
+  '008': '/images/night-sky-008.webp',
+};
+const NIGHT_SKY_URL = NIGHT_SKY_HDRI_URLS[NIGHT_SKY_HDRI];
 // WARM FOCAL BOARD LIGHT (night-only, NEW) — a warm point light above the board CENTER
 // that lights the BOARD + CITY (readability) and falls off into the dark surroundings
 // (campfire-valley glow). castShadow=FALSE — the moon is the sole caster; this is pure
@@ -729,17 +751,52 @@ function HdriSkyMobileDay() {
 }
 
 /**
- * MOBILE NIGHT sky/env (MOBILE_NIGHT_MODE) — swaps the day equirect for a cheap
+ * MOBILE NIGHT sky/env — REAL night-sky HDRI branch (NIGHT_SKY_MODE='hdri').
+ * Loads the pre-generated 2048×1024 equirect webp for NIGHT_SKY_HDRI
+ * (scripts/gen-night-sky.mjs — real stars + Milky Way baked in, tonemapped)
+ * via useTexture and assigns it to BOTH scene.background (visible night sky)
+ * and scene.environment (IBL at MOBILE_NIGHT_ENV_INTENSITY, same knob the
+ * procedural path used — the moon/warm-light rig still drives the look).
+ * Texture setup mirrors HdriSkyMobileDay (EquirectangularReflectionMapping,
+ * SRGBColorSpace, trilinear mips + max anisotropy) so the real stars stay
+ * crisp instead of shimmering. The background is drawn fog-free (three does
+ * not fog scene.background), so the stars/Milky Way render unobscured — that
+ * is the intended "real sky" look.
+ */
+function HdriSkyMobileNightHdri() {
+  const scene = useThree((s) => s.scene);
+  const gl = useThree((s) => s.gl);
+  const tex = useTexture(NIGHT_SKY_URL);
+  useEffect(() => {
+    tex.mapping = THREE.EquirectangularReflectionMapping;
+    tex.colorSpace = THREE.SRGBColorSpace;
+    tex.magFilter = THREE.LinearFilter;
+    tex.minFilter = THREE.LinearMipmapLinearFilter;
+    tex.generateMipmaps = true;
+    tex.anisotropy = gl.capabilities.getMaxAnisotropy();
+    tex.needsUpdate = true;
+    scene.environment = tex;
+    scene.environmentIntensity = MOBILE_NIGHT_ENV_INTENSITY;
+    scene.background = tex;
+    scene.backgroundIntensity = MOBILE_NIGHT_BG_INTENSITY;
+    return () => {
+      scene.environment = null;
+      scene.background = null;
+    };
+  }, [tex, scene, gl]);
+  return null;
+}
+
+/**
+ * MOBILE NIGHT sky/env — PROCEDURAL fallback branch (NIGHT_SKY_MODE='procedural').
+ * Byte-identical to the pre-HDRI-swap component: swaps the day equirect for a cheap
  * PROCEDURAL dark-navy night gradient (see getProceduralNightSky), assigned to BOTH
  * scene.background (visible dark sky) and scene.environment (a DARK cool IBL at
  * MOBILE_NIGHT_ENV_INTENSITY so the moon/warm-light rig drives the look). NO asset, no
  * useTexture, no Suspense, no KTX2 — the module-cached CanvasTexture is built on first
- * use and reused. Split into its OWN component (vs. branching inside one) so the day
- * child's useTexture hook is never conditionally skipped (rules-of-hooks safe); the
- * selector picks exactly one on the compile-time flag. Mirrors HdriSkyMobileDay's
- * background/environment wiring so the 3-pass mobile composite inherits it identically.
+ * use and reused. Kept as the no-asset fallback (see NIGHT_SKY_MODE).
  */
-function HdriSkyMobileNight() {
+function HdriSkyMobileNightProcedural() {
   const scene = useThree((s) => s.scene);
   useEffect(() => {
     const tex = getProceduralNightSky();
@@ -756,8 +813,31 @@ function HdriSkyMobileNight() {
 }
 
 /**
- * MOBILE sky selector — day (sky.webp equirect) vs night (procedural navy gradient) on
- * the compile-time MOBILE_NIGHT_MODE flag. Split so the day child's useTexture hook is
+ * MOBILE NIGHT sky selector (MOBILE_NIGHT_MODE) — picks the real-HDRI branch or the
+ * procedural fallback on the compile-time NIGHT_SKY_MODE flag. Split into sibling
+ * components (vs. branching inside one) so neither child's hooks are ever
+ * conditionally skipped (rules-of-hooks safe) — mirrors HdriSkyMobile's Day/Night
+ * split and HdriSky's Mobile/Desktop split. The 'hdri' branch is wrapped in its OWN
+ * <Suspense fallback={null}> (mirrors CityAO's isolation, see CityDressing.tsx) so a
+ * slow/failed night-sky texture load can never blank the rest of the scene — it only
+ * suspends its own leaf, leaving the board/forest/city (separate Suspense
+ * boundaries) rendering normally.
+ */
+function HdriSkyMobileNight() {
+  if (NIGHT_SKY_MODE === 'hdri') {
+    return (
+      <Suspense fallback={null}>
+        <HdriSkyMobileNightHdri />
+      </Suspense>
+    );
+  }
+  return <HdriSkyMobileNightProcedural />;
+}
+
+/**
+ * MOBILE sky selector — day (sky.webp equirect) vs night (real HDRI equirect by
+ * default, or the procedural navy gradient fallback — see NIGHT_SKY_MODE) on the
+ * compile-time MOBILE_NIGHT_MODE flag. Split so the day child's useTexture hook is
  * never conditionally called. When MOBILE_NIGHT_MODE is false this is byte-identical to
  * the previous HdriSkyMobile (renders the day child only).
  */
