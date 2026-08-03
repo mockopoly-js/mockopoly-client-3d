@@ -14,7 +14,7 @@
  *
  * Sources (NOT committed — Desktop only, read-only inputs):
  *   /Users/arslan/Desktop/Monopoly/NightSkyHDRI003_8K/NightSkyHDRI003_8K_TONEMAPPED.jpg
- *   /Users/arslan/Desktop/Monopoly/NightSkyHDRI008_8K/NightSkyHDRI008_8K_TONEMAPPED.jpg
+ *   /Users/arslan/Desktop/Monopoly/NightSkyHDRI008_4K/NightSkyHDRI008_4K_TONEMAPPED.jpg
  *
  * Outputs (committed):
  *   public/images/night-sky-003.webp — moonlit clean sky
@@ -30,8 +30,6 @@ import { fileURLToPath } from 'node:url';
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const PROJECT_ROOT = resolve(__dirname, '..');
 
-const OUT_W = 2048;
-const OUT_H = 1024;
 const QUALITY = 82;
 
 const JOBS = [
@@ -39,11 +37,15 @@ const JOBS = [
     label: 'NightSkyHDRI003 (moonlit clean sky)',
     in: '/Users/arslan/Desktop/Monopoly/NightSkyHDRI003_8K/NightSkyHDRI003_8K_TONEMAPPED.jpg',
     out: resolve(PROJECT_ROOT, 'public/images/night-sky-003.webp'),
+    outW: 2048,
+    outH: 1024,
   },
   {
     label: 'NightSkyHDRI008 (Milky Way band)',
-    in: '/Users/arslan/Desktop/Monopoly/NightSkyHDRI008_8K/NightSkyHDRI008_8K_TONEMAPPED.jpg',
+    in: '/Users/arslan/Desktop/Monopoly/NightSkyHDRI008_4K/NightSkyHDRI008_4K_TONEMAPPED.jpg',
     out: resolve(PROJECT_ROOT, 'public/images/night-sky-008.webp'),
+    outW: 4096,
+    outH: 2048,
   },
 ];
 
@@ -53,11 +55,11 @@ async function main() {
   for (const job of JOBS) {
     console.log(`[gen-night-sky] ${job.label}: reading ${job.in} ...`);
     await sharp(job.in)
-      .resize(OUT_W, OUT_H, { fit: 'fill' }) // equirect: exact target dims, no crop/pad
+      .resize(job.outW, job.outH, { fit: 'fill' }) // equirect: exact target dims, no crop/pad
       .webp({ quality: QUALITY })
       .toFile(job.out);
     const size = statSync(job.out).size;
-    console.log(`[gen-night-sky] wrote ${job.out} (${OUT_W}x${OUT_H}, q${QUALITY}) — ${KB(size)}`);
+    console.log(`[gen-night-sky] wrote ${job.out} (${job.outW}x${job.outH}, q${QUALITY}) — ${KB(size)}`);
   }
   console.log('[gen-night-sky] done.');
 }
