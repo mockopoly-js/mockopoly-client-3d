@@ -123,7 +123,16 @@ const NIGHT_CANVAS_H = 512;
 
 // ── STAR / MOON art knobs (tasteful, not a planetarium) ──────────────────────
 const NIGHT_STARS_ENABLED = true; // draw the star field (A/B)
-const NIGHT_STAR_COUNT = 340; // total stars scattered in the upper hemisphere
+// Bumped 340 → 800 now that stars cover the whole VISIBLE sky band (see the loop), not
+// just the zenith. The across/down gameplay camera mostly sees the horizon-to-mid band.
+const NIGHT_STAR_COUNT = 800;
+// Fraction of canvas HEIGHT the stars span DOWN from the zenith (y=0 = zenith, y=H/2 =
+// horizon). 0.72 → down to ~v=0.28 (a touch BELOW the horizon; those are occluded by the
+// terrain, but it guarantees the visible near-horizon band is fully populated). A mild
+// top bias (pow exponent) keeps zenith slightly denser and thins toward the horizon, so
+// the last sliver near the fogged horizon stays sparse — no hard "star line".
+const NIGHT_STAR_SPREAD = 0.72;
+const NIGHT_STAR_BIAS = 1.3; // pow(random, BIAS): >1 = mild zenith bias (NOT bunched at top)
 const NIGHT_MOON_ENABLED = true; // draw the moon disc + halo (A/B)
 const NIGHT_MOON_U = 0.6; // equirect azimuth (0-1), roughly toward the moon KEY [7,5.5,6]
 const NIGHT_MOON_V = 0.8; // equirect elevation (0-1); higher = nearer zenith
@@ -155,17 +164,22 @@ export function getProceduralNightSky(): THREE.CanvasTexture {
     ctx.fillStyle = grad;
     ctx.fillRect(0, 0, NIGHT_CANVAS_W, NIGHT_CANVAS_H);
 
-    // STARS — upper hemisphere only (canvas top half), density DECREASING toward the
-    // horizon so the fogged horizon stays clean. For each star pick a canvas-y biased
-    // toward the top (y = topHalf * random²), varied size (1-2px) + faint brightness.
+    // STARS — spread across the WHOLE visible sky band, NOT bunched at the zenith. The
+    // across/down gameplay camera mostly sees the horizon-to-mid band (v≈0.5–0.85 =
+    // canvas y≈75–256), so a zenith-only field (the old random² bias) was invisible.
+    // Distribute y = pow(random, BIAS) · (H · SPREAD): a MILD top bias (BIAS 1.3) keeps
+    // the zenith a touch denser and thins toward the horizon, while SPREAD 0.72 reaches
+    // from the zenith down through mid-sky to just past the horizon. Bright + larger so
+    // they read on a phone: most 2px, some 3px, a few 1px; brightness 0.6–1.0 (many
+    // near-full white). scene.background is drawn WITHOUT fog, so these are not fog-washed.
     if (NIGHT_STARS_ENABLED) {
       for (let i = 0; i < NIGHT_STAR_COUNT; i++) {
         const x = Math.random() * NIGHT_CANVAS_W;
-        // random² biases toward 0 (top = zenith); scaled to the top ~45% of the canvas.
-        const y = Math.random() * Math.random() * (NIGHT_CANVAS_H * 0.45);
-        const size = Math.random() < 0.8 ? 1 : 2; // mostly 1px, a few 2px
-        const b = 0.3 + Math.random() * 0.6; // faint → moderate
-        ctx.fillStyle = `rgba(230, 236, 255, ${b.toFixed(3)})`;
+        const y = Math.pow(Math.random(), NIGHT_STAR_BIAS) * (NIGHT_CANVAS_H * NIGHT_STAR_SPREAD);
+        const r = Math.random();
+        const size = r < 0.15 ? 1 : r < 0.85 ? 2 : 3; // mostly 2px, a few 3px, some 1px
+        const b = 0.6 + Math.random() * 0.4; // bright: 0.6 → 1.0 (many near-full white)
+        ctx.fillStyle = `rgba(232, 238, 255, ${b.toFixed(3)})`;
         ctx.fillRect(Math.round(x), Math.round(y), size, size);
       }
     }
