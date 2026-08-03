@@ -26,6 +26,32 @@ import { useGameStore } from '../state/gameStore';
 import { BOARD_LAYER, CITY_LAYER, FOREST_GROUND_LAYER, MOBILE_FOREST_SHADOWS_ENABLED } from './positions';
 
 /**
+ * ── MOBILE NIGHT SKY AT NATIVE DPR (NIGHT-ONLY, TOGGLE) ──────────────────────
+ * When true (and the scene is in mobile NIGHT mode with an equirect
+ * scene.background), the night HDRI sky is NO LONGER drawn into the reduced-dpr
+ * scene FBO (≈1.5×, blurry). Instead pass 1 renders the forest/ground/tokens
+ * into a TRANSPARENT scene FBO (sky pixels carry far-plane depth) and the
+ * COMPOSITE pass — which runs at NATIVE dpr — reconstructs each pixel's world
+ * view-ray from the inverse view-projection and samples the equirect night HDRI
+ * DIRECTLY as its backmost base (crisp, camera-responsive, bypassing three's
+ * 1024-face equirect→cube background resample). The forest/board/city tiers then
+ * depth-composite OVER that native sky exactly as before.
+ *
+ * The equirect mapping (equirectUv: u = atan(dir.z,dir.x)/2π + 0.5,
+ * v = asin(dir.y)/π + 0.5) is COPIED verbatim from three's common.glsl.js so the
+ * visible sky aligns bit-for-bit (modulo the dropped cube resample) with three's
+ * own background AND the IBL (scene.environment, same equirect, same convention).
+ *
+ * FALLBACK: flip to false → EXACT pre-feature behavior (sky drawn into the
+ * reduced-dpr scene FBO). DAY and DESKTOP never touch this path regardless.
+ */
+const MOBILE_NIGHT_SKY_NATIVE = true;
+
+// Scratch matrix for the per-frame inverse view-projection fed to the composite's
+// native-sky view-ray reconstruction. Module-scoped (the pipeline is a singleton).
+const _skyInvViewProj = new THREE.Matrix4();
+
+/**
  * ── MOBILE BLOOM REMOVED (perf) ──────────────────────────────────────────────
  * The mobile grade pass previously merged a subtle BloomEffect. Although a
  * non-convolution effect adds no *standalone* EffectPass, BloomEffect's internal
@@ -89,6 +115,13 @@ import { BOARD_LAYER, CITY_LAYER, FOREST_GROUND_LAYER, MOBILE_FOREST_SHADOWS_ENA
  */
 
 interface MobileCrispBoardPipelineProps {
+  /**
+   * Mobile NIGHT mode (GameScene MOBILE_NIGHT_MODE). Together with the module-level
+   * MOBILE_NIGHT_SKY_NATIVE toggle and an equirect scene.background, this arms the
+   * native-dpr sky path (sky drawn crisp in the composite instead of the reduced-dpr
+   * scene FBO). false (DAY) leaves the pipeline byte-identical to before.
+   */
+  nightMode: boolean;
   /** HueSaturation `saturation` — same value the mobile composer used. */
   saturation: number;
   /** BrightnessContrast `brightness` — same value the mobile composer used. */
@@ -266,8 +299,30 @@ uniform float cameraNear;
 uniform float cameraFar;
 uniform float depthBias;
 uniform float cityBias;
+// ── NIGHT-NATIVE SKY (uNightSky == 1 only) ─────────────────────────────────
+// uSky: the equirect night HDRI (SRGB internal format → hardware-decoded to
+// linear on sample, matching the linear-HDR composite space). uSkyIntensity:
+// scene.backgroundIntensity (matches three's background multiply). uInvViewProj:
+// inverse(projection * view) to reconstruct the world view-ray per pixel.
+// When uNightSky == 0 (DAY / desktop / toggle-off) NONE of this is read — uSky is
+// bound to a valid fallback texture and the branch is skipped: byte-identical.
+uniform float uNightSky;
+uniform sampler2D uSky;
+uniform float uSkyIntensity;
+uniform mat4 uInvViewProj;
+uniform vec3 uCamPos;
 in vec2 vUv;
 out vec4 fragColor;
+
+// three's equirectUv (common.glsl.js) VERBATIM — matches scene.background AND the
+// IBL so the native sky aligns with the environment lighting.
+const float RECIPROCAL_PI = 0.3183098861837907;
+const float RECIPROCAL_PI2 = 0.15915494309189535;
+vec2 equirectUv(in vec3 dir) {
+  float u = atan(dir.z, dir.x) * RECIPROCAL_PI2 + 0.5;
+  float v = asin(clamp(dir.y, -1.0, 1.0)) * RECIPROCAL_PI + 0.5;
+  return vec2(u, v);
+}
 
 // three's perspectiveDepthToViewZ: non-linear [0,1] depth -> negative view-space Z.
 // All passes share the same camera, so these are directly comparable; a NEARER
@@ -278,12 +333,24 @@ float viewZ(float depth) {
 }
 
 void main() {
-  // BASE: the scene always has full coverage (HDRI sky fills the background), so
-  // it is the fallback everywhere. COLOR bilinear (smooth upscale); DEPTH NEAREST
-  // (DepthTexture default) so the dpr2->native upscale never invents an
-  // intermediate depth across a silhouette -> no halo.
+  // BASE: the scene tier. DAY/desktop: the scene FBO has full coverage (HDRI sky
+  // fills the background) so it is the fallback everywhere. COLOR bilinear (smooth
+  // upscale); DEPTH NEAREST (DepthTexture default) so the dpr2->native upscale never
+  // invents an intermediate depth across a silhouette -> no halo.
+  float sd = texture(sceneDepth, vUv).x;
   vec3 outC = texture(sceneColor, vUv).rgb;
-  float zS  = viewZ(texture(sceneDepth, vUv).x);
+  // NIGHT-NATIVE: the scene FBO was rendered sky-LESS (cleared transparent), so
+  // empty pixels carry the far-plane depth (sd == 1.0). There the crisp native sky
+  // is the base: reconstruct the world view-ray (far-plane NDC point through the
+  // inverse view-projection, minus the camera) and sample the equirect. Detection
+  // is DEPTH-based (not scene alpha) so it is unaffected by the SSAO pass, which
+  // rewrites sceneColor into a separate buffer while sceneDepth stays the true depth.
+  if (uNightSky > 0.5 && sd >= 0.999999) {
+    vec4 wp = uInvViewProj * vec4(vUv * 2.0 - 1.0, 1.0, 1.0);
+    vec3 dir = normalize(wp.xyz / wp.w - uCamPos);
+    outC = texture(uSky, equirectUv(dir)).rgb * uSkyIntensity;
+  }
+  float zS  = viewZ(sd);
   float outZ = zS;
 
   // BOARD (native, sparse). rawB==1.0 => board wrote nothing (cleared to far).
@@ -330,6 +397,7 @@ function makeTarget(depth: THREE.DepthTexture | null): THREE.WebGLRenderTarget {
 }
 
 export function MobileCrispBoardPipeline({
+  nightMode,
   saturation,
   brightness,
   contrast,
@@ -477,6 +545,15 @@ export function MobileCrispBoardPipeline({
         cameraFar: { value: 1000 },
         depthBias: { value: depthBias },
         cityBias: { value: cityDepthBias },
+        // NIGHT-NATIVE SKY (set per-frame in useFrame). uNightSky 0 = OFF (day/
+        // desktop/toggle-off) → the sky branch is skipped, byte-identical. uSky is
+        // seeded with a VALID fallback texture (the scene FBO) so the sampler is
+        // always bound even when unused.
+        uNightSky: { value: 0 },
+        uSky: { value: sceneFBO.texture },
+        uSkyIntensity: { value: 1 },
+        uInvViewProj: { value: new THREE.Matrix4() },
+        uCamPos: { value: new THREE.Vector3() },
       },
     });
     const quad = new FullScreenQuad(compositeMat);
@@ -840,6 +917,35 @@ export function MobileCrispBoardPipeline({
     const prevBackground = scene.background;
     gl.autoClear = true;
 
+    // ── NIGHT-NATIVE SKY ARM ───────────────────────────────────────────────
+    // Engage the native-dpr sky ONLY when: mobile NIGHT mode + the toggle + the
+    // current scene.background IS the equirect night HDRI (a THREE.Texture with
+    // EquirectangularReflectionMapping — both the HDRI and procedural night skies
+    // use it). Any other case (DAY sky, a Color/CubeTexture background, the sky not
+    // yet loaded) → useNativeSky stays false → the EXACT pre-feature path (sky drawn
+    // into the reduced-dpr scene FBO), so DAY and the toggle-off fallback are safe.
+    const bgTex = prevBackground as THREE.Texture | null;
+    const skyTex =
+      nightMode &&
+      MOBILE_NIGHT_SKY_NATIVE &&
+      bgTex != null &&
+      (bgTex as Partial<THREE.Texture>).isTexture === true &&
+      bgTex.mapping === THREE.EquirectangularReflectionMapping
+        ? bgTex
+        : null;
+    const useNativeSky = skyTex !== null;
+    if (useNativeSky) {
+      rig.compositeMat.uniforms.uNightSky.value = 1;
+      rig.compositeMat.uniforms.uSky.value = skyTex;
+      // three multiplies the background by scene.backgroundIntensity in linear space
+      // (WebGLBackground) — match it so brightness is identical to the old FBO sky.
+      rig.compositeMat.uniforms.uSkyIntensity.value = scene.backgroundIntensity ?? 1;
+    } else {
+      rig.compositeMat.uniforms.uNightSky.value = 0;
+      // Keep the sampler bound to a valid 2D texture even when unused.
+      rig.compositeMat.uniforms.uSky.value = rig.sceneFBO.texture;
+    }
+
     // ── SHADOW-CASTER SIGNATURE ────────────────────────────────────────────
     // The bake below USED to be gated purely on `!baked.current` — a
     // permanent one-shot latch that fires exactly once, on the first frame
@@ -977,6 +1083,16 @@ export function MobileCrispBoardPipeline({
     //
     // TOGGLE OFF (revert): the single pre-feature scene pass — layer 0, shadows off,
     // sky kept — byte-identical to the current shipped behavior.
+    // NIGHT-NATIVE: draw pass 1 WITHOUT the sky into a TRANSPARENT scene FBO so
+    // empty pixels carry far-plane depth (the composite places the crisp native sky
+    // there). setClearAlpha(0) only changes the clear alpha (colour untouched);
+    // restored right after the scene pass so the board/city/composite/canvas clears
+    // are unaffected. When !useNativeSky this block is inert → pre-feature behavior.
+    const prevClearAlpha = gl.getClearAlpha();
+    if (useNativeSky) {
+      scene.background = null;
+      gl.setClearAlpha(0);
+    }
     if (MOBILE_FOREST_SHADOWS_ENABLED) {
       gl.shadowMap.enabled = true;
       camera.layers.set(FOREST_GROUND_LAYER);
@@ -995,6 +1111,10 @@ export function MobileCrispBoardPipeline({
       camera.layers.set(0);
       gl.setRenderTarget(rig.sceneFBO);
       gl.render(scene, camera);
+    }
+    if (useNativeSky) {
+      gl.setClearAlpha(prevClearAlpha);
+      scene.background = prevBackground;
     }
 
     // 1c. SSAO — depth-only ambient occlusion over the SCENE tier. Reconstructs
@@ -1043,6 +1163,17 @@ export function MobileCrispBoardPipeline({
     // for the composite quad + everything else (the FullScreenQuad renders on 0).
     scene.background = prevBackground;
     camera.layers.set(0);
+
+    // NIGHT-NATIVE: feed the composite the inverse view-projection + camera world
+    // position for the per-pixel view-ray sky reconstruction. Computed HERE (after
+    // the scene/board/city gl.render calls have refreshed cam.matrixWorldInverse for
+    // this frame's pose) so the reconstructed sky matches exactly what those passes
+    // rendered. Skipped when useNativeSky is false (uNightSky already 0).
+    if (useNativeSky) {
+      _skyInvViewProj.multiplyMatrices(cam.projectionMatrix, cam.matrixWorldInverse).invert();
+      rig.compositeMat.uniforms.uInvViewProj.value.copy(_skyInvViewProj);
+      cam.getWorldPosition(rig.compositeMat.uniforms.uCamPos.value);
+    }
 
     // 4. COMPOSITE — 3-way depth merge (city over board over scene) into a native
     //    linear-HDR buffer.

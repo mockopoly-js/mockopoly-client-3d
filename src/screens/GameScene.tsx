@@ -1299,6 +1299,7 @@ export function GameScene() {
           / CONTRAST), applied by a hand-built EffectPass.
         */
         <MobileCrispBoardPipeline
+          nightMode={MOBILE_NIGHT_MODE}
           saturation={MOBILE_NIGHT_MODE ? MOBILE_NIGHT_SATURATION : MOBILE_SATURATION}
           brightness={MOBILE_BRIGHTNESS}
           contrast={MOBILE_NIGHT_MODE ? MOBILE_NIGHT_CONTRAST : MOBILE_CONTRAST}
