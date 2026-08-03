@@ -50,17 +50,6 @@ const MOBILE_MIN_TARGET_Y = -0.3;    // world units: the orbit pivot can't be ai
 const DESKTOP_MAX_POLAR_ANGLE = 1.55;
 const DESKTOP_MIN_DISTANCE = 2.5;
 
-// ── MOBILE-ONLY free-look aim tuning (desktop FROZEN) ─────────────────────────
-// Free-look DECOUPLES the aim from the orbit target: OrbitControls is disabled and
-// the camera rotates IN PLACE (Euler YXZ) so the user can pitch fully up to the
-// zenith without the camera ever orbiting under the terrain. Position only moves on
-// two-finger pan/pinch and is always kept above the MOBILE_MIN_CAM_Y floor.
-const FREELOOK_LOOK_SPEED = 0.005;               // rad per px of one-finger drag (yaw/pitch sensitivity)
-const FREELOOK_PITCH_LIMIT = Math.PI / 2 - 0.01; // ~89.4°: essentially straight up/down, just shy of the pole so there is no gimbal flip
-const FREELOOK_PAN_SPEED = 0.012;                // world units per px (two-finger drag → strafe/lift)
-const FREELOOK_DOLLY_SPEED = 0.03;               // world units per px of pinch spread (two-finger pinch → dolly)
-const FREELOOK_LOOK_RATE = 14;                   // frame-rate-aware easing rate for the aim (higher = snappier, no snap)
-
 /**
  * CameraRig: free Blender-style viewport navigation with a fixed initial framing.
  *
@@ -114,9 +103,6 @@ export function CameraRig() {
 
   // Access the R3F camera for the initial snap (sets camera position too).
   const camera = useThree((s) => s.camera);
-  // The WebGL canvas element — free-look attaches its own touch listeners here.
-  // (undefined in the unit-test's useThree stub; the free-look effect guards for it.)
-  const gl = useThree((s) => s.gl);
 
   // Mobile framing: dolly the initial view IN so the board fills the short
   // landscape viewport. Read into a ref so the (dependency-array-free) initial
@@ -153,39 +139,6 @@ export function CameraRig() {
   const scratchCamPos = useRef(new THREE.Vector3());
   const scratchTarget = useRef(new THREE.Vector3());
 
-  // ── Free-look (mobile) aim state ─────────────────────────────────────────
-  // yaw/pitch are the eased ACTUAL aim; *Target are the drag-driven goals. The
-  // useFrame loop eases actual→target every frame (damped, no jitter/snap). All
-  // preallocated so the per-frame free-look path allocates nothing.
-  const yawRef = useRef(0);
-  const pitchRef = useRef(0);
-  const yawTargetRef = useRef(0);
-  const pitchTargetRef = useRef(0);
-  const freeLookEuler = useRef(new THREE.Euler(0, 0, 0, 'YXZ'));
-  const flForward = useRef(new THREE.Vector3());
-  const flRight = useRef(new THREE.Vector3());
-  const flUp = useRef(new THREE.Vector3());
-  // Tracks the previous cameraMode so we can re-frame the board exactly when
-  // LEAVING free-look (return to normal gameplay framing).
-  const prevModeRef = useRef(cameraMode);
-
-  // Re-frame to the fixed board view (target = INITIAL_CAM_TARGET, camera =
-  // target + the mobile/desktop initial offset). Shared by the first-mount snap
-  // and the exit-from-free-look re-frame so both land on the identical framing.
-  const frameToBoard = useCallback(() => {
-    const controls = controlsRef.current;
-    if (!controls) return;
-    const target = new THREE.Vector3(...INITIAL_CAM_TARGET);
-    controls.target.copy(target);
-    const offset = isMobileRef.current ? MOBILE_INITIAL_CAM_OFFSET : INITIAL_CAM_OFFSET;
-    camera.position.set(
-      target.x + offset[0],
-      target.y + offset[1],
-      target.z + offset[2],
-    );
-    controls.update();
-  }, [camera]);
-
   // Initial snap: on first mount, snap the OrbitControls target to the fixed
   // INITIAL_CAM_TARGET and place the camera at target + INITIAL_CAM_OFFSET.
   // This fires each render until both controls and state are ready, then locks.
@@ -193,8 +146,21 @@ export function CameraRig() {
   useEffect(() => {
     if (initialSnapDone.current) return;
     if (!activePlayer) return;          // wait for store hydration
-    if (!controlsRef.current) return;   // wait for OrbitControls mount
-    frameToBoard();                     // target = INITIAL_CAM_TARGET, camera = target + offset
+    const controls = controlsRef.current;
+    if (!controls) return;             // wait for OrbitControls mount
+
+    const target = new THREE.Vector3(...INITIAL_CAM_TARGET);
+    controls.target.copy(target);
+
+    // Same aim/angle on both; mobile just dollies closer (MOBILE_CAM_DIST).
+    const offset = isMobileRef.current ? MOBILE_INITIAL_CAM_OFFSET : INITIAL_CAM_OFFSET;
+    camera.position.set(
+      target.x + offset[0],
+      target.y + offset[1],
+      target.z + offset[2],
+    );
+    controls.update();
+
     initialSnapDone.current = true;
   });
   // Intentionally no dependency array: re-checks each render until both controls
@@ -253,11 +219,7 @@ export function CameraRig() {
       controls.maxPolarAngle = Math.PI / 2 - 0.01;
       // maxDistance left unchanged — no need to constrain far bound while following.
     } else {
-      // 'free' OR 'freeLook': restore LEFT respecting current physical Shift state
-      // (Fix 1). In 'freeLook' OrbitControls is DISABLED (see `enabled` prop), so
-      // these mouse-button/clamp values are inert until we return to 'free' — but
-      // restoring them here means orbit is already correctly configured the instant
-      // free-look exits and OrbitControls re-enables.
+      // Restore LEFT respecting current physical Shift state (Fix 1).
       controls.mouseButtons.LEFT = shiftHeldRef.current
         ? THREE.MOUSE.PAN
         : THREE.MOUSE.ROTATE;
@@ -267,130 +229,11 @@ export function CameraRig() {
       controls.maxDistance = orig.maxDistance;
       controls.maxPolarAngle = orig.maxPolarAngle;
     }
-
-    // Leaving free-look → snap back to the normal board framing for gameplay, so
-    // the user never resumes orbit stuck aimed at empty sky. (Entering free-look
-    // does NOT re-frame — it seamlessly keeps the current aim; see the touch effect.)
-    if (prevModeRef.current === 'freeLook' && cameraMode !== 'freeLook') {
-      frameToBoard();
-    }
-    prevModeRef.current = cameraMode;
-  }, [cameraMode, frameToBoard]);
-
-  // ── MOBILE-ONLY free-look touch controller ───────────────────────────────
-  // Active ONLY while cameraMode === 'freeLook' on mobile. OrbitControls is
-  // disabled (see `enabled` prop) so drei never re-aims the camera at the target;
-  // we own the camera orientation. One finger = look (rotate the view in place →
-  // full pitch/yaw incl. straight up). Two fingers = pinch-dolly + pan. The camera
-  // POSITION never moves while looking, so pitching to the zenith can never drag it
-  // under the terrain; pan/dolly are hard-clamped to the MOBILE_MIN_CAM_Y floor.
-  useEffect(() => {
-    if (!isMobile) return;
-    if (cameraMode !== 'freeLook') return;
-    if (!gl || !gl.domElement) return;
-    const el = gl.domElement;
-
-    // Seed yaw/pitch from the camera's CURRENT orientation so entering free-look is
-    // seamless — we keep looking exactly where the orbit view left off (no snap).
-    const e0 = freeLookEuler.current.setFromQuaternion(camera.quaternion, 'YXZ');
-    yawRef.current = yawTargetRef.current = e0.y;
-    pitchRef.current = pitchTargetRef.current = THREE.MathUtils.clamp(
-      e0.x, -FREELOOK_PITCH_LIMIT, FREELOOK_PITCH_LIMIT,
-    );
-
-    let mode: 'none' | 'look' | 'multi' = 'none';
-    let lastX = 0, lastY = 0;
-    let lastDist = 0, lastMidX = 0, lastMidY = 0;
-
-    const dist2 = (t: TouchList) => Math.hypot(t[0].clientX - t[1].clientX, t[0].clientY - t[1].clientY);
-    const midX = (t: TouchList) => (t[0].clientX + t[1].clientX) / 2;
-    const midY = (t: TouchList) => (t[0].clientY + t[1].clientY) / 2;
-
-    const onStart = (ev: TouchEvent) => {
-      beginCameraMotion();
-      if (ev.touches.length >= 2) {
-        mode = 'multi';
-        lastDist = dist2(ev.touches);
-        lastMidX = midX(ev.touches); lastMidY = midY(ev.touches);
-      } else {
-        mode = 'look';
-        lastX = ev.touches[0].clientX; lastY = ev.touches[0].clientY;
-      }
-    };
-
-    const onMove = (ev: TouchEvent) => {
-      if (mode === 'none') return;
-      ev.preventDefault();
-      if (ev.touches.length >= 2) {
-        // Two fingers → pinch-dolly along the view dir + pan in the view plane.
-        const d = dist2(ev.touches);
-        const mx = midX(ev.touches), my = midY(ev.touches);
-        camera.getWorldDirection(flForward.current).normalize();
-        flRight.current.crossVectors(flForward.current, camera.up).normalize();
-        flUp.current.crossVectors(flRight.current, flForward.current).normalize();
-        // Pinch spread → move forward; two-finger drag → strafe/lift (grab-the-world).
-        camera.position.addScaledVector(flForward.current, (d - lastDist) * FREELOOK_DOLLY_SPEED);
-        camera.position.addScaledVector(flRight.current, -(mx - lastMidX) * FREELOOK_PAN_SPEED);
-        camera.position.addScaledVector(flUp.current, (my - lastMidY) * FREELOOK_PAN_SPEED);
-        if (camera.position.y < MOBILE_MIN_CAM_Y) camera.position.y = MOBILE_MIN_CAM_Y;
-        lastDist = d; lastMidX = mx; lastMidY = my;
-      } else if (mode === 'look') {
-        // One finger → rotate the view in place. Drag up looks up (toward the sky),
-        // drag right looks right. Pitch is clamped just shy of the pole (no flip).
-        const x = ev.touches[0].clientX, y = ev.touches[0].clientY;
-        yawTargetRef.current -= (x - lastX) * FREELOOK_LOOK_SPEED;
-        pitchTargetRef.current = THREE.MathUtils.clamp(
-          pitchTargetRef.current - (y - lastY) * FREELOOK_LOOK_SPEED,
-          -FREELOOK_PITCH_LIMIT, FREELOOK_PITCH_LIMIT,
-        );
-        lastX = x; lastY = y;
-      }
-    };
-
-    const onEnd = (ev: TouchEvent) => {
-      if (ev.touches.length === 0) {
-        mode = 'none';
-        endCameraMotion();
-      } else if (ev.touches.length === 1) {
-        // Dropped from two fingers to one → resume single-finger look cleanly.
-        mode = 'look';
-        lastX = ev.touches[0].clientX; lastY = ev.touches[0].clientY;
-      } else {
-        mode = 'multi';
-        lastDist = dist2(ev.touches);
-        lastMidX = midX(ev.touches); lastMidY = midY(ev.touches);
-      }
-    };
-
-    el.addEventListener('touchstart', onStart, { passive: false });
-    el.addEventListener('touchmove', onMove, { passive: false });
-    el.addEventListener('touchend', onEnd);
-    el.addEventListener('touchcancel', onEnd);
-    return () => {
-      el.removeEventListener('touchstart', onStart);
-      el.removeEventListener('touchmove', onMove);
-      el.removeEventListener('touchend', onEnd);
-      el.removeEventListener('touchcancel', onEnd);
-    };
-  }, [cameraMode, isMobile, gl, camera]);
+  }, [cameraMode]);
 
   useFrame((_state, delta) => {
     const controls = controlsRef.current;
     if (!controls) return;
-
-    // ── Free-look aim (mobile) ───────────────────────────────────────────────
-    // Ease the actual yaw/pitch toward the drag-driven targets and write the
-    // camera orientation directly. OrbitControls is disabled in this mode, so drei
-    // never calls controls.update() here (see its `if (controls.enabled)` guard) —
-    // nothing fights this quaternion. Position is untouched except the Y floor.
-    if (cameraModeRef.current === 'freeLook') {
-      const a = 1 - Math.exp(-FREELOOK_LOOK_RATE * delta);
-      yawRef.current += (yawTargetRef.current - yawRef.current) * a;
-      pitchRef.current += (pitchTargetRef.current - pitchRef.current) * a;
-      freeLookEuler.current.set(pitchRef.current, yawRef.current, 0, 'YXZ');
-      camera.quaternion.setFromEuler(freeLookEuler.current);
-      if (camera.position.y < MOBILE_MIN_CAM_Y) camera.position.y = MOBILE_MIN_CAM_Y;
-    }
 
     // ── Third-person follow (only when the mode is on) ───────────────────────
     // When 'free' we do NO work here and never touch the camera/target, so the
@@ -476,11 +319,6 @@ export function CameraRig() {
   return (
     <OrbitControls
       ref={handleMount}
-      // MOBILE-ONLY: disable OrbitControls while in free-look so drei stops calling
-      // controls.update() (it guards on controls.enabled) and its own pointer
-      // handlers no-op — the free-look touch controller then owns the camera. On
-      // desktop this is `undefined` → three-stdlib default (true): byte-identical.
-      enabled={isMobile ? cameraMode !== 'freeLook' : undefined}
       enablePan
       screenSpacePanning
       enableDamping

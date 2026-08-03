@@ -27,7 +27,6 @@ import { BigMomentOverlay } from './ui/BigMomentOverlay';
 import { CardDrawnOverlay } from './ui/CardDrawnOverlay';
 import { MuteButton } from './ui/MuteButton';
 import { CameraViewButton } from './ui/CameraViewButton';
-import { FreeLookButton } from './ui/FreeLookButton';
 import { FullscreenButton } from './ui/FullscreenButton';
 import { RotateHint } from './ui/RotateHint';
 import { PropertyCardModal } from './ui/PropertyCardModal';
@@ -164,7 +163,6 @@ export default function App() {
           <PropertyCardModal />
           <CameraDebugOverlay />
           <CameraViewButton />
-          <FreeLookButton />
           <FullscreenButton />
           {/* DEV-only scene-layer visibility toggle panel — see debugVisibility.ts.
               Gated so it's tree-shaken out of production builds. */}
