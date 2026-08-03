@@ -42,10 +42,10 @@ const JOBS = [
   },
   {
     label: 'NightSkyHDRI008 (Milky Way band)',
-    in: '/Users/arslan/Desktop/Monopoly/NightSkyHDRI008_8K/NightSkyHDRI008_8K_TONEMAPPED.jpg',
+    in: '/Users/arslan/Desktop/Monopoly/NightSkyHDRI008_4K/NightSkyHDRI008_4K_TONEMAPPED.jpg',
     out: resolve(PROJECT_ROOT, 'public/images/night-sky-008.webp'),
-    outW: 8192,
-    outH: 4096,
+    outW: 4096,
+    outH: 2048,
   },
 ];
 
