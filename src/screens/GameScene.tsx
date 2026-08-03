@@ -329,7 +329,7 @@ const MOBILE_AMBIENT_INTENSITY = 0.06;
  * treeline). Still a FREE one-shot bake (autoUpdate off) — only ~+7MB one-time depth VRAM,
  * zero/frame. Toggle OFF → 1536 / ±12.
  */
-const MOBILE_SHADOW_MAP_SIZE = MOBILE_FOREST_SHADOWS_ENABLED ? 2048 : 1536;
+const MOBILE_SHADOW_MAP_SIZE = MOBILE_FOREST_SHADOWS_ENABLED ? 3072 : 1536;
 
 /**
  * MOBILE-ONLY KEY-sun ORTHO shadow-frustum HALF-EXTENT (world units). The frozen shadow
@@ -975,7 +975,7 @@ export function GameScene() {
           castShadow
           shadow-mapSize={[MOBILE_SHADOW_MAP_SIZE, MOBILE_SHADOW_MAP_SIZE]}
           shadow-bias={-0.0004}
-          shadow-normalBias={0.035}
+          shadow-normalBias={0.05}
           shadow-intensity={0.9}
         >
           <orthographicCamera
