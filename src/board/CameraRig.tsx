@@ -40,7 +40,7 @@ const MOBILE_DAMPING_FACTOR = 0.25;
 // but panning the pivot could still drag the camera down, so we also clamp world
 // Y directly after every OrbitControls move. Terrain floor near the board sits at
 // FOREST_Y ≈ -0.48 (board bottom) with the board top at y ≈ 0.02.
-const MOBILE_MAX_POLAR_ANGLE = 1.35; // rad (~77°): a low, near-tabletop board view, but well short of the horizon so the orbit can't tip under the floor
+const MOBILE_MAX_POLAR_ANGLE = 1.52; // rad (~87°): a low, near-horizon board view so the starfield/Milky Way fills the upper view, just short of tipping under the floor
 const MOBILE_MIN_DISTANCE = 4.0;     // world units: can't dolly INSIDE the city/rocks (initial mobile framing sits at MOBILE_CAM_DIST = 6.9, so zoom-in still works)
 const MOBILE_MIN_CAM_Y = 1.0;        // world units: HARD floor — the camera's world Y can never dip below this (safely above the −0.48 terrain floor and low ground clutter)
 const MOBILE_MIN_TARGET_Y = -0.3;    // world units: the orbit pivot can't be aimed below ~board level (aiming lower would drag the whole view under the terrain)

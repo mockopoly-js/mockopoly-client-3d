@@ -771,8 +771,8 @@ function HdriSkyMobileNightHdri() {
     tex.mapping = THREE.EquirectangularReflectionMapping;
     tex.colorSpace = THREE.SRGBColorSpace;
     tex.magFilter = THREE.LinearFilter;
-    tex.minFilter = THREE.LinearMipmapLinearFilter;
-    tex.generateMipmaps = true;
+    tex.minFilter = THREE.LinearFilter;
+    tex.generateMipmaps = false;
     tex.anisotropy = gl.capabilities.getMaxAnisotropy();
     tex.needsUpdate = true;
     scene.environment = tex;
