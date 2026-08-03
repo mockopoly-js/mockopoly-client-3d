@@ -34,8 +34,12 @@ export interface CameraReadout {
  * Camera view mode:
  * - 'free'        — default free-orbit navigation (Blender-style), unchanged.
  * - 'thirdPerson' — over-the-shoulder view locked behind the active player token.
+ * - 'freeLook'    — MOBILE-ONLY decoupled free-aim: the camera stays put (above
+ *   ground) and drag rotates the VIEW's pitch/yaw freely, so the user can aim
+ *   straight up at the night sky without orbiting under the terrain. Pan/zoom via
+ *   two-finger drag/pinch. Exiting returns to 'free' board framing (see CameraRig).
  */
-type CameraMode = 'free' | 'thirdPerson';
+type CameraMode = 'free' | 'thirdPerson' | 'freeLook';
 
 interface GameStore {
   // ── durable mirror of server state (was LocalGameState) ──
@@ -63,6 +67,8 @@ interface GameStore {
   cameraMode: CameraMode;
   setCameraMode: (m: CameraMode) => void;
   toggleCameraMode: () => void;
+  /** MOBILE-ONLY: enter/exit decoupled free-look aim (exits to 'free'). */
+  toggleFreeLook: () => void;
 
   // ── read-only deed-card inspect (board tile click) ──
   // Separate from selectedPropertyIndex/showPropertyCard which drive MortgagePanel.
@@ -182,7 +188,9 @@ export const useGameStore = create<GameStore>((set, get) => ({
   setCameraReadout: (v) => set({ cameraReadout: v }),
   setCameraMode: (m) => set({ cameraMode: m }),
   toggleCameraMode: () =>
-    set((s) => ({ cameraMode: s.cameraMode === 'free' ? 'thirdPerson' : 'free' })),
+    set((s) => ({ cameraMode: s.cameraMode === 'thirdPerson' ? 'free' : 'thirdPerson' })),
+  toggleFreeLook: () =>
+    set((s) => ({ cameraMode: s.cameraMode === 'freeLook' ? 'free' : 'freeLook' })),
   openDeedCard: (index) => set({ deedCardIndex: index }),
   closeDeedCard: () => set({ deedCardIndex: null }),
   toggleTradePanel: (show) =>
