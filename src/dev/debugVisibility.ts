@@ -1,9 +1,9 @@
 /**
  * DEV-ONLY debug visibility flags for scene-layer toggling (see
  * `DebugTogglePanel`). Lets a dev independently hide/show each 3D scene layer
- * (forest sub-categories + a whole-forest master, board, city, tokens) and
- * read the fps/draw-call/tri delta on the existing FPS + `RenderStatsReadout`
- * panels — i.e. "what does each layer cost".
+ * (forest sub-categories + a whole-forest master, board, the owned-tile glow,
+ * city, tokens) and read the fps/draw-call/tri delta on the existing FPS +
+ * `RenderStatsReadout` panels — i.e. "what does each layer cost".
  *
  * A tiny, dependency-free mutable-flags store with a subscribe/notify
  * contract (a `Set` of listeners) — NOT zustand. This is throwaway dev/perf
@@ -34,6 +34,7 @@ export type DebugVisibilityCategory =
   | ForestDebugCategory
   | 'wholeForest'
   | 'board'
+  | 'glow'
   | 'city'
   | 'tokens';
 
@@ -50,6 +51,7 @@ export const DEBUG_VISIBILITY_CATEGORIES: readonly DebugVisibilityCategory[] = [
   'rocks',
   'ground',
   'board',
+  'glow',
   'city',
   'tokens',
 ];

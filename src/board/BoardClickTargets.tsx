@@ -3,6 +3,7 @@ import * as THREE from 'three';
 import type { ThreeEvent } from '@react-three/fiber';
 import { useGameStore } from '../state/gameStore';
 import { CLICK_TARGET_SPACES, clickTargetSpaceIndex, clickTargetMatrix, TILE_SIZE } from './clickTargets';
+import { OwnedTileGlow } from './OwnedTileGlow';
 
 /**
  * Invisible, flat, horizontal click targets above each of the 28 purchasable
@@ -27,6 +28,13 @@ import { CLICK_TARGET_SPACES, clickTargetSpaceIndex, clickTargetMatrix, TILE_SIZ
  * geometry-based and unaffected by material opacity, so picking still works.
  * Cursor changes to 'pointer' on hover for affordance and is cleaned up on
  * component unmount.
+ *
+ * It also hosts the OWNED-TILE GLOW layer (OwnedTileGlow), which needs the exact same
+ * per-tile layout and instance ordering this module already owns. Mounting it here —
+ * rather than adding another child to GameScene — keeps the two in lockstep by
+ * construction: instance `i` is the same board space in both meshes. It is a second,
+ * independent one-draw-call InstancedMesh, never a raycast target, so picking is
+ * completely unaffected.
  */
 export function BoardClickTargets() {
   const openDeedCard = useGameStore((s) => s.openDeedCard);
@@ -56,25 +64,29 @@ export function BoardClickTargets() {
   }, []);
 
   return (
-    <instancedMesh
-      ref={meshRef}
-      args={[undefined, undefined, CLICK_TARGET_SPACES.length]}
-      onClick={(e: ThreeEvent<MouseEvent>) => {
-        // instanceId identifies WHICH tile was hit; map it back to the board
-        // space and open exactly the deed the old per-mesh planes would have.
-        if (e.instanceId === undefined) return;
-        e.stopPropagation();
-        openDeedCard(clickTargetSpaceIndex(e.instanceId));
-      }}
-      onPointerOver={() => {
-        document.body.style.cursor = 'pointer';
-      }}
-      onPointerOut={() => {
-        document.body.style.cursor = '';
-      }}
-    >
-      <planeGeometry args={[TILE_SIZE, TILE_SIZE]} />
-      <meshBasicMaterial transparent opacity={0} depthWrite={false} />
-    </instancedMesh>
+    <>
+      {/* Ownership glow — see OwnedTileGlow.tsx. Shares CLICK_TARGET_SPACES ordering. */}
+      <OwnedTileGlow />
+      <instancedMesh
+        ref={meshRef}
+        args={[undefined, undefined, CLICK_TARGET_SPACES.length]}
+        onClick={(e: ThreeEvent<MouseEvent>) => {
+          // instanceId identifies WHICH tile was hit; map it back to the board
+          // space and open exactly the deed the old per-mesh planes would have.
+          if (e.instanceId === undefined) return;
+          e.stopPropagation();
+          openDeedCard(clickTargetSpaceIndex(e.instanceId));
+        }}
+        onPointerOver={() => {
+          document.body.style.cursor = 'pointer';
+        }}
+        onPointerOut={() => {
+          document.body.style.cursor = '';
+        }}
+      >
+        <planeGeometry args={[TILE_SIZE, TILE_SIZE]} />
+        <meshBasicMaterial transparent opacity={0} depthWrite={false} />
+      </instancedMesh>
+    </>
   );
 }
