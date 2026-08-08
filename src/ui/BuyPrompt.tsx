@@ -1,148 +1,127 @@
-import React from 'react';
 import { useGameStore, selectMyPlayer, selectIsMyTurn } from '../state/gameStore';
 import { socketManager } from '../network/SocketManager';
 import { EVENTS } from '../types/SocketEvents';
 import { BOARD_SPACES } from '../constants/board';
 import { COLOR_GROUP_HEX } from '../constants/theme';
 import { formatMoney } from '../utils/format';
-import { useIsMobile } from './useIsMobile';
-import { useIsLandscape } from './useIsLandscape';
-import { FONT_FAMILY } from '../constants/fonts';
-import { DeedCard } from './DeedCard';
+import { Arm, Badge, Button, Deed, KIT, Money, Panel, groupColor } from './kit';
+import type { KitStyle } from './kit';
+import { buildRentRows, groupLabel } from './propertyDeed';
+import { useHudStandDown } from './takeoverStage';
 
 const BUYABLE = ['property', 'railroad', 'utility'];
 
+/**
+ * The mandatory buy-or-decline decision, migrated onto the kit's right-slide
+ * <Panel>. There is deliberately NO close (X) / dismiss route: the server
+ * keeps the turn in the `action` phase until the player actually decides, and
+ * offering a free dismissal here would say otherwise. Buy / Decline in the
+ * footer are the only two ways out — Decline is a <Arm> because declining is
+ * NOT "no consequence": it sends the property to auction (GAP 5), which is
+ * now stated in place rather than left for the player to discover.
+ *
+ * GOTCHA #5: the panel stays mounted at all times (this component is an
+ * always-rendered sibling in App.tsx) — `open` is a derived boolean, never an
+ * early `return null`, so the close slide still gets to play when a decision
+ * resolves the prompt away.
+ */
 export function BuyPrompt() {
   const me = useGameStore(selectMyPlayer);
   const isMyTurn = useGameStore(selectIsMyTurn);
   const phase = useGameStore((s) => s.state?.turn.phase);
   const properties = useGameStore((s) => s.state?.properties);
-  const isMobile = useIsMobile();
-  const isLandscape = useIsLandscape();
-  const landscape = isMobile && isLandscape;
+  // This one can genuinely coincide: `open` is derived from turn phase, so a
+  // buy prompt is up for as long as the player takes to decide, and any other
+  // player's trade offer arrives as a takeover over the top of it. The prompt
+  // is not cancelled by yielding — the server still holds the turn in `action`
+  // and the whole surface is back, undecided, when the takeover closes.
+  const standDown = useHudStandDown();
 
-  if (!me || !isMyTurn || phase !== 'action') return null;
+  // .at() is BoardSpace | undefined — a position outside 0..39 is a real
+  // runtime possibility even though it narrows space to non-null below.
+  const space = me ? BOARD_SPACES.at(me.position) : undefined;
+  const buyable = !!space && BUYABLE.includes(space.type);
+  const owned = space ? properties?.find((p) => p.spaceIndex === space.index) : undefined;
+  const alreadyOwned = owned?.ownerId != null; // show unless a real owner exists (dense array today; robust if ever sparse)
+  const price = space?.price ?? 0;
 
-  // .at() is BoardSpace | undefined — a position outside 0..39 is a real runtime
-  // possibility, so the guard below is live (and narrows space to non-null).
-  const space = BOARD_SPACES.at(me.position);
-  if (!space || !BUYABLE.includes(space.type)) return null;
-  const owned = properties?.find((p) => p.spaceIndex === space.index);
-  if (owned?.ownerId != null) return null;   // show unless a real owner exists (dense array today; robust if ever sparse)
-  const price = space.price ?? 0;
-  if (price <= 0) return null;
+  const open = !!me && isMyTurn && phase === 'action' && buyable && !alreadyOwned && price > 0;
 
-  const canAfford = me.money >= price;
-  const accent = space.colorGroup ? COLOR_GROUP_HEX[space.colorGroup] : '#d4af37';
-  const cardFrame = space.cardFrame;
-  const mortgaged = !!owned?.isMortgaged;
-  const deedW = landscape ? 112 : isMobile ? 128 : 150;
+  const buy = () => { socketManager.emit(EVENTS.TURN_BUY_PROPERTY); };
+  // The server's TURN_PASS_BUY handler (gameHandlers.ts) starts the auction
+  // AND advances the turn once it settles — the client must not also emit
+  // TURN_END here, or it would race/duplicate the server's own turn advance.
+  const decline = () => { socketManager.emit(EVENTS.TURN_PASS_BUY); };
 
-  const buy = () => socketManager.emit(EVENTS.TURN_BUY_PROPERTY);
-  const decline = () => socketManager.emit(EVENTS.TURN_END);
-
-  const inner = (
-    <>
-      <div style={{ height: 10, borderRadius: 6, background: accent, marginBottom: 12 }} />
-      {cardFrame != null && (
-        <div style={{ display: 'grid', placeItems: 'center', marginBottom: 14 }}>
-          <DeedCard cardFrame={cardFrame} mortgaged={mortgaged} width={deedW} aria-label={`${space.name} deed`} />
-        </div>
-      )}
-      <div style={{ fontWeight: 800, fontSize: 20 }}>{space.name}</div>
-      <div style={{ color: '#9a8f7c', margin: '4px 0 16px', fontVariantNumeric: 'tabular-nums' }}>
-        Price {formatMoney(price)}
-      </div>
-      <div style={{ display: 'flex', gap: 10 }}>
-        <button onClick={buy} disabled={!canAfford} style={{ ...btn, ...(canAfford ? buyBtn : disabledBtn) }}>Buy</button>
-        <button onClick={decline} style={{ ...btn, ...declineBtn }}>Decline</button>
-      </div>
-      {!canAfford && <div style={{ color: '#e5533d', marginTop: 8, fontSize: 13 }}>Not enough cash</div>}
-    </>
-  );
-
-  // ── Mobile LANDSCAPE (wide + short): deed on the left, name/price/buttons on
-  // the right so the dialog is wide-and-short rather than tall. ──
-  if (landscape) {
-    return (
-      <div style={wrapLandscape}>
-        <div style={cardLandscape}>
-          <div style={rowLandscape}>
-            {cardFrame != null && (
-              <DeedCard cardFrame={cardFrame} mortgaged={mortgaged} width={deedW} aria-label={`${space.name} deed`} />
-            )}
-            <div style={infoColLandscape}>
-              <div style={{ height: 8, borderRadius: 6, background: accent, marginBottom: 8 }} />
-              <div style={{ fontWeight: 800, fontSize: 20 }}>{space.name}</div>
-              <div style={{ color: '#9a8f7c', margin: '4px 0 12px', fontVariantNumeric: 'tabular-nums' }}>
-                Price {formatMoney(price)}
-              </div>
-              <div style={{ display: 'flex', gap: 10 }}>
-                <button onClick={buy} disabled={!canAfford} style={{ ...btn, ...(canAfford ? buyBtn : disabledBtn) }}>Buy</button>
-                <button onClick={decline} style={{ ...btn, ...declineBtn }}>Decline</button>
-              </div>
-              {!canAfford && <div style={{ color: '#e5533d', marginTop: 8, fontSize: 13 }}>Not enough cash</div>}
-            </div>
-          </div>
-        </div>
-      </div>
-    );
-  }
-
-  if (isMobile) {
-    return (
-      <div style={wrapMobile}>
-        <div style={sheetMobile}>{inner}</div>
-      </div>
-    );
-  }
+  const canAfford = open && me.money >= price;
+  const rawAccent = open && space.colorGroup ? COLOR_GROUP_HEX[space.colorGroup] : KIT.gold;
+  const accent = groupColor(rawAccent, true);
+  // Hypothetical, not a live reading: nobody owns this yet, so tier 0 (base
+  // rent) is shown as "current" purely as a buy-decision aid — never via
+  // `currentRentTier`, which is reserved for an actually-owned property.
+  const rows = open ? buildRentRows(space.rents, 0) : [];
 
   return (
-    <div style={wrap}>
-      <div style={card}>{inner}</div>
+    <div style={{ ...stage, ...standDown.style }} aria-hidden={standDown.ariaHidden}>
+      <Panel
+        open={open}
+        scrim="light"
+        label={space ? `${space.name} — buy or decline` : 'Buy property'}
+        footer={open ? (
+          <>
+            <Button
+              variant="primary"
+              label={`Buy ${formatMoney(price)}`}
+              disabled={!canAfford}
+              onClick={buy}
+              style={{ flex: '1 1 auto', minWidth: 0 }}
+            />
+            <Arm
+              face="Decline"
+              confirm="Tap again · auction"
+              onConfirm={decline}
+              ariaLabel="Decline — sends this property to auction"
+              style={armFit}
+            />
+          </>
+        ) : undefined}
+      >
+        {open && (
+          <Deed
+            color={accent}
+            title={space.name}
+            sub={space.colorGroup ? `${groupLabel(space.colorGroup)} · Unowned` : 'Unowned'}
+            rows={rows}
+            meta={[
+              { label: 'Price', value: <Money value={price} size="glance-lg" tone="gold" /> },
+              { label: 'Your cash', value: <Money value={me.money} size="glance-lg" tone={canAfford ? 'default' : 'low'} /> },
+            ]}
+          >
+            <div style={auctionRow}>
+              <span style={mutedLabel}>If declined</span>
+              <Badge tone="warn">Goes to auction</Badge>
+            </div>
+            {!canAfford && <div style={warnText}>Not enough cash</div>}
+          </Deed>
+        )}
+      </Panel>
     </div>
   );
 }
 
-const FONT = FONT_FAMILY;
-// ── Desktop styles (unchanged) ──
-const wrap: React.CSSProperties = {
-  position: 'fixed', inset: 0, display: 'grid', placeItems: 'center', fontFamily: FONT, zIndex: 40, pointerEvents: 'none',
+// ── kit-surface host. Kit surfaces are position:absolute and need a
+// full-size positioned ancestor of their own — see kit gotcha #1. ──
+const stage: KitStyle = { position: 'fixed', inset: 0, zIndex: KIT.zPanel, pointerEvents: 'none' };
+const auctionRow: KitStyle = {
+  display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+  gap: KIT.sp2, marginTop: KIT.sp2, padding: `0 ${KIT.rowPad}`,
 };
-const card: React.CSSProperties = {
-  pointerEvents: 'auto', background: '#fbf6ec', color: '#3b3224', borderRadius: 18,
-  padding: 22, minWidth: 260, maxWidth: '92vw', maxHeight: '90dvh', overflowY: 'auto',
-  boxShadow: '0 24px 60px -20px rgba(0,0,0,.6)',
+const mutedLabel: KitStyle = {
+  fontSize: KIT.fsMicro, fontWeight: 700, color: KIT.text2,
+  textTransform: 'uppercase', letterSpacing: KIT.lsWide,
 };
-const btn: React.CSSProperties = { fontFamily: FONT, fontWeight: 800, border: 'none', borderRadius: 14, padding: '12px 20px', cursor: 'pointer', flex: 1, minHeight: 44 };
-const buyBtn: React.CSSProperties = { background: '#46b16a', color: '#fff' };
-const declineBtn: React.CSSProperties = { background: '#e7dcbf', color: '#3b3224' };
-const disabledBtn: React.CSSProperties = { background: '#d8ccae', color: '#9a8f7c', cursor: 'default' };
-// ── Mobile bottom-sheet styles ──
-const wrapMobile: React.CSSProperties = {
-  position: 'fixed', inset: 0, fontFamily: FONT, zIndex: 40, display: 'flex', alignItems: 'flex-end',
-};
-const sheetMobile: React.CSSProperties = {
-  background: '#fbf6ec', color: '#3b3224',
-  borderRadius: '20px 20px 0 0', padding: 22,
-  width: '100vw', maxHeight: '85dvh', overflowY: 'auto',
-  boxShadow: '0 -8px 40px -8px rgba(0,0,0,.6)',
-  paddingBottom: 'calc(22px + env(safe-area-inset-bottom))',
-  paddingLeft: 'calc(22px + env(safe-area-inset-left))',
-  paddingRight: 'calc(22px + env(safe-area-inset-right))',
-  boxSizing: 'border-box',
-};
-// ── Mobile LANDSCAPE styles (wide + short) ──
-const wrapLandscape: React.CSSProperties = {
-  position: 'fixed', inset: 0, fontFamily: FONT, zIndex: 40, display: 'flex',
-  boxSizing: 'border-box', pointerEvents: 'none',
-  padding:
-    'max(8px, env(safe-area-inset-top)) max(10px, env(safe-area-inset-right)) max(8px, env(safe-area-inset-bottom)) max(20px, env(safe-area-inset-left))',
-};
-const cardLandscape: React.CSSProperties = {
-  pointerEvents: 'auto', background: '#fbf6ec', color: '#3b3224', borderRadius: 18,
-  padding: 18, width: 'min(560px, 100%)', maxHeight: '100%', overflowY: 'auto', margin: 'auto',
-  boxShadow: '0 24px 60px -20px rgba(0,0,0,.6)', boxSizing: 'border-box',
-};
-const rowLandscape: React.CSSProperties = { display: 'flex', flexDirection: 'row', gap: 16, alignItems: 'center' };
-const infoColLandscape: React.CSSProperties = { flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column' };
+const warnText: KitStyle = { fontSize: KIT.fsLabel, color: KIT.dangerBright, marginTop: KIT.sp2, padding: `0 ${KIT.rowPad}` };
+// .arm sizes to its face text only ("Decline") — .arm__confirm is
+// position:absolute so it never grows the box, and its longer "Tap again ·
+// auction" string would overflow a box sized for the shorter face string.
+const armFit: KitStyle = { minWidth: 172 };

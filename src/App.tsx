@@ -22,7 +22,8 @@ import { DevHacksPanel } from './ui/DevHacksPanel';
 import { TradePanel } from './ui/TradePanel';
 import { PartnershipPanel } from './ui/PartnershipPanel';
 import { DealPanel } from './ui/DealPanel';
-import { HudButtons } from './ui/HudButtons';
+import { AuctionPanel } from './ui/AuctionPanel';
+import { BankruptcyPanel } from './ui/BankruptcyPanel';
 import { BigMomentOverlay } from './ui/BigMomentOverlay';
 import { CardDrawnOverlay } from './ui/CardDrawnOverlay';
 import { MuteButton } from './ui/MuteButton';
@@ -32,6 +33,7 @@ import { RotateHint } from './ui/RotateHint';
 import { PropertyCardModal } from './ui/PropertyCardModal';
 import { CameraDebugOverlay } from './ui/CameraDebugOverlay';
 import { DebugTogglePanel } from './dev/DebugTogglePanel';
+import { HudHideStyle } from './dev/hudOverride';
 import { useSfx } from './audio/useSfx';
 import { initAudioOnGesture } from './audio/sfx';
 import type { S_GameOver } from './types/SocketEvents';
@@ -154,10 +156,22 @@ export default function App() {
           <PlayerPods />
           <GameLog />
           <MortgagePanel />
-          <HudButtons />
+          {/* The negotiation actions (Trade / Partnership / Deal / Raise Cash)
+              are NOT mounted here — <HudButtons> is rendered as
+              `<HudButtons inline />` from inside <ActionsSheet>, which is the
+              ⋯ overflow menu in TurnHud's bottom-right cluster. A bare
+              <HudButtons /> at this level rendered null by design and has been
+              removed; the panels it opens are the four siblings below. */}
           <TradePanel />
           <PartnershipPanel />
           <DealPanel />
+          {/* Both self-host: `position:fixed` stage + their own takeover
+              z-index, `pointer-events:none` until open, so neither needs a
+              wrapper and neither takes props. <AuctionPanel> opens off
+              `turn.auctionState`; <BankruptcyPanel> off the `open-liquidation`
+              bus event that HudButtons' RAISE CASH emits. */}
+          <AuctionPanel />
+          <BankruptcyPanel />
           <BigMomentOverlay />
           <CardDrawnOverlay />
           <PropertyCardModal />
@@ -167,6 +181,9 @@ export default function App() {
           {/* DEV-only scene-layer visibility toggle panel — see debugVisibility.ts.
               Gated so it's tree-shaken out of production builds. */}
           {import.meta.env.DEV && <DebugTogglePanel />}
+          {/* DEV-only `?nohud=1` — hides every DOM overlay so the 3D cost can be
+              read on its own, on a real device. See dev/hudOverride.tsx. */}
+          {import.meta.env.DEV && <HudHideStyle />}
         </>
       )}
       {screen === 'game-over' && <GameOverScreen />}
