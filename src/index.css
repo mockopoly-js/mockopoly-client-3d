@@ -5,6 +5,25 @@
   font-display: swap;
 }
 
+/* --- Box model ---
+   `width`/`height` mean the BORDER BOX everywhere, so a declared size is the
+   size the element actually occupies and padding is taken out of it rather
+   than added around it.
+
+   This is a correctness fix, not a preference. Under the UA default
+   (content-box) `.kit-field__input` — `width:100%` plus `padding:0 var(--sp-3)`
+   — rendered 24px wider than the 250px column it sits in, which pushed the room
+   -name input 24px past the right safe inset and under the bezel on device.
+   Eight components had already hand-rolled `boxSizing:'border-box'` inline to
+   dodge the same trap one at a time; four of those workarounds documented
+   themselves as load-bearing. One global rule retires the whole class of bug.
+
+   It is scoped with `*, *::before, *::after` deliberately: pseudo-elements are
+   sized boxes too (the panel's gold hairline, the deed colour band), and
+   leaving them on content-box would reintroduce the inconsistency this removes.
+*/
+*, *::before, *::after { box-sizing: border-box; }
+
 /* --- Viewport height ---
    Use 100dvh (dynamic viewport) so the UI is not clipped by mobile browser
    chrome (address bar, nav bar). 100vh line first as progressive-enhancement
@@ -39,6 +58,11 @@ body {
    overscroll-behavior:none stops pull-to-refresh and edge-swipe navigation.
    -webkit-text-size-adjust stops iOS from inflating font sizes.
 */
+/* stylelint-disable-next-line no-duplicate-selectors -- deliberately not merged
+   with the "Viewport height" html,body block above; each block is documented
+   for a distinct concern (viewport clipping there vs. touch/zoom hardening
+   here) and the two never set overlapping properties, so keeping them apart
+   doesn't change the cascade or the rendered result. */
 html, body {
   overscroll-behavior: none;
   text-size-adjust: 100%;
@@ -59,15 +83,26 @@ button, a, input, select, textarea, label { touch-action: manipulation; }
    Text inputs (name entry, etc.) are exempted so they remain selectable.
    Desktop behavior unchanged — users can still copy room codes.
 */
+/* stylelint-disable-next-line media-feature-range-notation -- kept as classic
+   min/max-width syntax intentionally: range notation `(width <= 768px)` needs
+   Safari 16.4+, but this game still supports the older iOS Safari versions
+   the -webkit-user-select prefix below exists for. */
 @media (max-width: 768px), (max-height: 600px) {
   * {
+    /* stylelint-disable-next-line property-no-vendor-prefix -- unprefixed
+       user-select only suppresses selection reliably from Safari 17; this is
+       a mobile game targeting older iOS Safari too, so the prefixed
+       declaration must stay alongside the standard one. */
     -webkit-user-select: none;
     user-select: none;
     -webkit-touch-callout: none;
   }
+
   /* keep text inputs usable (name entry, etc.) */
   input,
   textarea {
+    /* stylelint-disable-next-line property-no-vendor-prefix -- see the
+       -webkit-user-select note above; pre-Safari-17 iOS needs the prefix. */
     -webkit-user-select: text;
     user-select: text;
   }
@@ -100,9 +135,16 @@ button:active:not(:disabled) {
 }
 
 /* --- Mobile game-log toast fade-in (GameLog mobile entries) --- */
-@keyframes logToastIn {
-  from { opacity: 0; transform: translateY(4px); }
-  to { opacity: 0.85; transform: translateY(0); }
+@keyframes log-toast-in {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+
+  to {
+    opacity: 0.85;
+    transform: translateY(0);
+  }
 }
 
 /* --- MainMenu swatch press CSS (retained from MainMenu inline style) --- */
@@ -133,7 +175,7 @@ button:active:not(:disabled) {
   z-index: 10000 !important;
   font: 11px/1.4 monospace;
   color: #0f0;
-  background: rgba(0, 0, 0, 0.6);
+  background: rgb(0 0 0 / 60%);
   padding: 2px 5px;
   pointer-events: none;
 }

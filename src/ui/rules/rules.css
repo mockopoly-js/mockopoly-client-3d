@@ -1,0 +1,754 @@
+/* stylelint-disable selector-class-pattern, no-descending-specificity,
+   declaration-block-single-line-max-declarations, rule-empty-line-before,
+   comment-empty-line-before
+
+   These are the SAME five exemptions .stylelintrc.json already grants
+   src/ui/kit/**, and this file needs them for the same reasons: it names kit
+   BEM classes (.kit-takeover__body) in descendant overrides, which
+   `selector-class-pattern` cannot express, and it pairs `.rn-chip.is-on` and
+   `.rn-chip[disabled]` overrides, which `no-descending-specificity` always
+   flags.  The exemption is declared here rather than by widening the config's
+   override glob because .stylelintrc.json is shared with three other agents.
+   Every OTHER standard rule is satisfied — this file passes clean. */
+
+/* ============================================================================
+   CUSTOM-RULE NEGOTIATION — page-local CSS.  Trade / partnership / rent deal /
+   GO advance.  `rn-` = rules negotiation.
+
+   Everything in here is either (a) a primitive the kit does not have, or (b) a
+   DOCUMENTED override of a kit primitive with the measurement that forced it.
+
+   *** EVERY OVERRIDE IS WRITTEN AT 0,2,0 ON PURPOSE. ***
+   kit.css is imported from main.tsx and this file arrives through the
+   component graph, which Vite evaluates FIRST — so at equal specificity the
+   kit wins and the override silently does nothing. It cost a screenshot pass
+   to find: `.rn-mid{flex:0 0 220px}` lost to `.kit-takeover__col{flex:1 1 0}`
+   and the three-slot body rendered as three equal columns; `.rn-pip-due` lost
+   to `.kit-pip` and the GO tracker's pips rendered uniformly grey, which is
+   precisely the state the tracker exists to distinguish. Anything that
+   competes with a kit declaration is therefore written `.kit-x.rn-y` or
+   `.rn-x .kit-y`, never as a bare `.rn-y`. Nothing in src/ui/kit is edited.
+
+   Classes are flat kebab-case, NOT BEM: the kit's BEM `selector-class-pattern`
+   exemption in .stylelintrc.json is scoped to src/ui/kit/**, and this file has
+   to pass plain stylelint-config-standard.
+   ============================================================================ */
+
+/* --- 1. the layer ---------------------------------------------------------
+   GOTCHA 1: every kit surface is `position:absolute`, and needs a positioned
+   full-size ancestor.  These three panels are mounted as bare siblings in
+   App.tsx, which is a fragment — there is no such ancestor, and an absolute
+   .kit-takeover would have resolved against <body>'s padding box.  This layer
+   IS the ancestor.  It is always mounted (GOTCHA 5: a Takeover must not be
+   conditionally rendered or it can never play its exit) and always
+   pointer-events:none, so the 3D world stays tappable through it; .kit-takeover
+   takes events back for itself when it is .is-on.
+   GOTCHA 2: z-index is rebased +100, so this sits at --z-takeover (140) and
+   clears every legacy modal (40..55) and the migrated HUD (110..114).  It must
+   carry the z-index itself: `position:fixed` creates a stacking context, so the
+   takeover's own 140 is scoped INSIDE this element and cannot lift it. */
+.rn-layer {
+  position: fixed;
+  inset: 0;
+  z-index: var(--z-takeover);
+  pointer-events: none;
+}
+
+/* --- 2. the dimmed-board window ------------------------------------------
+   The most-quoted failure in this genre is Catan Universe's trade screen
+   hiding the map, "so you can't see what good or bad the trade would bring".
+   .kit-takeover's stock fill is rgb(6 6 13 / 98.5%): the board behind it is
+   gone.  So the fill moves here and a vertical band is masked down to 44%
+   alpha across the verdict column, and the live 3D board reads through it.
+
+   The band is expressed against the CENTRE, not in frame coordinates, because
+   the body is symmetric by construction — max(--sa-l,14) and max(--sa-r,14)
+   are both 47, and the middle column is a fixed basis between two flex:1
+   columns.  MEASURED, the mid column's BORDER box is 312..532 (220px: 204 of
+   content inside .kit-takeover__col's 2x8px padding-inline),
+   so the plateau is +/-110 and the ramps +/-134: 288..312 and 532..556.  The
+   left column ends at 287 and the right starts at 557, so neither ramp ever
+   crosses a column of text.  It stays centred on the verdict at any width.
+   BAND ALPHA IS 66%, NOT THE MOCKUP'S 44%, AND THAT IS A CORRECTION.
+   The mockup dims the 3D layer behind the takeover as well (a filter on the
+   scene), and then reveals 57% of an ALREADY DIMMED board.  This build cannot
+   touch the scene — GameScene.tsx is a shared mount point — so the reveal has
+   to carry the dimming on its own: .985 x .66 = .65 composite, ~35% of the
+   live board, which lands on the same apparent brightness.  Screenshotted at
+   44% against a live scene the band read as a bright vertical slot that cut
+   the verdict column out of the surface instead of framing it.
+   Every string in that column also carries --text-legible.
+   R5: no backdrop-filter anywhere in here, deliberately. */
+.rn-window {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0;
+  background: radial-gradient(120% 90% at 50% 0%, rgb(18 18 30 / 95%), rgb(6 6 13 / 98.5%) 70%);
+  mask-image: linear-gradient(
+    90deg,
+    #000 0 calc(50% - 134px),
+    rgb(0 0 0 / 66%) calc(50% - 110px),
+    rgb(0 0 0 / 66%) calc(50% + 110px),
+    #000 calc(50% + 134px)
+  );
+  transition: opacity var(--dur-takeover) var(--ease-out);
+}
+.rn-window.is-on { opacity: 1; }
+
+/* --- 3. takeover overrides ------------------------------------------------
+   --deed-row 26px: a 16px .kit-badge inside a 24px row leaves 4px of air. The
+   negotiation rows carry badges constantly ("NO LONGER ASKED", "BANKRUPTCY"),
+   so the row is lifted for the whole surface rather than per row.
+   .kit-takeover__body is a TWO-column comparison at a 24px gap. Custom-rule
+   negotiation is mine | verdict | theirs — five children and four gutters, 96px
+   of gutter at 24px. 12px returns 48px of it.
+   THE MID WIDTH IS SET BY THE DISPLAY-ONLY MIDDLE THIRD, NOT BY TASTE.
+   Interactives must stay out of frame x 297..547. A 220px mid BORDER box puts
+   the side columns at 47..295 and 549..797 — 2px clear on each side — and the
+   middle column holds no controls at all.
+   220 = 204 of content + .kit-takeover__col's 2x8px padding-inline. It used to
+   be written `flex: 0 0 204px` and reach 220 anyway, because a content-box
+   flex-basis sizes the CONTENT box; index.css now sets border-box globally, so
+   the basis is the border box and the outer number is the one to declare. At a
+   literal 204 the mid box became 320..524 and both side columns pushed 6px
+   INTO the 297..547 display-only band, breaking this rule and desynchronising
+   .rn-window's mask, whose +/-110 and +/-134 stops are derived from 220. */
+.kit-takeover.rn-tk {
+  --deed-row: 26px;
+
+  background: none;
+}
+.rn-tk .kit-takeover__body { gap: var(--sp-3); }
+.kit-takeover__col.rn-mid { flex: 0 0 220px; }
+
+/* GOTCHA (kit head is grid 1fr auto): there is no third head slot for the GO
+   tracker, and adding one would mean editing the kit.  Putting the pill in the
+   EYEBROW row costs 9.6px of head height (the 26px pill against a 14.3px
+   eyebrow line) and that comes straight off every column.  On the TITLE row it
+   costs nothing: max(28.1px title, 26px pill) is still 28.1, and the head is
+   pinned at 44px by the close button either way.
+
+   *** margin: 0 IS A BUG FIX, NOT A STYLE CHOICE — REPORTED UPSTREAM. ***
+   .kit-takeover__title is an <h2> and nothing in this app resets heading
+   margins: not kit.css, not index.css.  So it carries the UA default
+   `margin: 0.83em 0`, which at 26px is 21.6px above AND below.  Measured with
+   getBoundingClientRect: the head rendered 84.6px instead of 44, the body
+   196.4 instead of 237, and EVERY takeover column lost 40.6px of its 233 —
+   17% of the surface, silently, on every screen in the system that uses a
+   <Takeover title>.  This neutralises it for the negotiation surfaces; the
+   real fix belongs in kit.css (see the report). */
+.rn-tk .kit-takeover__title {
+  display: flex;
+  gap: var(--sp-3);
+  align-items: center;
+  justify-content: space-between;
+  margin: 0;
+}
+
+/* .kit-takeover__col stacks at 8px. Five- and seven-item stacks need 4px to
+   clear 233px of column height. Used only where measured to be necessary. */
+.kit-takeover__col.rn-tight { gap: var(--sp-1); }
+
+/* The asset-picker column does NOT scroll — its header and cash stepper stay
+   pinned and only the chip grid moves, so the control that is always needed is
+   never below the fold.  Two gaps in one column, which is why this is not just
+   --tap-gap: 6px above the grid (a caption is not a tap target) and 12px below
+   it, so the bottom chip row and the stepper's -/+ are a full --tap-gap apart.
+   THE BUDGET IS EXACT: 14.3 header + 6 + 156 grid + 6 + 6 margin + 44 stepper
+   = 232.3 of the column's 233.  At --sp-2 (8px) it came to 236.3 and, because
+   this column deliberately does not scroll, the stepper spilled straight out
+   of the body and landed on the footer's board strip. */
+.kit-takeover__col.rn-fixed {
+  gap: 6px;
+  overflow: visible;
+}
+.rn-fixed > .kit-stepper { margin-top: 6px; }
+
+/* The one column that overflows on purpose (the partnership split ledger).
+   6px, not the panel's 10px and certainly not 26px: a ledger row is 26px with
+   its 11px text centred at y 6.3..19.7, so a 26px fade blanks the whole last
+   visible row.  6px lands under the text and over the row's border only; the
+   row count in the column header does the actual telling. */
+.kit-takeover__col.rn-fade {
+  mask-image: linear-gradient(180deg, #000 0, #000 calc(100% - 6px), rgb(0 0 0 / 15%) 100%);
+  scrollbar-width: thin;
+  scrollbar-color: var(--gold-dim) transparent;
+}
+.rn-fade::-webkit-scrollbar { width: 4px; }
+.rn-fade::-webkit-scrollbar-track { background: transparent; }
+.rn-fade::-webkit-scrollbar-thumb { background: var(--gold-dim); border-radius: 2px; }
+
+/* --- 4. footer context slot ----------------------------------------------
+   .kit-takeover__foot is already flex-end / flex-end with a --tap-gap, so the
+   read-only block only needs to claim the left of the row.  It lives at frame
+   x 47..319: read-only, left half, bottom row — the quadrant the system
+   reserves for read-only content, and never a primary action.
+   .kit-turnstrip has a fixed 26px height; squeezed by the footer's flex it
+   wraps to two lines and pushes ink 5.3px above and 5px below its own border
+   box.  A status pill must never wrap. */
+.rn-ctx {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: var(--sp-1);
+  align-items: flex-start;
+  justify-content: flex-end;
+  min-width: 0;
+  margin-right: auto;
+}
+.rn-ctx .kit-turnstrip {
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+
+/* --- 5. asset chip — multi-select --------------------------------------
+   No primitive covers multi-select.  .kit-segs__item is single-choice and
+   carries neither a colour band nor a value; .kit-pod is inert and read-only.
+
+   TWO ACROSS, NOT THREE.  Three 76px chips fit the column but leave 58px of
+   label.  Two chips in a 232px column measure 108px each, 92px of label after
+   the 12/4 padding.  Even at 108px one line is not enough, so the name is a
+   FIXED TWO-LINE BOX at the 11px floor — 26px for the name, 12.65 for the
+   value, 38.7 inside a 44px chip.  Suffixes are abbreviated in the visible
+   label (shortSpaceName) so no real name overflows; the full name stays in the
+   aria-label, which is also what the tests match on.
+
+   Cost of that choice: eight assets is four rows (212px) against 156px of
+   grid, SO THE GRID SCROLLS — and the scroll cue is a COUNT, not a gradient.
+   Any fade deep enough to notice erases the price of the third row (the value
+   box sits at y 28.6..41.4 of a 44px chip), and Chrome reserves 0px for the
+   scrollbar here.  The header states the total instead, and scroll-snap
+   guarantees three WHOLE 44px chips at every rest position — 3*44 + 2*12 =
+   156, so no partial, still-tappable-looking 39px row can ever exist at rest.
+   Left padding is --row-pad so the label clears the 3px inset colour bar.
+   All shadows are inset or <=3px outward: the grid clips both axes and its 4px
+   padding-inline covers that 3px. */
+.rn-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--tap-gap);
+}
+.rn-grid-scroll {
+  flex: 0 0 auto;
+  align-content: flex-start;
+  max-height: 156px;
+  min-height: 0;
+  margin: 0 -4px;
+  padding: 0 4px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scroll-snap-type: y mandatory;
+  scrollbar-width: thin;
+  scrollbar-color: var(--gold-dim) transparent;
+}
+.rn-grid-scroll::-webkit-scrollbar { width: 4px; }
+.rn-grid-scroll::-webkit-scrollbar-track { background: transparent; }
+.rn-grid-scroll::-webkit-scrollbar-thumb { background: var(--gold-dim); border-radius: 2px; }
+.rn-chip {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  width: auto;
+  height: var(--tap-min);
+  padding: 0 4px 0 var(--row-pad);
+  border: 0;
+  border-radius: var(--r-md);
+  text-align: left;
+  cursor: pointer;
+  background: linear-gradient(180deg, rgb(28 30 48 / 62%), rgb(9 10 18 / 72%));
+  box-shadow: var(--ring-hair), var(--shadow-1);
+  scroll-snap-align: start;
+  touch-action: manipulation;
+  transition:
+    background var(--dur-feedback) var(--ease-out),
+    box-shadow var(--dur-feedback) var(--ease-out),
+    transform var(--dur-tap) var(--ease-out);
+}
+.rn-chip::before {
+  content: "";
+  position: absolute;
+  top: 8px;
+  bottom: 8px;
+  left: 4px;
+  width: 3px;
+  border-radius: 2px;
+  background: var(--gc, var(--text-3));
+}
+.rn-chip-name {
+  min-height: 26px;
+  overflow: hidden;
+  font-size: var(--text-micro);
+  font-weight: var(--fw-bold);
+  line-height: 1.15;
+  letter-spacing: var(--ls-none);
+  color: var(--text-2);
+}
+.rn-chip-val {
+  font-size: var(--text-micro);
+  font-weight: var(--fw-black);
+  line-height: 1.16;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-2);
+}
+.rn-chip.is-on {
+  background: linear-gradient(180deg, rgb(212 175 55 / 26%), rgb(9 10 18 / 84%));
+  box-shadow: var(--lift-top), var(--ring-gold), var(--shadow-1);
+}
+.rn-chip.is-on .rn-chip-name { color: var(--text); }
+.rn-chip.is-on .rn-chip-val { color: var(--gold-bright); }
+
+/* Selected AND it breaks one of my completed sets: the chip itself says so,
+   before the verdict column has to. */
+.rn-chip.is-on.is-break {
+  background: linear-gradient(180deg, rgb(229 83 61 / 28%), rgb(9 10 18 / 86%));
+  box-shadow: var(--lift-top), inset 0 0 0 2px var(--danger), var(--shadow-1);
+}
+.rn-chip.is-on.is-break .rn-chip-val { color: #ffb3a8; }
+.rn-chip[disabled] {
+  pointer-events: none;
+  background: linear-gradient(180deg, rgb(18 18 30 / 70%), rgb(9 10 18 / 70%));
+  box-shadow: inset 0 0 0 1px rgb(232 232 240 / 6%);
+}
+.rn-chip[disabled] .rn-chip-name,
+.rn-chip[disabled] .rn-chip-val { color: var(--text-3); }
+.rn-chip:active { transform: translateY(1px) scale(0.97); }
+
+/* --- 6. board strip — the functional half of "do not hide the board" -----
+   40 tiles in board order, four sides, corners taller.  Textless, so no type
+   floor applies; described to assistive tech with role=img + aria-label.  Mine
+   burn bright, other-owned sit mid, unowned drop to 42%, and the tiles this
+   negotiation touches take a gold ring.  padding-inline 6px so that ring's 6px
+   outward glow cannot reach the 47px left safe inset. */
+.rn-board {
+  display: flex;
+  gap: var(--sp-1);
+  align-items: flex-end;
+  height: 14px;
+  padding: 0 6px;
+  pointer-events: none;
+}
+.rn-board-side {
+  display: flex;
+  gap: 1px;
+  align-items: flex-end;
+}
+.rn-tile {
+  flex: 0 0 auto;
+  width: 5px;
+  height: 11px;
+  border-radius: 1px;
+  background: var(--gc, #20223a);
+  box-shadow: inset 0 0 0 1px rgb(0 0 0 / 55%);
+  filter: brightness(0.66) saturate(0.8);
+}
+.rn-tile.is-corner {
+  width: 8px;
+  height: 14px;
+  background: rgb(212 175 55 / 34%);
+  filter: none;
+}
+.rn-tile.is-mine { filter: brightness(1.5) saturate(1.25); }
+.rn-tile.is-void {
+  background: #20223a;
+  filter: brightness(0.42) saturate(0.4);
+}
+.rn-tile.is-hit {
+  height: 14px;
+  box-shadow: 0 0 0 1px var(--gold-bright), 0 0 6px 1px var(--gold-glow);
+  filter: brightness(1.65) saturate(1.3);
+}
+
+/* Inline player dot for table rows.  .kit-turnstrip__dot has a 10px/2px glow,
+   and inside a truncating span (overflow:hidden) that glow is sliced 7px on
+   the left.  This one is textless, glow-free and cannot be clipped.
+   display:inline-block IS LOAD-BEARING. This is an <i>, and it sits inside a
+   flex parent in a .rn-split row but inside a plain truncating <span> in a
+   .kit-deed__row label. An inline box ignores width and height, so in the
+   second case every player dot in the partnership and dissolve columns
+   rendered at zero size — invisible, with no layout shift to give it away. */
+.rn-dot {
+  display: inline-block;
+  flex: 0 0 auto;
+  width: 6px;
+  height: 6px;
+  margin-right: 2px;
+  vertical-align: middle;
+  border-radius: 50%;
+  background: var(--pc, var(--turn));
+  box-shadow: inset 0 0 0 1px rgb(0 0 0 / 50%);
+}
+
+/* Colour-group swatch for a READ-ONLY row.  Gap 1 in the brief: which set a
+   property belongs to IS the trade decision, so it has to survive into the
+   review columns too, not only the composer's chips. */
+.rn-swatch {
+  flex: 0 0 auto;
+  width: 4px;
+  height: 12px;
+  margin-right: 6px;
+  border-radius: 2px;
+  background: var(--gc, var(--text-3));
+  box-shadow: 0 0 6px 0 var(--gc, transparent);
+}
+
+/* --- 7. equity bar ------------------------------------------------------
+   .kit-pips counts DISCRETE items ("2 of 3"); an equity split is a continuous
+   partition of one whole across 2-3 players, which no primitive covers
+   (.kit-meter is a single ratio).  Deliberately TEXTLESS: at the 5% floor a
+   segment is 7.4px wide and any label inside it would be under the 11px floor.
+   The exact number lives in the stepper row beside it, tinted the same colour. */
+.rn-eqbar {
+  display: flex;
+  height: 16px;
+  overflow: hidden;
+  border-radius: var(--r-sm);
+  background: var(--surface-sunken);
+  box-shadow: var(--ring-hair);
+}
+.rn-eqseg {
+  flex: 0 0 auto;
+  width: calc(var(--pct, 33) * 1%);
+  min-width: 0;
+  background: var(--pc, var(--gold));
+  box-shadow: inset -1px 0 0 rgb(0 0 0 / 50%), inset 0 1px 0 rgb(255 255 255 / 22%);
+  transition: width var(--dur-swap) var(--ease-out);
+}
+.rn-eqseg:last-child { box-shadow: inset 0 1px 0 rgb(255 255 255 / 22%); }
+
+/* --- 8. wide stepper — separated decrement / increment ------------------
+   A named real-world failure: Catan Universe puts -1 almost under +1 and users
+   mis-tap constantly.  .kit-stepper already sits them 12+76+12 = 100px apart;
+   going full-width and letting the readout flex pushes them to 144px apart in
+   a 232px column.  The readout is a span, not a control, so no dead-space rule
+   applies between it and either button.
+   Padding 8, not 12: at 12px only 120px is left for label + gap + value, and
+   "CASH YOU ADD" (83) + 8 + "£0.000M" (55) = 146 painted the label over. */
+.kit-stepper.rn-step {
+  display: flex;
+  gap: 0;
+  width: 100%;
+  padding: 0;
+}
+.rn-step .kit-stepper__btn { flex: 0 0 var(--tap-min); }
+.rn-step .kit-stepper__val {
+  display: flex;
+  flex: 1 1 auto;
+  gap: var(--sp-2);
+  align-items: center;
+  justify-content: space-between;
+  min-width: 0;
+  padding: 0 var(--sp-2);
+  text-align: left;
+}
+.rn-step-key {
+  display: flex;
+  gap: 4px;
+  align-items: center;
+  min-width: 0;
+  font-size: var(--text-micro);
+  font-weight: var(--fw-bold);
+  text-transform: uppercase;
+  letter-spacing: var(--ls-wide);
+  white-space: nowrap;
+  color: var(--text-2);
+}
+.rn-step-num {
+  font-size: var(--text-glance-lg);
+  font-weight: var(--fw-black);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  color: var(--gold-bright);
+}
+
+/* --- 9. consequence callout ---------------------------------------------
+   Brief gap 4: if an offer breaks your monopoly, say so LOUDLY.  .kit-badge
+   tops out at 16px / 11px, which cannot carry "this destroys your orange
+   monopoly" with the weight it deserves.  13px black head + 11px body, a 2px
+   inset accent bar, padding-inline --row-pad so the head clears the bar.
+   Inset shadows only: zero overhang inside a scrolling column (R1). */
+.rn-warn {
+  padding: 6px var(--row-pad);
+  border-radius: var(--r-sm);
+  background: linear-gradient(180deg, rgb(229 83 61 / 24%), rgb(229 83 61 / 8%));
+  box-shadow: inset 0 0 0 1px rgb(229 83 61 / 62%), inset 2px 0 0 var(--danger);
+}
+.rn-warn-head {
+  font-size: var(--text-label);
+  font-weight: var(--fw-black);
+  line-height: var(--lh-tight);
+  text-transform: uppercase;
+  letter-spacing: var(--ls-wide);
+  color: #ffb3a8;
+  text-shadow: var(--text-legible);
+}
+.rn-warn-body {
+  margin-top: 2px;
+  font-size: var(--text-micro);
+  font-weight: var(--fw-semibold);
+  line-height: var(--lh-snug);
+  color: #e4cdc9;
+  text-shadow: var(--text-legible);
+}
+.rn-warn.is-good {
+  background: linear-gradient(180deg, rgb(70 177 106 / 24%), rgb(70 177 106 / 8%));
+  box-shadow: inset 0 0 0 1px rgb(70 177 106 / 62%), inset 2px 0 0 var(--success);
+}
+.rn-warn.is-good .rn-warn-head { color: #9ff0bb; }
+.rn-warn.is-good .rn-warn-body { color: #cae4d5; }
+.rn-warn.is-warn {
+  background: linear-gradient(180deg, rgb(232 163 61 / 24%), rgb(232 163 61 / 8%));
+  box-shadow: inset 0 0 0 1px rgb(232 163 61 / 62%), inset 2px 0 0 var(--warn);
+}
+.rn-warn.is-warn .rn-warn-head { color: var(--warn-bright); }
+.rn-warn.is-warn .rn-warn-body { color: #e8dcc6; }
+
+/* --- 10. GO-advance tracker ---------------------------------------------
+   Brief gap 3: an active GO advance silently eats future income, so the
+   tracker is deliberately REDUNDANT — this pill sits in the head of every
+   negotiation takeover, so no surface where money moves can be read without
+   it.  It uses .kit-pips (the system's mandated flat count fallback) for the
+   remaining skips rather than inventing a second counting idiom.
+   No outward shadow at all: mounted in .kit-zone-top the pill starts at safe
+   x 0 and an 11px glow would cross the 47px left safe inset. */
+.rn-golock {
+  display: inline-flex;
+  flex: 0 0 auto;
+  gap: var(--sp-2);
+  align-items: center;
+  height: 26px;
+  padding: 0 var(--sp-3) 0 var(--sp-2);
+  border-radius: var(--r-pill);
+  background: linear-gradient(90deg, rgb(232 163 61 / 32%), rgb(8 8 15 / 62%) 84%);
+  box-shadow: inset 0 0 0 1px rgb(232 163 61 / 66%);
+  pointer-events: none;
+}
+.rn-golock-cap {
+  font-size: var(--text-micro);
+  font-weight: var(--fw-black);
+  text-transform: uppercase;
+  letter-spacing: var(--ls-wider);
+  color: var(--warn-bright);
+  text-shadow: var(--text-legible);
+}
+.rn-golock-val {
+  font-size: var(--text-label);
+  font-weight: var(--fw-black);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  color: var(--text);
+  text-shadow: var(--text-legible);
+}
+.rn-golock-val.is-warn { color: var(--warn); }
+.rn-golock-sep {
+  flex: 0 0 auto;
+  width: 1px;
+  height: 13px;
+  background: rgb(232 232 240 / 26%);
+}
+.kit-pip.rn-pip-spent {
+  background: repeating-linear-gradient(45deg, rgb(232 232 240 / 22%) 0 3px, rgb(0 0 0 / 55%) 3px 6px);
+  box-shadow: inset 0 0 0 1px rgb(0 0 0 / 55%);
+}
+.kit-pip.rn-pip-due {
+  background: var(--warn);
+  box-shadow: 0 0 8px 1px rgb(232 163 61 / 70%), inset 0 1px 0 rgb(255 255 255 / 40%);
+}
+
+/* --- 11. the explicit confirm -------------------------------------------
+   Policy: in-place <Arm> / <Hold> everywhere EXCEPT accept-trade and
+   accept-deal, which are irreversible asset transfers and earn a real
+   confirmation step.  It is a flat scrim plus a plate inside the layer, not a
+   nested surface: no second backdrop-filter (R5), no new z-band.
+
+   GEOMETRY — and the trap in it.  This is inset:0 inside .rn-layer, which is
+   the whole frame, NOT the takeover's 750px content box.  At padding-right 8px
+   the card's right edge measured 836 — 39px past the right safe line.  So:
+     .rn-confirm  padding-right max(--sa-r, 14px) = 47  -> card right edge 797
+     .rn-confirm-card margin-right --badge-reserve = 8  -> card right edge 789,
+   so --shadow-2's 8px tail stops exactly ON the safe line and nothing, shadow
+   included, crosses it.  That is the --badge-reserve pattern .kit-zone-act
+   already uses, not padding stacked on an inset.
+   Card 320 wide -> content right 773; the 222px button row right-aligned lands
+   at x 551..773, entirely clear of the display-only middle third (ends 547).
+   At a 24px inset the BACK button landed at 535 and straddled that edge. */
+.rn-confirm {
+  position: absolute;
+  inset: 0;
+  z-index: calc(var(--z-takeover) + 1);
+  display: none;
+  align-items: center;
+  justify-content: flex-end;
+  padding-right: max(var(--sa-r), 14px);
+  background: rgb(4 4 10 / 84%);
+}
+.rn-confirm.is-on {
+  display: flex;
+  pointer-events: auto;
+}
+.rn-confirm-card {
+  width: 320px;
+  margin-right: var(--badge-reserve);
+  padding: var(--sp-4);
+  border-radius: var(--r-lg);
+  background: var(--surface-panel);
+  box-shadow: var(--ring-gold), var(--shadow-2);
+  animation: rn-confirm-in var(--dur-swap) var(--ease-out);
+}
+
+/* R2 + R4: transform only, and it grows INWARD into place. */
+@keyframes rn-confirm-in {
+  from { transform: scale(0.96); }
+}
+.rn-confirm-title {
+  font-size: var(--text-hero);
+  font-weight: var(--fw-black);
+  line-height: var(--lh-tight);
+  letter-spacing: var(--ls-tight);
+}
+.rn-confirm-sub {
+  margin-bottom: 2px;
+  font-size: var(--text-micro);
+  font-weight: var(--fw-bold);
+  text-transform: uppercase;
+  letter-spacing: var(--ls-widest);
+  color: var(--gold);
+}
+.rn-confirm-rows { margin-top: var(--sp-2); }
+.rn-confirm-row {
+  display: flex;
+  gap: var(--tap-gap);
+  justify-content: flex-end;
+  margin-top: var(--sp-3);
+}
+
+/* --- 12. per-partner split row -----------------------------------------
+   The server emits PARTNERSHIP_RENT_SPLIT and PARTNERSHIP_BUILD_COST_SPLIT
+   with a per-player amount each.  That is three numbers per partner, which no
+   two-slot primitive (.kit-deed__row) can hold.
+   Measured failure first time round: the amount slots held a full <Money>,
+   whose min-content width is ~52px, and a flex item's default min-width:auto
+   would not let it shrink to its 46px basis — so it stole 12.13px from the
+   name and "ARSLAN" was truncated.  The amounts are bare tabular numerals with
+   the unit stated once in the caption above.
+   232px column: 12 + 82 name + 8 + 30 pct + 8 + 36 + 8 + 36 + 12 = 232.
+   The dot sits OUTSIDE the truncating span so it can never be clipped. */
+.rn-split {
+  display: flex;
+  gap: var(--sp-2);
+  align-items: center;
+  min-height: 26px;
+  padding-inline: var(--row-pad);
+  border-bottom: 1px solid rgb(232 232 240 / 8%);
+}
+.rn-split-name {
+  display: flex;
+  flex: 1 1 auto;
+  gap: 4px;
+  align-items: center;
+  min-width: 0;
+  font-size: var(--text-micro-lg);
+  font-weight: var(--fw-bold);
+  text-transform: uppercase;
+  letter-spacing: var(--ls-wide);
+  color: var(--text);
+}
+.rn-split-pct {
+  flex: 0 0 30px;
+  font-size: var(--text-micro-lg);
+  font-weight: var(--fw-black);
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+  color: var(--gold-bright);
+}
+.rn-split-amt {
+  flex: 0 0 38px;
+  min-width: 0;
+  font-size: var(--text-micro-lg);
+  font-weight: var(--fw-black);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: var(--ls-tight);
+  text-align: right;
+}
+.rn-split-amt.is-in { color: var(--success-bright); }
+.rn-split-amt.is-out { color: #ffa79b; }
+
+/* --- 13. the receiver's cheap expressive replies -----------------------
+   Brief gap 6.  A one-way "guess what I want" flow is the named failure in
+   Catan Universe and Pokemon TCG Pocket; players asked for exactly "need more"
+   and "not interested", so the receiver gets both without opening a counter.
+   flex:1 1 0 forces the pair to share the column exactly: at natural width
+   they measure 253px in a 252px column and the <Arm>'s ring overhangs the
+   scrolling column's right edge by 1.16px. */
+.rn-qr {
+  display: flex;
+  gap: var(--tap-gap);
+}
+.rn-qr > .kit-btn,
+.rn-qr > .kit-arm {
+  flex: 1 1 0;
+  min-width: 0;
+  padding-inline: var(--sp-2);
+}
+
+/* --- 14. small utilities ------------------------------------------------ */
+.kit-set-cap.rn-cap0 { padding-left: 0; }
+.rn-kv {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+}
+.rn-kv-key {
+  font-size: var(--text-micro);
+  font-weight: var(--fw-bold);
+  text-transform: uppercase;
+  letter-spacing: var(--ls-wider);
+  color: var(--text-2);
+  text-shadow: var(--text-legible);
+}
+.rn-hdr {
+  display: flex;
+  flex: 0 0 auto;
+  gap: var(--sp-2);
+  align-items: baseline;
+  justify-content: space-between;
+}
+.rn-ledger {
+  display: flex;
+  gap: var(--sp-2);
+  align-items: center;
+  justify-content: space-between;
+  min-height: 26px;
+  padding-inline: var(--row-pad);
+  border-bottom: 1px solid rgb(232 232 240 / 8%);
+}
+.rn-ledger-turn {
+  flex: 0 0 30px;
+  font-size: var(--text-micro);
+  font-weight: var(--fw-bold);
+  font-variant-numeric: tabular-nums;
+  color: var(--gold);
+}
+.rn-ledger-body {
+  flex: 1 1 auto;
+  overflow: hidden;
+  font-size: var(--text-micro);
+  font-weight: var(--fw-semibold);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-2);
+}
+.rn-trunc {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.rn-empty {
+  padding: 6px var(--row-pad);
+  font-size: var(--text-micro);
+  font-weight: var(--fw-semibold);
+  text-transform: uppercase;
+  letter-spacing: var(--ls-wider);
+  color: var(--text-3);
+}

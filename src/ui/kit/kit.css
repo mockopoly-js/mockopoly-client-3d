@@ -1,0 +1,1834 @@
+/* ============================================================================
+   MOCKOPOLY UI KIT — "DIEGETIC MINIMAL", ported to production
+   ----------------------------------------------------------------------------
+   Source of truth: scratchpad/mockups/diegetic.css (2,905 lines, device-verified
+   at 844x390 on iPhone 13 Pro landscape). This file is the production subset:
+   the token layer plus every primitive the app actually needs, with the seven
+   bugs the mockup batches found FIXED rather than ported forward.
+
+   HOW THIS FILE IS SCOPED — read before you add anything
+   ------------------------------------------------------
+   It contains EXACTLY three kinds of rule:
+       :root { --token: … }        custom properties, inert until used
+       .kit-*                      primitive classes, prefixed, no collisions
+       @keyframes kit-*            likewise prefixed
+   There is deliberately NO element selector (no `button{}`, no `body{}`, no
+   `*{}`). The legacy screens are 100% inline styles and must keep rendering
+   byte-identically while they are migrated one at a time. Adding a bare
+   element selector here WILL restyle un-migrated screens. Don't.
+
+   HOW TO CONSUME IT
+   -----------------
+   Styling from CSS:     className="kit-btn kit-btn--primary"
+   Styling from inline:  style={{ padding: KIT.sp3, color: KIT.text2 }}
+                         (tokens.ts exports every token as a `var(--x)` string,
+                          which React inline styles accept as-is — no build
+                          step, no CSS-in-JS, nothing to install)
+   Values JS needs:      TAP_MIN, FS_PX.glance, PANEL_W … real numbers, and
+                         kit.tokens.test.ts asserts they equal the CSS.
+
+   ============================================================================
+   THE FIVE HARD RULES. Every one of these is a bug that already shipped.
+   ============================================================================
+
+   R1. NO CHILD MAY OVERHANG A CLIPPING ANCESTOR.
+       A clipping ancestor beats z-index — nothing escapes overflow:hidden —
+       and `overflow-y:auto` clips the X AXIS TOO, because once one axis is
+       non-visible the other computes from `visible` to `auto`. It showed up
+       three times in different disguises: the gold count badge sliced along a
+       button's corner, the turn/hold rings losing their outer edge, and the
+       completed-monopoly pill losing its left cap inside a scrolling column.
+       ENFORCED BY: `.kit-fx-clip` (§5.2). Controls never set overflow
+       themselves; decorations that must be clipped go inside .kit-fx-clip, so
+       badges/dots/rings stay free to overhang. <Button> puts sheen + clock fill
+       inside the clip and badge + dot outside it for you — the prop shape makes
+       the wrong nesting unreachable.
+       CLIPPING OWNERS IN THIS KIT, and what each may host:
+         .kit-panel__body    scroll + mask fade   gutters 34/47px > any overhang
+         .kit-takeover__col  scroll (clips x!)    padding-inline 8px for glows
+         .kit-eventlog__list max-height collapse  no overhanging children
+         .kit-meter          own child, no overhang
+         .kit-fx-clip        the ONLY thing that clips a control
+       NOT clipping, overhangs are safe: .kit-btn .kit-hold .kit-arm .kit-pod
+       .kit-set .kit-field .kit-segs .kit-deed .kit-panel__head
+
+   R2. ENTRANCE ANIMATIONS TRAVEL INWARD.
+       An outward entrance flies through the frame clip. The turn strip is
+       anchored at the top of the safe box, so `from{translateY(-10px)}` pushed
+       it above the frame edge where overflow:hidden sliced it for 250ms on
+       every screen load. The event log sits at x=0 of the safe box, so a
+       negative X translate slid it into the 47px bezel inset.
+       ENFORCED BY: the only entrance keyframes in this file are kit-in-top /
+       kit-in-left / kit-in-bottom / kit-in-right, each named for the EDGE IT IS
+       ANCHORED TO and each travelling inward from it. There is no outward
+       entrance available to pick by mistake.
+
+   R3. NEVER USE `opacity` TO DE-EMPHASISE TEXT.
+       Opacity multiplies a glyph's text-shadow into a faint smeared duplicate.
+       The client reported "a second, semi-transparent text node overlapping" on
+       the money currency mark; the audit confirmed exactly that, with no
+       duplicated node and no frozen animation involved.
+       USE SIZE, WEIGHT, OR A SOLID COLOUR. Never alpha.
+       ENFORCED BY: no text-bearing selector in this file carries `opacity`, and
+       kit.rules.test.ts fails the build if one is added. The de-emphasis API is
+       colour: --text (primary) / --text-2 (secondary) / --text-3 (decorative,
+       disabled glyphs, locked rows — never body copy).
+
+   R4. FILLED ANIMATIONS ANIMATE `transform`, NEVER `opacity`.
+       A throttled, paused or backgrounded frame can freeze an
+       `animation: … both/forwards` mid-flight and leave glance-critical type
+       semi-transparent. A gold wordmark rendered dark olive and stayed there.
+       If you need a fade, use a `transition` to a DECLARED END STATE (which
+       cannot freeze — the end state is in the stylesheet), not a filled
+       animation, and never on hero type.
+       ENFORCED BY: kit.rules.test.ts parses every @keyframes block reached by
+       an `animation:` shorthand containing `both` or `forwards` and fails if it
+       touches opacity. Ambient INFINITE loops may animate opacity — they always
+       come back.
+
+   R5. NO NESTED `backdrop-filter`. One blurred layer per screen, maximum.
+       Stacking a full-viewport blurred scrim over already-blurred panels blanks
+       the page in Chrome's software compositor and is a known mobile-Safari
+       performance cliff.
+         .kit-panel   blurs (it is the one detail surface)
+         .kit-toast   blurs (small, and never co-present with a panel by design)
+         .kit-takeover DOES NOT blur — it is opaque enough not to need one
+         .kit-scrim   never blurs, under any circumstances
+       ENFORCED BY: <BlurScope> in React (a nested blurring primitive detects
+       the ancestor and downgrades itself to an opaque fill automatically) AND
+       the guard selectors in §19 as belt-and-braces.
+
+   ============================================================================
+   THE SEVEN SYSTEM BUGS FIXED HERE (not ported forward)
+   ============================================================================
+   B1  .arm[disabled] was unstyled — a disabled two-stage confirm rendered fully
+       lit but inert. Now styled, and its timer/confirm layers are neutralised.
+   B2  --deed-row was scoped to .deed, so a bare deed row elsewhere fell back to
+       `height:` with no value and collapsed to its 17.2px line box. Now on
+       :root.
+   B3  .deed__row.is-locked used opacity on text (R3). Now a solid --text-3.
+   B4  .deed__row was fixed-height, so a wrapping label spilled across the
+       hairlines. Label is now white-space:nowrap + ellipsis.
+   B5  .panel__body had no bottom padding and relied entirely on a footer for
+       safe-area clearance; a footer-less panel breached the bottom inset. The
+       body now carries its own inset clearance when there is no footer.
+   B6  .pod.is-out / .is-offline used opacity on a text-bearing box (R3). Now a
+       solid colour + line-through (the treatment .badge--out already shipped)
+       and a saturation filter on the non-text chrome.
+   B7  A scale() on a container entrance shrinks every tap target inside it for
+       the duration — a 44px button measured 42.2px mid-animation. .takeover's
+       scale(1.015) entrance is gone; it fades via a transition to a declared
+       end state (permitted by R4) and never scales.
+
+   ============================================================================
+   DELIBERATE OMISSIONS from diegetic.css
+   ============================================================================
+   §1.9 scene materials, §1.19 camera/board geometry, §1.20 projection factors,
+   §8 .scene, §9 .board, §10 .board__at, §11 .rail, §12 .pot, §13 .plate--world:
+   all of that models a FAKE CSS 3D board. This app has a real one in R3F. The
+   camera lives in src/board/cameraConstants.ts and the sky in a shader; a
+   second copy here would be a drifting lie. Flat .kit-plate is NOT ported
+   either — world-anchored nameplates need the real projection matrix, so they
+   belong to the R3F layer, not to a CSS kit.
+   ============================================================================ */
+
+
+/* ============================================================================
+   1. ANIMATABLE CUSTOM PROPERTIES
+   Registered so they can be tweened by CSS animation (the hold ring and the
+   turn clock sweep). Safari 16.4+, Chrome 85+, Firefox 128+. Degrades to a
+   static ring where unsupported — the linear fill carries the progress.
+   ============================================================================ */
+@property --turn-p { syntax: '<number>'; inherits: false; initial-value: 100; }
+@property --hold-p { syntax: '<number>'; inherits: false; initial-value: 0; }
+
+
+/* ============================================================================
+   2. TOKENS
+   ============================================================================ */
+:root {
+  /* --- 2.1 surfaces ------------------------------------------------------ */
+  --surface-void: #08080f;                  /* page / letterbox, deepest black */
+  --surface-panel: #12121e;                 /* opaque panel fill */
+  --surface-raised: #1a1a2b;                /* raised control fill */
+  --surface-sunken: #0c0c16;                /* inset fill: inputs, wells, tracks */
+  --surface-glass: rgb(12 13 24 / 78%);     /* translucent chrome over the world */
+  --surface-glass-soft: rgb(12 13 24 / 52%);/* lighter glass, read-only plates */
+  --surface-scrim: rgb(4 4 10 / 46%);       /* dim behind the right panel */
+  --surface-scrim-heavy: rgb(4 4 10 / 78%); /* dim behind a full-screen takeover */
+
+  /* --- 2.2 borders ------------------------------------------------------- */
+  --border: #2a2a40;
+  --border-soft: rgb(42 42 64 / 62%);
+  --border-lit: rgb(232 232 240 / 14%);
+  --border-w: 1px;
+  --border-w-2: 2px;
+
+  /* --- 2.3 text ---------------------------------------------------------- */
+  --text: #e8e8f0;                          /* primary, all legible copy */
+  --text-2: #8888a0;                        /* secondary; 5.4:1 on --surface-panel */
+  --text-3: #555570;                        /* 2.6:1 — DECORATIVE ONLY. dividers,
+                                               disabled glyphs, locked rows.
+                                               never body copy. */
+  --text-on-gold: #12121e;
+  --text-on-accent: #08080f;
+
+  /* --- 2.4 accent -------------------------------------------------------- */
+  --gold: #d4af37;
+  --gold-bright: #f0d060;
+  --gold-dim: rgb(212 175 55 / 34%);
+  --gold-glow: rgb(212 175 55 / 42%);
+
+  /* --- 2.5 semantic ------------------------------------------------------ */
+  --success: #46b16a;
+  --success-bright: #6fe097;
+  --warn: #e8a33d;
+  --warn-bright: #ffc266;
+  --danger: #e5533d;
+  --danger-bright: #ff7a66;
+  --info: #6aa9f0;
+
+  /* --- 2.6 player token colours (mirror of TOKEN_HEX in constants/theme) -- */
+  --p-red: #e74c3c;
+  --p-blue: #3498db;
+  --p-green: #2ecc71;
+  --p-yellow: #f1c40f;
+  --p-purple: #9b59b6;
+  --p-orange: #e67e22;
+  --p-cyan: #1abc9c;
+  --p-pink: #e91e8c;
+
+  /* --- 2.7 colour groups (mirror of COLOR_GROUP_HEX) --------------------- */
+  --grp-brown: #8d5a3c;
+  --grp-light-blue: #8fd3ef;
+  --grp-pink: #e05aa6;
+  --grp-orange: #ef8a3c;
+  --grp-red: #e5473b;
+  --grp-yellow: #f4cf3a;
+  --grp-green: #3f9b57;
+  --grp-dark-blue: #2f5fd0;
+  --grp-railroad: #2b2b2b;                  /* true value; near-black */
+  --grp-utility: #b9ad93;
+  --grp-railroad-lift: #4a4a58;             /* use INSTEAD of --grp-railroad on
+                                               dark surfaces, where #2b2b2b
+                                               vanishes */
+
+  /* --- 2.8 turn colour ---------------------------------------------------
+     Set --turn once (on the app root, or per-subtree) and every light cue
+     follows. tokens.ts: turnStyle(hex) returns the style object. */
+  --turn: var(--p-blue);
+  --turn-soft: color-mix(in srgb, var(--turn) 30%, transparent);
+  --turn-faint: color-mix(in srgb, var(--turn) 13%, transparent);
+
+  /* --- 2.9 type — 4 functional roles + 1 display exception ---------------
+     *** THE SCALE IS IN RENDERED px. 11px IS AN ABSOLUTE FLOOR. ***
+     Calibration: iOS system body text is 17 CSS px, tab-bar labels are 10.
+     An earlier pass used 18/22/24/26/30/54 by misreading TV-calibrated device
+     -pixel figures as CSS px; it read as a television UI on a 390px viewport. */
+  --text-micro: 11px;                       /* FLOOR. counts, badges, timestamps */
+  --text-micro-lg: 12px;
+  --text-label: 13px;                       /* player names, panel headings */
+  --text-label-lg: 14px;
+  --text-glance: 15px;                      /* opponent cash, rent amounts */
+  --text-glance-lg: 17px;                   /* glance values that must win a scan */
+  --text-hero: 24px;                        /* my cash, primary label, titles */
+  --text-hero-lg: 26px;                     /* the single most important number */
+  --text-display: 32px;                     /* BRAND ONLY. never functional UI */
+
+  --lh-flat: 1;
+  --lh-tight: 1.08;
+  --lh-snug: 1.22;
+  --lh-body: 1.38;
+
+  --fw-regular: 400;
+  --fw-medium: 500;
+  --fw-semibold: 600;
+  --fw-bold: 700;
+  --fw-black: 800;
+
+  /* Letter-spacing is SMALL at this scale. An earlier pass tracked 2.6-5px at
+     18-19px, which is why headings collided. Caps get tracking; lowercase does
+     not. */
+  --ls-tight: -0.2px;
+  --ls-none: 0;
+  --ls-wide: 0.4px;
+  --ls-wider: 0.8px;
+  --ls-widest: 1.6px;
+
+  --font: 'Baloo 2', ui-rounded, system-ui, -apple-system, 'SF Pro Rounded', 'Segoe UI', roboto, sans-serif;
+  --font-mono: ui-monospace, 'SF Mono', menlo, consolas, monospace;
+
+  /* --- 2.10 spacing — 4px base ------------------------------------------ */
+  --sp-hair: 2px;                           /* icon-to-label, pip gaps */
+  --sp-1: 4px;                              /* inside chips and badges */
+  --sp-2: 8px;                              /* tight stacks, list row gaps */
+  --sp-3: 12px;                             /* component padding; = --tap-gap */
+  --sp-4: 16px;                             /* between HUD clusters */
+  --sp-5: 20px;                             /* section padding */
+  --sp-6: 24px;
+  --sp-7: 32px;                             /* panel gutters */
+  --sp-8: 40px;                             /* takeover gutters */
+  --sp-9: 48px;                             /* full-screen rhythm */
+
+  /* --- 2.11 radii -------------------------------------------------------- */
+  --r-xs: 4px;
+  --r-sm: 6px;
+  --r-md: 10px;
+  --r-lg: 14px;
+  --r-xl: 18px;
+  --r-2xl: 22px;
+  --r-pill: 999px;
+
+  /* --- 2.12 elevation ---------------------------------------------------- */
+  --shadow-1: 0 2px 6px rgb(0 0 0 / 42%);
+  --shadow-2: 0 6px 16px rgb(0 0 0 / 50%);
+  --shadow-3: 0 12px 28px rgb(0 0 0 / 58%);
+  --shadow-4: 0 20px 48px rgb(0 0 0 / 68%);
+  --shadow-5: 0 32px 72px rgb(0 0 0 / 80%);
+  --lift-top: inset 0 1px 0 rgb(232 232 240 / 13%);
+  --ring-hair: inset 0 0 0 1px rgb(232 232 240 / 10%);
+  --ring-gold: inset 0 0 0 1px rgb(212 175 55 / 55%);
+  --ring-focus: inset 0 0 0 2px var(--gold-bright);
+  --glow-gold: 0 0 24px 3px var(--gold-glow);
+  --glow-turn: 0 0 30px 4px var(--turn-soft);
+  --text-legible: 0 1px 2px rgb(0 0 0 / 92%), 0 0 12px rgb(0 0 0 / 78%);
+                                            /* MANDATORY on any text sitting on
+                                               the 3D world with no panel behind */
+  --text-carve: 0 1px 0 rgb(0 0 0 / 92%), 0 -1px 0 rgb(255 255 255 / 7%);
+
+  /* --- 2.13 blur --------------------------------------------------------- */
+  --blur-sm: 6px;
+  --blur-md: 14px;
+  --blur-lg: 24px;
+
+  /* --- 2.14 z-index — never write a raw z-index -------------------------
+     REBASED +100 from the mockup's 0..100 scale. The legacy inline styles this
+     kit is replacing already occupy 30..60 (PlayerPods 30, ToastLayer 45,
+     PropertyCardModal 50-55, GameScene HUD 60), and the dev/loading overlays
+     occupy 9000..9999. A kit surface must win against the legacy UI it
+     replaces, and must still lose to LoadingScreen and the debug panels. All
+     the mockup's RELATIVE ordering is preserved exactly. */
+  --z-scene: 100;                           /* the R3F canvas layer */
+  --z-scene-fx: 102;                        /* wash, vignette, edge fades */
+  --z-world: 104;                           /* world-anchored UI, leader lines */
+  --z-hud-under: 108;                       /* read-only HUD behind the cluster */
+  --z-hud: 110;                             /* HUD default */
+  --z-hud-over: 114;                        /* action cluster, turn strip */
+  --z-toast: 120;                           /* toasts, event log expanded */
+  --z-scrim: 130;                           /* panel scrim */
+  --z-panel: 134;                           /* right slide-in panel */
+  --z-takeover: 140;                        /* full-screen takeover */
+  --z-guides: 190;                          /* constraint guide overlay */
+  --z-dev: 200;                             /* dev strip */
+
+  /* --- 2.15 motion — cinematic, not bouncy -------------------------------
+     150-250ms feedback. 300-450ms scene/light. Overshoot is reserved strictly
+     for celebratory beats (--ease-celebrate). See R4. */
+  --dur-instant: 100ms;
+  --dur-tap: 150ms;
+  --dur-feedback: 200ms;
+  --dur-swap: 250ms;
+  --dur-scene: 320ms;
+  --dur-panel: 400ms;
+  --dur-takeover: 450ms;
+  --dur-light: 900ms;
+  --dur-hold: 1200ms;
+  --dur-turn: 75s;
+  --dur-turn-warn: 20s;
+
+  --ease-out: cubic-bezier(0.2, 0, 0, 1);   /* DEFAULT. everything entering */
+  --ease-io: cubic-bezier(0.4, 0, 0.2, 1);  /* ambient loops, breathing */
+  --ease-in: cubic-bezier(0.4, 0, 1, 1);    /* things leaving */
+  --ease-celebrate: cubic-bezier(0.34, 1.56, 0.64, 1); /* OVERSHOOT — wins only */
+  --ease-linear: linear;                    /* clocks, progress, fuses */
+
+  /* --- 2.16 safe area ----------------------------------------------------
+     *** DEVICE TRUTH ONLY. NO DESIGN VALUE IS BAKED IN HERE. ***
+
+     These were `max(47px, env(…))` / `max(21px, env(…))`. 47 is one phone's
+     notch inset (iPhone 13 Pro landscape) wearing a design token's clothes, and
+     as a FLOOR it did two wrong things at once. It could never be beaten: every
+     consumer writes `max(var(--sa-l), 14px)`, and 47 wins that every time, so
+     the 14px design gutter was dead code and a desktop browser with no notch
+     burned 47px a side out of 844. And it could never help either: a device
+     reporting more than 47 just gets the bigger number, which is what `max()`
+     at the call site already does. A floor that cannot lose and cannot help is
+     a hardcoded device measurement, so it is gone.
+
+     The token is now what the device says and nothing else. THE DESIGN GUTTER
+     LIVES AT THE CALL SITE, which is where it can be chosen per surface:
+
+         padding-right: max(var(--sa-r), var(--panel-pad));   <- do this
+         padding-right: var(--sa-r);                          <- 0 on desktop
+
+     A bare `var(--sa-*)` now resolves to 0 where there is no inset, so every
+     consumer must pair it with a pad unless it genuinely wants to sit flush
+     against the safe edge (`.kit-safe`'s top does — see §3).
+
+     *** THEY STILL DO NOT STACK WITH INTERIOR PADDING. ***
+     max(var(--sa-r), 14px). NEVER calc(var(--sa-r) + 14px). Stacking gave a
+     61px right gutter and only 285px of content in a 392px panel — 15.6% dead
+     space, and the deed's colour band visibly stopped short of the edge.
+     tokens.ts exports sa('r', 14) which emits the max() form for you.
+
+     The `, 0px` fallback is for the non-iOS engines that do not define the
+     variable at all; without it the whole declaration would be invalid. */
+  --sa-l: env(safe-area-inset-left, 0px);
+  --sa-r: env(safe-area-inset-right, 0px);
+  --sa-t: env(safe-area-inset-top, 0px);
+  --sa-b: env(safe-area-inset-bottom, 0px);
+
+  /* --- 2.17 layout zones + tap geometry ---------------------------------
+     WHY THESE NUMBERS: Apple HIG minimum 44x44pt, Material 48x48dp, real phone
+     game labels 14-17px. An earlier pass used 64/56/16 with a 24px label and
+     was called "too big" three times, correctly: 64px box + 24px label is a
+     television button; 48/44 with a 17/15px label is a phone button. Radii were
+     rebased with them — a 22px radius drawn for a 64px box reads bloated on 48.
+     DO NOT RAISE THESE. */
+  --zone-read-w: 250px;                     /* left read-only column */
+  --zone-mid-x1: 250px;                     /* middle third (no interactives) */
+  --zone-mid-x2: 500px;
+  --zone-act-w: 250px;                      /* right interactive column */
+  --panel-w: 392px;                         /* right panel, INCL. the safe inset */
+  --tap-min: 44px;                          /* routine floor = Apple HIG 44x44pt */
+  --tap-primary: 48px;                      /* primary turn action */
+  --tap-lg: 52px;                           /* the one oversized icon button */
+  --tap-gap: 12px;                          /* dead space between interactives */
+  --btn-fs-primary: var(--text-glance-lg);  /* 17px — primary CTA label */
+  --btn-fs: var(--text-glance);             /* 15px — every other button label */
+  --btn-w-primary: 176px;                   /* min-width of the primary CTA */
+  --row-pad: 12px;                          /* inline padding for ANY full-bleed
+                                               row. Must exceed the 2px inset
+                                               accent bar on an active row so the
+                                               label never sits on it. */
+  --badge-reserve: 8px;                     /* space the action cluster holds back
+                                               so a corner badge can overhang
+                                               without breaching the safe inset */
+  --deed-row: 24px;                         /* B2: on :root, NOT scoped to .deed.
+                                               A bare deed row outside a .deed
+                                               used to collapse to 17.2px. */
+}
+
+
+/* ============================================================================
+   3. LAYOUT — safe box + zones
+   ----------------------------------------------------------------------------
+   .kit-safe is pointer-events:none so the 3D world stays tappable through the
+   gaps; direct children get events back.
+   LEFT HALF IS READ-ONLY, RIGHT HALF IS INTERACTIVE. Two-thumb landscape grip
+   mis-taps ~12.85% left vs ~9.75% right; bottom-left is the worst quadrant.
+   Opponent info left, all primary actions bottom-right.
+   ============================================================================ */
+/* THE TOP IS THE ONE DELIBERATELY UNPADDED EDGE (§2.16 requires saying why).
+   The HUD is anchored to the top of the safe area — the turn strip is the first
+   thing in the frame and carries its own offset — and in landscape the top
+   inset is genuinely 0 on every phone that is not a Dynamic Island device. A
+   design pad here would push the strip 12px down the screen on every device for
+   no reason. `var(--sa-t)` still tracks a real top inset when there is one.
+   The other three take max(inset, --sp-3): on device the inset always wins
+   (47/47/21 > 12) so nothing moves, and on desktop the frame gets a sane 12px
+   margin instead of the 47px the old floor forced. */
+.kit-safe {
+  position: absolute;
+  inset: var(--sa-t) max(var(--sa-r), var(--sp-3)) max(var(--sa-b), var(--sp-3)) max(var(--sa-l), var(--sp-3));
+  z-index: var(--z-hud);
+  pointer-events: none;
+  font-family: var(--font);
+}
+.kit-safe > * { pointer-events: auto; }
+.kit-safe--inert, .kit-safe--inert > * { pointer-events: none; }
+
+/* Left read-only column. Never put a primary action here. */
+.kit-zone-read {
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: var(--zone-read-w);
+  z-index: var(--z-hud-under);
+  pointer-events: none;
+}
+.kit-zone-read > * { pointer-events: auto; }
+
+/* Right interactive column, bottom-aligned. All primary actions live here.
+   right is --badge-reserve, not 0: a corner count badge overhangs its button by
+   5px, and at right:0 that 5px crossed into the 47px right safe inset. */
+.kit-zone-act {
+  position: absolute;
+  right: var(--badge-reserve);
+  bottom: 0;
+  width: var(--zone-act-w);
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: var(--tap-gap);
+  z-index: var(--z-hud-over);
+}
+
+/* Centre display-only band. Anything inside is FORCED inert — a guard rail, not
+   a layout tool. */
+.kit-zone-mid {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: var(--zone-mid-x1);
+  width: calc(var(--zone-mid-x2) - var(--zone-mid-x1));
+  z-index: var(--z-hud-under);
+}
+.kit-zone-mid, .kit-zone-mid * { pointer-events: none !important; }
+
+/* Top strip inside the safe box, left-aligned (whose-turn lives here). */
+.kit-zone-top { position: absolute; left: 0; top: 0; z-index: var(--z-hud-over); }
+
+/* Clusters that guarantee the 12px dead-space rule between interactives. */
+.kit-btn-row { display: flex; gap: var(--tap-gap); align-items: center; }
+.kit-actions {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: var(--tap-gap);
+}
+
+
+/* ============================================================================
+   4. TYPE UTILITIES
+   tokens.ts mirrors these as TYPE.hero / TYPE.glance / … CSSProperties presets
+   for inline-style call sites.
+   ============================================================================ */
+.kit-t-display { font: var(--fw-black) var(--text-display) / var(--lh-tight) var(--font); letter-spacing: var(--ls-tight); }
+.kit-t-hero { font: var(--fw-bold) var(--text-hero) / var(--lh-flat) var(--font); letter-spacing: var(--ls-tight); }
+.kit-t-hero-lg { font: var(--fw-black) var(--text-hero-lg) / var(--lh-flat) var(--font); letter-spacing: var(--ls-tight); }
+.kit-t-glance { font: var(--fw-semibold) var(--text-glance) / var(--lh-tight) var(--font); }
+.kit-t-glance-lg { font: var(--fw-bold) var(--text-glance-lg) / var(--lh-tight) var(--font); }
+.kit-t-label { font: var(--fw-medium) var(--text-label) / var(--lh-snug) var(--font); }
+.kit-t-label-lg { font: var(--fw-semibold) var(--text-label-lg) / var(--lh-snug) var(--font); }
+.kit-t-micro { font: var(--fw-semibold) var(--text-micro) / var(--lh-snug) var(--font); }
+.kit-t-micro-lg { font: var(--fw-semibold) var(--text-micro-lg) / var(--lh-snug) var(--font); }
+.kit-t-body { font: var(--fw-regular) var(--text-label-lg) / var(--lh-body) var(--font); }
+
+.kit-t-caps { text-transform: uppercase; letter-spacing: var(--ls-wider); }
+.kit-t-caps-wide { text-transform: uppercase; letter-spacing: var(--ls-widest); }
+.kit-t-num { font-variant-numeric: tabular-nums; font-feature-settings: "tnum" 1; letter-spacing: var(--ls-tight); }
+.kit-t-legible { text-shadow: var(--text-legible); }  /* required over bare 3D world */
+.kit-t-carve { text-shadow: var(--text-carve); }
+.kit-t-dim { color: var(--text-2); }
+.kit-t-mute { color: var(--text-3); }                 /* decorative only */
+.kit-t-gold { color: var(--gold); }
+.kit-t-money { color: var(--success-bright); }
+.kit-t-danger { color: var(--danger); }
+.kit-t-warn { color: var(--warn); }
+.kit-t-turn { color: var(--turn); }
+.kit-trunc { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+
+/* Eyebrow above a title. */
+.kit-eyebrow {
+  font: var(--fw-bold) var(--text-micro) / var(--lh-snug) var(--font);
+  text-transform: uppercase;
+  letter-spacing: var(--ls-widest);
+  color: var(--gold);
+}
+
+/* Section divider inside a panel or takeover. */
+.kit-rule { height: 1px; flex: 0 0 auto; background: linear-gradient(90deg, transparent, var(--border), transparent); }
+.kit-rule--v { width: 1px; height: auto; align-self: stretch; background: linear-gradient(180deg, transparent, var(--border), transparent); }
+
+
+/* ============================================================================
+   5. BUTTONS
+   ----------------------------------------------------------------------------
+   Sizes are FLOORS, not suggestions:
+     .kit-btn--primary  min-height 48px (--tap-primary), 17px label
+     everything else    min-height 44px (--tap-min),     15px label
+     .kit-btn--icon     44x44  ·  + .kit-btn--lg  52x52
+   Adjacent buttons sit >=12px apart; .kit-btn-row / .kit-actions enforce it.
+   Nothing interactive goes below 44px. Nothing above 48px except --lg.
+   ============================================================================ */
+
+/* R1: .kit-btn does NOT set overflow:hidden. It used to, to contain the sheen,
+   and that silently clipped every overhanging child — the gold count badge was
+   sliced along the top-right corner, the pinned dot likewise, and the turn ring
+   lost its outer edge. Clipping lives on .kit-fx-clip instead. */
+.kit-btn {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--sp-2);
+  min-height: var(--tap-min);
+  padding: 0 var(--sp-4);
+  border: 0;
+  border-radius: var(--r-lg);
+  font: var(--fw-bold) var(--btn-fs) / var(--lh-flat) var(--font);
+  letter-spacing: var(--ls-wide);
+  text-transform: uppercase;
+  color: var(--text);
+  background: linear-gradient(180deg, rgb(28 30 48 / 80%), rgb(9 10 18 / 78%));
+  box-shadow: var(--lift-top), var(--ring-hair), var(--shadow-2);
+  cursor: pointer;
+  touch-action: manipulation;
+  user-select: none;
+  transition:
+    transform var(--dur-tap) var(--ease-out),
+    box-shadow var(--dur-tap) var(--ease-out),
+    background var(--dur-swap) var(--ease-out),
+    color var(--dur-swap) var(--ease-out);
+}
+.kit-btn:active { transform: translateY(2px) scale(0.98); box-shadow: var(--ring-focus), 0 3px 10px rgb(0 0 0 / 62%); }
+.kit-btn:focus-visible { outline: none; box-shadow: var(--ring-focus), var(--shadow-2); }
+.kit-btn[disabled], .kit-btn.is-disabled {
+  pointer-events: none;
+  color: var(--text-3);
+  background: linear-gradient(180deg, rgb(18 18 30 / 70%), rgb(9 10 18 / 70%));
+  box-shadow: inset 0 0 0 1px rgb(232 232 240 / 6%);
+  filter: saturate(0.4);
+}
+
+/* Content sits above .kit-fx-clip (z 1) and below the badge (z 4). */
+.kit-btn__label { position: relative; z-index: 3; white-space: nowrap; }
+.kit-btn__glyph { position: relative; z-index: 3; display: grid; place-items: center; font-size: 17px; line-height: 1; color: var(--gold); }
+/* --ls-wide, not --ls-wider: a 5-character caption at 0.8px tracking measured
+   42px wide inside a 44px button, leaving 1px each side. 0.4px buys 2px back. */
+.kit-btn__sub { position: relative; z-index: 3; font: var(--fw-bold) var(--text-micro) / var(--lh-flat) var(--font); letter-spacing: var(--ls-wide); color: var(--text-2); }
+.kit-btn__note { position: relative; z-index: 3; font: var(--fw-semibold) var(--text-micro-lg) / var(--lh-snug) var(--font); color: var(--text-2); }
+
+/* PRIMARY — the turn action. Lit in the active player's colour. 48px / 17px. */
+.kit-btn--primary {
+  min-height: var(--tap-primary);
+  min-width: var(--btn-w-primary);
+  padding: 0 var(--sp-5);
+  border-radius: var(--r-xl);
+  font-size: var(--btn-fs-primary);
+  font-weight: var(--fw-black);
+  letter-spacing: var(--ls-none);
+  background: linear-gradient(180deg, color-mix(in srgb, var(--turn) 30%, transparent), rgb(9 10 18 / 88%));
+  box-shadow: inset 0 1px 0 rgb(255 255 255 / 24%), inset 0 0 0 1px var(--turn), var(--glow-turn), var(--shadow-3);
+}
+.kit-btn--primary:active { transform: translateY(3px) scale(0.985); box-shadow: inset 0 0 0 2px var(--gold-bright), 0 4px 12px rgb(0 0 0 / 70%); }
+
+/* GOLD — off-board primary (menu CTA, lobby start) where there is no active
+   player colour to inherit. */
+.kit-btn--gold {
+  min-height: var(--tap-primary);
+  border-radius: var(--r-xl);
+  font-size: var(--btn-fs-primary);
+  font-weight: var(--fw-black);
+  background: linear-gradient(180deg, rgb(212 175 55 / 34%), rgb(120 90 16 / 16%) 58%, rgb(9 10 18 / 88%));
+  box-shadow: inset 0 1px 0 rgb(255 255 255 / 30%), inset 0 0 0 1px var(--gold), var(--glow-gold), var(--shadow-3);
+}
+
+/* SECONDARY — routine actions. 44px / 15px. */
+.kit-btn--secondary {
+  background: linear-gradient(180deg, rgb(212 175 55 / 22%), rgb(9 10 18 / 84%));
+  box-shadow: var(--lift-top), var(--ring-gold), var(--shadow-2);
+}
+
+/* GHOST — dismissals, "not now". Lowest weight that is still a button. */
+.kit-btn--ghost {
+  color: var(--text-2);
+  background: linear-gradient(180deg, rgb(28 30 48 / 62%), rgb(9 10 18 / 70%));
+  box-shadow: var(--ring-hair), var(--shadow-1);
+}
+
+/* DANGER — pays out, breaks a set, forfeits. */
+.kit-btn--danger {
+  color: #ffd8d1;
+  background: linear-gradient(180deg, rgb(229 83 61 / 28%), rgb(9 10 18 / 86%));
+  box-shadow: var(--lift-top), inset 0 0 0 1px rgb(229 83 61 / 66%), var(--shadow-2);
+}
+.kit-btn--danger:active { box-shadow: inset 0 0 0 2px var(--danger-bright), 0 3px 10px rgb(0 0 0 / 62%); }
+
+/* ICON-ONLY — square, glyph plus optional micro caption. */
+.kit-btn--icon {
+  width: var(--tap-min);
+  height: var(--tap-min);
+  min-height: var(--tap-min);
+  padding: 0;
+  flex-direction: column;
+  gap: 1px;
+  border-radius: var(--r-lg);
+}
+.kit-btn--icon.kit-btn--lg { width: var(--tap-lg); height: var(--tap-lg); min-height: var(--tap-lg); }
+.kit-btn--icon.kit-btn--bare { background: none; box-shadow: none; }
+.kit-btn--block { width: 100%; }
+
+/* --- 5.1 .kit-btn--square — icon-only WITHOUT giving up the variant --------
+   .kit-btn--icon is the 44px utility chip and carries a look of its own (gold
+   glyph, secondary fill, room for an 11px caption). This modifier instead lets
+   a real variant drop its LABEL and keep everything else, so the turn action
+   can be a bare die or a bare ✕ and still be 48px and still lit in the active
+   player's colour.
+
+   It only ever removes the two things that exist to hold text: `min-width`
+   (176px on the primary CTA — a 19px die floating in the middle of a 176px slab
+   is not a button, it is a mistake) and the inline padding. The width then
+   tracks the variant's own `min-height`, so the control is square by
+   construction and cannot be sized below the tap floor:
+     primary / gold   48x48  (--tap-primary)
+     everything else  44x44  (--tap-min)
+   The compound selector is required: `.kit-btn--primary` sets both properties
+   at the same specificity, and losing to it silently is how a "square" button
+   ends up 176px wide. */
+.kit-btn--square { width: var(--tap-min); min-width: var(--tap-min); padding: 0; }
+.kit-btn--primary.kit-btn--square,
+.kit-btn--gold.kit-btn--square { width: var(--tap-primary); min-width: var(--tap-primary); padding: 0; }
+/* The glyph's gold is the ICON CHIP's colour and reads as a second accent on a
+   turn-lit fill. On a square the glyph IS the label, so it takes the label's
+   colour — which also means it greys with the button under [disabled], where a
+   hardcoded gold would stay lit on a dead control. */
+.kit-btn--primary.kit-btn--square .kit-btn__glyph { color: currentcolor; }
+/* The die is drawn for a 48px button that also holds 17px of text. Alone in a
+   48px square it has to carry the whole affordance, so it steps up with the
+   same 3:1 pip-to-face ratio. */
+.kit-btn--square .kit-dice { width: 26px; height: 26px; padding: 3px; }
+.kit-btn--square .kit-dice > i { width: 4px; height: 4px; }
+
+/* --- 5.2 .kit-fx-clip — the decoration-clipping layer (R1) ---------------
+   Any full-bleed decoration that must be clipped to a control's rounded shape
+   goes INSIDE this, instead of putting overflow:hidden on the control. That
+   keeps the control's own overflow visible so badges, dots and rings can
+   overhang. Required whenever you use a sheen, a clock fill, a hold fill or an
+   arm timer. Not needed for a plain button.
+   WHY the fill cannot just carry border-radius:inherit: it is a full-width
+   element animated with transform:scaleX(). A radius on it would be
+   horizontally squashed with the box, giving flattened ellipse corners that no
+   longer match the control. It genuinely needs an external clip. Verified. */
+.kit-fx-clip {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  overflow: hidden;
+  border-radius: inherit;
+  pointer-events: none;
+}
+
+/* Sheen: a slow specular pass. Ambient infinite loop, so it may touch opacity
+   under R4 — but it does not; it translates. */
+.kit-sheen {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  pointer-events: none;
+  background: linear-gradient(115deg, transparent 30%, rgb(255 255 255 / 14%) 48%, transparent 62%);
+  transform: translateX(-100%);
+  animation: kit-sheen 5s var(--ease-io) infinite;
+}
+@keyframes kit-sheen { 0%, 68% { transform: translateX(-100%); } 100% { transform: translateX(100%); } }
+
+/* Dice glyph for the roll button. Pure CSS, no image. */
+.kit-dice {
+  position: relative;
+  z-index: 3;
+  width: 19px;
+  height: 19px;
+  padding: 2px;
+  border-radius: var(--r-xs);
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  place-items: center;
+  background: linear-gradient(160deg, #fff, #c9cee0);
+  box-shadow: 0 2px 6px rgb(0 0 0 / 50%);
+}
+.kit-dice > i { width: 3px; height: 3px; border-radius: 50%; background: #12121e; }
+
+
+/* ============================================================================
+   6. THE PRIMARY ACTION *IS* THE TURN CLOCK
+   ----------------------------------------------------------------------------
+   A turn is 75s. For the first 55s the button is just a button: no ring, no
+   number, no anxiety. The clock materialises only for the final 20s and goes
+   urgent in the last 5. State is one attribute, readable on the button or any
+   ancestor: data-clock="off|warn|urgent".
+   ============================================================================ */
+.kit-btn--turn { --clock-c: var(--warn); }
+
+/* Draining fill. Lives inside .kit-fx-clip — full-width + scaleX, so it relies
+   on the parent clip for its rounded ends. */
+.kit-turn__fill {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  display: none;
+  transform-origin: left center;
+  background: linear-gradient(180deg, color-mix(in srgb, var(--clock-c) 42%, transparent), color-mix(in srgb, var(--clock-c) 14%, transparent));
+}
+
+/* Conic ring hugging the rounded rect. inset:0, NOT -2px: at inset:0 the ring
+   sits exactly on the button's edge and border-radius:inherit matches
+   perfectly, so it needs neither a clip nor any reserved overhang. */
+.kit-turn__ring {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  display: none;
+  border-radius: inherit;
+  padding: 3px;
+  pointer-events: none;
+  background: conic-gradient(from -90deg, var(--clock-c) calc(var(--turn-p) * 1%), rgb(232 232 240 / 10%) 0);
+  mask: linear-gradient(#000, #000) content-box, linear-gradient(#000, #000);
+  mask-composite: exclude;
+}
+/* 34x26 border box: 26px of digit room inside 2x--sp-1. min-width was written
+   as 26 and rendered 34 under content-box; border-box needs the outer number,
+   or the countdown pill goes from a lozenge to a circle at 2 digits. */
+.kit-turn__count {
+  display: none;
+  position: relative;
+  z-index: 3;
+  min-width: 34px;
+  height: 26px;
+  padding: 0 var(--sp-1);
+  border-radius: var(--r-pill);
+  align-items: center;
+  justify-content: center;
+  font: var(--fw-black) var(--text-glance) / var(--lh-flat) var(--font);
+  font-variant-numeric: tabular-nums;
+  color: #fff;
+  background: color-mix(in srgb, var(--clock-c) 88%, black);
+  box-shadow: 0 0 16px 4px color-mix(in srgb, var(--clock-c) 55%, transparent);
+}
+
+.kit-btn--turn[data-clock="warn"] .kit-turn__fill,
+[data-clock="warn"] .kit-btn--turn .kit-turn__fill { display: block; animation: kit-clock-drain var(--dur-turn-warn) var(--ease-linear) forwards; }
+.kit-btn--turn[data-clock="warn"] .kit-turn__ring,
+[data-clock="warn"] .kit-btn--turn .kit-turn__ring { display: block; animation: kit-clock-sweep var(--dur-turn-warn) var(--ease-linear) forwards; }
+.kit-btn--turn[data-clock="warn"] .kit-turn__count,
+[data-clock="warn"] .kit-btn--turn .kit-turn__count { display: flex; }
+.kit-btn--turn[data-clock="warn"],
+[data-clock="warn"] .kit-btn--turn { box-shadow: inset 0 1px 0 rgb(255 255 255 / 24%), inset 0 0 0 2px var(--warn), 0 0 30px 5px rgb(232 163 61 / 38%), var(--shadow-3); }
+
+.kit-btn--turn[data-clock="urgent"],
+[data-clock="urgent"] .kit-btn--turn {
+  --clock-c: var(--danger);
+
+  box-shadow: inset 0 1px 0 rgb(255 255 255 / 24%), inset 0 0 0 2px var(--danger), 0 0 34px 6px rgb(229 83 61 / 48%), var(--shadow-3);
+  animation: kit-urgent-pulse 1s var(--ease-io) infinite;
+}
+.kit-btn--turn[data-clock="urgent"] .kit-turn__fill,
+[data-clock="urgent"] .kit-btn--turn .kit-turn__fill { display: block; animation: kit-clock-drain 5s var(--ease-linear) forwards; }
+.kit-btn--turn[data-clock="urgent"] .kit-turn__ring,
+[data-clock="urgent"] .kit-btn--turn .kit-turn__ring { display: block; animation: kit-clock-sweep 5s var(--ease-linear) forwards; }
+.kit-btn--turn[data-clock="urgent"] .kit-turn__count,
+[data-clock="urgent"] .kit-btn--turn .kit-turn__count { display: flex; animation: kit-count-blink 1s steps(1) infinite; }
+
+/* R4: both filled (forwards) clock animations touch transform / a registered
+   number only. Never opacity. */
+@keyframes kit-clock-drain { from { transform: scaleX(1); } to { transform: scaleX(0); } }
+@keyframes kit-clock-sweep { from { --turn-p: 100; } to { --turn-p: 0; } }
+@keyframes kit-count-blink { 0%, 50% { opacity: 1; } 51%, 100% { opacity: 0.5; } }
+
+/* OPACITY, NOT `filter: brightness()`, AND THAT IS A COMPOSITOR FIX.
+   This is the only PERPETUAL animation in the kit that ran on a property the
+   compositor cannot animate by itself: `opacity` and `transform` are applied
+   to an already-rasterised layer, but a `filter` change re-runs a filter pass
+   over the element's render surface every frame for as long as the clock is
+   urgent. (The other three infinite loops were checked and are already clean:
+   kit-sheen translates, kit-badge-breathe scales, kit-count-blink fades.)
+   The throb is the same throb — 12% either side of rest at the same 1s period
+   over the same --ease-io — it just modulates DOWN from full rather than UP
+   from full, which is indistinguishable on a lit button against a dark board.
+   Both forms create a stacking context on .kit-btn--turn, so paint order is
+   unchanged. Not R3: this is a pulse on a whole control, not opacity used to
+   de-emphasise a static label, and it is exactly what kit-count-blink beside
+   it already does. Not R4 either: `infinite`, no fill mode, so it can never
+   freeze off-target. */
+@keyframes kit-urgent-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.88; } }
+
+/* Waiting: not my turn. Still 48px so layout never jumps. */
+.kit-btn--turn.is-waiting, .kit-btn--primary.is-waiting {
+  pointer-events: none;
+  font-size: var(--btn-fs);
+  font-weight: var(--fw-bold);
+  color: var(--text-2);
+  background: linear-gradient(180deg, rgb(20 22 38 / 72%), rgb(9 10 18 / 90%));
+  box-shadow: var(--ring-hair), var(--shadow-2);
+}
+
+
+/* ============================================================================
+   7. RIGHT-SIDE PANEL — never a bottom sheet
+   ----------------------------------------------------------------------------
+   Width --panel-w (392px) INCLUDING the 47px right safe inset, so content is
+   ~311px. It slides over the right interactive half; the left read-only half
+   stays visible, which is the point.
+   ============================================================================ */
+/* A CLOSED PANEL AND ITS SCRIM MUST NOT COMPOSITE — see §7.1 under .kit-panel.
+   `visibility` is undelayed on the way IN (.is-on drops the delay) so the fade
+   plays from the first frame, and delayed by the full --dur-panel on the way
+   OUT so the exit finishes painting before the surface stops painting. */
+.kit-scrim {
+  position: absolute;
+  inset: 0;
+  z-index: var(--z-scrim);
+  background: var(--surface-scrim);
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+  transition: opacity var(--dur-panel) var(--ease-out), visibility 0s var(--ease-linear) var(--dur-panel);
+}
+.kit-scrim.is-on {
+  opacity: 1;
+  visibility: visible;
+  pointer-events: auto;
+  transition: opacity var(--dur-panel) var(--ease-out);
+}
+.kit-scrim--heavy { background: var(--surface-scrim-heavy); }
+
+/* *** INTERIOR PADDING IS NOT THE SAFE-AREA INSET *** (see §2.16)
+     left  gutter = --panel-fade (20, clears the gold hairline) + --panel-pad
+     right gutter = max(--sa-r, --panel-pad)   <- max, never +
+     content 392 - 34 - 47 = 311px  (a stacking version gave 285px)
+
+   ── §7.1  A CLOSED PANEL MUST NOT COMPOSITE ────────────────────────────────
+   A panel stays mounted so its EXIT can animate (see <Panel>'s `open` prop),
+   and all four game panels — deeds, deed detail, mortgage, buy prompt — are
+   therefore mounted for the whole game. Parked at translateX(100%) they are
+   entirely outside the viewport, and they were parked at `visibility: visible;
+   opacity: 1` WITH A LIVE `backdrop-filter: blur(14px)` on each. A
+   backdrop-filter is a backdrop ROOT: it makes everything painted behind it
+   readable-back, which is the most expensive thing a compositor can be asked
+   for, and HEAD had exactly ZERO of them on the game screen. Chromium does not
+   charge for an off-viewport backdrop root, so this measured as noise on the
+   desktop harness — but "the desktop compositor optimised it away" is not the
+   same claim as "WebKit does", and this project's notes are explicit that
+   iOS-side compositor behaviour gets verified on device rather than assumed.
+   `visibility: hidden` removes the backdrop root outright, on every engine, at
+   no visual cost: the panel is off-screen anyway.
+
+   `visibility` is undelayed on the way IN, so the slide starts painting on the
+   first frame, and delayed by the full --dur-panel on the way OUT, so the
+   slide-out finishes before the panel stops painting. Layout is untouched, so
+   the panel's geometry stays measurable — which is what the safe-area audit
+   reads, and what `content-visibility: hidden` would have destroyed. */
+.kit-panel {
+  --panel-pad: 14px;
+  --panel-fade: var(--sp-5);
+  --panel-gutter-l: calc(var(--panel-fade) + var(--panel-pad));
+  --panel-gutter-r: max(var(--sa-r), var(--panel-pad));
+
+  position: absolute;
+  inset: 0 0 0 auto;
+  width: var(--panel-w);
+  z-index: var(--z-panel);
+  transform: translateX(100%);
+  visibility: hidden;
+  transition: transform var(--dur-panel) var(--ease-out), visibility 0s var(--ease-linear) var(--dur-panel);
+  display: flex;
+  flex-direction: column;
+  pointer-events: none;
+  font-family: var(--font);
+  color: var(--text);
+  background: linear-gradient(255deg, rgb(10 11 20 / 97%) 0%, rgb(12 13 24 / 94%) 66%, rgb(12 13 24 / 0%) 100%);
+  backdrop-filter: blur(var(--blur-md));
+}
+.kit-panel.is-on {
+  transform: translateX(0);
+  visibility: visible;
+  pointer-events: auto;
+  transition: transform var(--dur-panel) var(--ease-out);
+}
+.kit-panel--flat { backdrop-filter: none; background: linear-gradient(255deg, var(--surface-panel) 0%, var(--surface-panel) 66%, rgb(12 13 24 / 0%) 100%); }
+.kit-panel--narrow { width: 312px; }
+.kit-panel--wide { width: 472px; }
+
+/* Gold hairline where the panel meets the world. */
+.kit-panel::before {
+  content: "";
+  position: absolute;
+  left: var(--panel-fade);
+  top: 0;
+  bottom: 0;
+  width: 1px;
+  background: linear-gradient(180deg, transparent, var(--gold-dim) 20%, var(--gold-dim) 80%, transparent);
+}
+/* padding-top takes the TOP inset into account, not just --panel-pad. At a bare
+   14px the panel title and its close button sat 6px inside a 20px top inset —
+   measured, on the hostile scenario — which is the same class of failure as the
+   takeover's sliced eyebrow. max(), never +, so a 0 top inset still gives 14. */
+.kit-panel__head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--sp-2);
+  flex: 0 0 auto;
+  padding: max(var(--sa-t), var(--panel-pad)) var(--panel-gutter-r) var(--sp-1) var(--panel-gutter-l);
+}
+.kit-panel__body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 0 var(--panel-gutter-r) var(--sp-2) var(--panel-gutter-l);
+
+  /* VISIBLE SCROLL AFFORDANCE, no JS: content fades into the bottom edge. If it
+     fits, nothing is in the fade zone and nothing is visible. If it overflows,
+     the last row visibly softens — an unmistakable "there is more" that can
+     never present as a hard silent clip. */
+  mask-image: linear-gradient(180deg, #000 0, #000 calc(100% - 10px), rgb(0 0 0 / 15%) 100%);
+  scrollbar-width: thin;
+  scrollbar-color: var(--gold-dim) transparent;
+}
+/* B5: a panel with no footer used to breach the bottom safe inset, because the
+   body had zero bottom padding and the footer was the only thing clearing it.
+   The body now carries its own clearance when it is the last element.
+
+   MARGIN, NOT PADDING, AND THAT IS THE WHOLE POINT. This element is a SCROLL
+   CONTAINER. Bottom padding on a scroll container is part of the scrollable
+   CONTENT — it only becomes visible space once you have scrolled to the very
+   end. Until then the last visible row still paints to the container's bottom
+   edge, which is the physical bottom of the screen. Measured on the deeds panel
+   at 47/21 insets: a 44px tappable deed row painted from y=346 to y=390 with
+   the full 21px home-indicator strip on top of it, despite this rule. A margin
+   shortens the scroll VIEWPORT, so the clip itself lands above the inset and no
+   scroll position can put content under it. The panel's background is painted
+   by .kit-panel, which still runs full height, so nothing changes visually.
+
+   max(), not calc(+): the file's own §2.16 rule. This used to be
+   calc(var(--sa-b) + var(--sp-1)), which stacked a 21px inset onto a 4px pad. */
+.kit-panel__body--nofoot { margin-bottom: max(var(--sa-b), var(--sp-3)); }
+.kit-panel__body::-webkit-scrollbar { width: 4px; }
+.kit-panel__body::-webkit-scrollbar-track { background: transparent; }
+.kit-panel__body::-webkit-scrollbar-thumb { background: var(--gold-dim); border-radius: 2px; }
+/* max(), not calc(+) — see §2.16. Was calc(var(--sa-b) + var(--sp-1)), which is
+   the stacking form this file forbids everywhere else. Padding is correct here
+   (unlike the body above): the footer does not scroll. */
+.kit-panel__foot {
+  flex: 0 0 auto;
+  margin-top: auto;
+  padding: var(--sp-2) var(--panel-gutter-r) max(var(--sa-b), var(--sp-3)) var(--panel-gutter-l);
+  display: flex;
+  gap: var(--tap-gap);
+}
+/* The plate here is INTENTIONALLY overridden when the close button is `bare`:
+   .kit-btn--icon.kit-btn--bare is (0,2,0) and beats this (0,1,0) whatever the
+   source order. <Panel> passes `bare`, which is what the approved mockups
+   render. Pass bare={false} to get the plate back. */
+.kit-panel__close { flex: 0 0 auto; font-size: 17px; color: var(--text-2); background: rgb(20 22 38 / 72%); box-shadow: var(--ring-hair); }
+.kit-panel__title { font: var(--fw-black) var(--text-hero) / var(--lh-tight) var(--font); letter-spacing: var(--ls-tight); }
+.kit-panel__sub { font: var(--fw-semibold) var(--text-label) / var(--lh-snug) var(--font); text-transform: uppercase; letter-spacing: var(--ls-wide); color: var(--gold); }
+
+
+/* ============================================================================
+   8. FULL-SCREEN TAKEOVER — trade / auction / bankruptcy
+   ----------------------------------------------------------------------------
+   Dense multi-step flows get the whole screen. Trade, auction and bankruptcy
+   are COMPARATIVE, two-sided information, which is a REPRESENTATIONAL failure
+   in world space, not merely a legibility one: there is no diegetic version of
+   "mine vs theirs, before vs after". Do not attempt one.
+   R5: .kit-takeover DELIBERATELY HAS NO backdrop-filter. Dim the world behind
+   it instead (a filter on the 3D layer), which looks the same.
+   B7: NO scale() entrance. A scale on a container shrinks every tap target
+   inside it for the duration — a 44px button measured 42.2px. This fades via a
+   transition to a declared end state, which R4 explicitly permits, and never
+   scales or translates.
+   ============================================================================ */
+.kit-takeover {
+  --panel-pad: 14px;
+
+  position: absolute;
+  inset: 0;
+  z-index: var(--z-takeover);
+
+  /* ALL FOUR SIDES CLEAR THEIR OWN INSET. max(inset, pad) — never inset + pad.
+     TOP WAS THE BUG. This was a bare `var(--sp-3)` (12px) that ignored
+     --sa-t entirely, on the theory that landscape has no top inset. Give the
+     device a 20px top inset — a Dynamic Island phone, or any orientation that
+     is not the one this was verified in — and the eyebrow renders at y=12,
+     8px inside the inset, sliced in half by the physical edge. That is the
+     reported CharacterSelect symptom exactly, and every takeover in the app
+     shares this one declaration: locker, game over, trade, partnership, rent
+     deal, GO advance, auction, bankruptcy.
+     BOTTOM was calc(var(--sa-b) + var(--sp-1)), the stacking form §2.16
+     forbids; it is a max() now like everything else. */
+  padding:
+    max(var(--sa-t), var(--sp-3))
+    max(var(--sa-r), var(--panel-pad))
+    max(var(--sa-b), var(--sp-3))
+    max(var(--sa-l), var(--panel-pad));
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  font-family: var(--font);
+  color: var(--text);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity var(--dur-takeover) var(--ease-out);
+  background: radial-gradient(120% 90% at 50% 0%, rgb(18 18 30 / 95%), rgb(6 6 13 / 98.5%) 70%);
+}
+.kit-takeover.is-on { opacity: 1; pointer-events: auto; }
+.kit-takeover__head { flex: 0 0 auto; display: grid; grid-template-columns: 1fr auto; align-items: start; column-gap: var(--sp-3); }
+.kit-takeover__eyebrow { grid-column: 1; font: var(--fw-bold) var(--text-micro) / var(--lh-snug) var(--font); text-transform: uppercase; letter-spacing: var(--ls-widest); color: var(--gold); }
+.kit-takeover__title { grid-column: 1; margin: 0; font: var(--fw-black) var(--text-hero-lg) / var(--lh-tight) var(--font); letter-spacing: var(--ls-tight); }
+.kit-takeover__close { grid-column: 2; grid-row: 1 / span 2; align-self: center; font-size: 17px; color: var(--text-2); box-shadow: var(--ring-hair); }
+.kit-takeover__body { flex: 1 1 auto; min-height: 0; display: flex; gap: var(--sp-6); padding-top: var(--sp-1); }
+
+/* R1: padding-inline gives outward box-shadow glows room to paint. This is a
+   scroll container, and overflow-y:auto clips the X axis too, so it was shaving
+   3px off an 8px swatch glow at x=0. 8px of interior padding clears it.
+   VERTICAL BALANCE: auto margins on the first and last child centre the group
+   in the available height AND collapse to 0 when the content overflows, which
+   justify-content:center would not (that clips the top in a scroll container). */
+.kit-takeover__col {
+  flex: 1 1 0;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  padding-inline: var(--sp-2);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+.kit-takeover__col > :first-child { margin-top: auto; }
+.kit-takeover__col > :last-child { margin-bottom: auto; }
+.kit-takeover__col--top > :first-child { margin-top: 0; }
+.kit-takeover__col--top > :last-child { margin-bottom: 0; }
+.kit-takeover__rule { flex: 0 0 1px; align-self: stretch; background: linear-gradient(180deg, transparent, var(--border), transparent); }
+/* align-items:flex-end, or a 44px button stretches to 48px beside a 48px
+   primary and the 44/48 distinction disappears. */
+.kit-takeover__foot { flex: 0 0 auto; display: flex; align-items: flex-end; justify-content: flex-end; gap: var(--tap-gap); padding-top: var(--sp-2); }
+
+
+/* ============================================================================
+   9. OPPONENT POD — read-only, left half
+   ----------------------------------------------------------------------------
+   Inert by default. --tappable opts in and raises the row to --tap-min.
+   B6: is-out / is-offline no longer use opacity on this text-bearing box. Out
+   uses a solid muted colour + line-through (the treatment .badge--out already
+   ships) plus a greyscale filter on the chrome; offline desaturates and leans
+   on its badge.
+   ============================================================================ */
+/* 48/52 ARE THE RENDERED HEIGHTS, STATED DIRECTLY. They used to be written as
+   40 and --tap-min (44) and arrive at 48 and 52 anyway, because under the UA's
+   content-box the 2x4px of block padding was added OUTSIDE the declared height.
+   index.css now sets border-box globally, so a declared 40 would render 40 and
+   every pod in the lobby, the game-over standings and the HUD column would lose
+   8px it was laid out with. The tap floor still holds with room to spare: a
+   --tappable pod is 52px of border box around 44px of content. */
+.kit-pod {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  min-height: 48px;
+  padding: var(--sp-1) var(--row-pad);
+  border-left: 2px solid var(--pc, var(--p-blue));
+  border-radius: 0 var(--r-sm) var(--r-sm) 0;
+  font-family: var(--font);
+  pointer-events: none;
+}
+.kit-pod--glass { background: linear-gradient(90deg, rgb(10 11 20 / 72%), rgb(10 11 20 / 18%)); box-shadow: var(--lift-top); }
+.kit-pod__main { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+.kit-pod__name {
+  font: var(--fw-semibold) var(--text-label) / var(--lh-snug) var(--font);
+  text-transform: uppercase;
+  letter-spacing: var(--ls-wide);
+  color: var(--text-2);
+  text-shadow: var(--text-legible);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.kit-pod__badges { display: flex; gap: var(--sp-1); margin-left: auto; flex: 0 0 auto; }
+.kit-pod.is-turn {
+  background: linear-gradient(90deg, color-mix(in srgb, var(--pc) 18%, transparent), transparent 88%);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--pc) 50%, transparent);
+}
+.kit-pod.is-turn .kit-pod__name { color: var(--text); }
+.kit-pod.is-out { filter: grayscale(0.9) brightness(0.72); }
+.kit-pod.is-out .kit-pod__name { color: #8f8fa4; text-decoration: line-through; }
+.kit-pod.is-offline { filter: saturate(0.35); }
+.kit-pod.is-offline .kit-pod__name { color: var(--text-2); }
+/* calc, so the 44px HIG floor is visible in the expression: --tap-min of
+   content plus the pod's own 2x--sp-1 of block padding = 52px of border box. */
+.kit-pod--tappable { pointer-events: auto; cursor: pointer; min-height: calc(var(--tap-min) + var(--sp-2)); }
+.kit-pod--tappable:active { background: rgb(255 255 255 / 5%); }
+
+
+/* ============================================================================
+   10. BADGES, COUNTS, DOTS
+   Micro type (11px) is the floor here and it is intentional: badges are
+   supporting information, never the only carrier of a state.
+   ============================================================================ */
+.kit-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-1);
+  height: 16px;
+  padding: 0 var(--sp-2);
+  border-radius: var(--r-pill);
+  font: var(--fw-bold) var(--text-micro) / var(--lh-flat) var(--font);
+  text-transform: uppercase;
+  letter-spacing: var(--ls-wider);
+  white-space: nowrap;
+  color: var(--text-2);
+  background: rgb(232 232 240 / 10%);
+  box-shadow: inset 0 0 0 1px rgb(232 232 240 / 16%);
+}
+.kit-badge--jail { color: #f4a6a1; background: rgb(229 83 61 / 18%); box-shadow: inset 0 0 0 1px rgb(229 83 61 / 60%); }
+.kit-badge__bars { width: 8px; height: 10px; border-radius: 1px; background: repeating-linear-gradient(90deg, currentcolor 0 2px, transparent 2px 4px); }
+.kit-badge--out { color: #c9c9dc; background: rgb(232 232 240 / 8%); box-shadow: inset 0 0 0 1px rgb(232 232 240 / 22%); text-decoration: line-through; }
+.kit-badge--offline { color: var(--text-2); background: rgb(106 169 240 / 14%); box-shadow: inset 0 0 0 1px rgb(106 169 240 / 42%); }
+.kit-badge--good { color: #9ff0bb; background: rgb(70 177 106 / 18%); box-shadow: inset 0 0 0 1px rgb(70 177 106 / 60%); }
+.kit-badge--warn { color: var(--warn-bright); background: rgb(232 163 61 / 16%); box-shadow: inset 0 0 0 1px rgb(232 163 61 / 58%); }
+.kit-badge--gold { color: var(--text-on-gold); background: linear-gradient(180deg, var(--gold-bright), var(--gold)); box-shadow: 0 0 12px 2px var(--gold-glow); }
+
+/* R1: overhangs its button by 5px, which is only safe because .kit-btn does not
+   clip and .kit-zone-act reserves --badge-reserve on the right. 26x18 border
+   box — 18px of glyph room inside 2x4px of padding — so it stays legible at
+   11px without eating into the 44px tap target. min-width was written as 18
+   and rendered 26 under content-box; border-box needs the outer number. */
+.kit-badge--count {
+  position: absolute;
+  top: -5px;
+  right: -5px;
+  z-index: 4;
+  min-width: 26px;
+  height: 18px;
+  padding: 0 4px;
+  justify-content: center;
+  font-weight: var(--fw-black);
+  color: var(--text-on-gold);
+  background: linear-gradient(180deg, var(--gold-bright), var(--gold));
+  box-shadow: 0 0 14px 3px var(--gold-glow);
+  animation: kit-badge-breathe 2.8s var(--ease-io) infinite;
+}
+@keyframes kit-badge-breathe { 0%, 100% { transform: scale(1); } 50% { transform: scale(1.08); } }
+
+.kit-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--gold); box-shadow: 0 0 8px 2px var(--gold-glow); }
+.kit-dot--danger { background: var(--danger); box-shadow: 0 0 8px 2px rgb(229 83 61 / 60%); }
+.kit-dot--good { background: var(--success); box-shadow: 0 0 8px 2px rgb(70 177 106 / 60%); }
+.kit-dot--pulse { animation: kit-pulse 2.4s var(--ease-io) infinite; }
+.kit-dot--pin { position: absolute; top: -2px; right: -2px; z-index: 4; }
+
+/* Ambient infinite loop — R4 permits opacity here, it always comes back. */
+@keyframes kit-pulse { 0%, 100% { opacity: 0.66; } 50% { opacity: 1; } }
+
+
+/* ============================================================================
+   11. MONEY
+   ----------------------------------------------------------------------------
+   Tabular figures, fixed slot width, and a structure a count-up can drive
+   without reflowing anything around it. --digits reserves the slot (default 4)
+   so the container never resizes mid-count.
+
+   *** R3, THE ORIGINAL CASE ***  .money__cur / .money__unit used to carry
+   opacity .82 / .78. Over a gold gradient with --text-legible's 12px black blur
+   underneath, a semi-transparent glyph reads as a faint smeared duplicate. Both
+   now render at full opacity; the 11px-vs-15/24px size difference already
+   carries all the hierarchy they need.
+
+   *** THE em TRAP — measured, then fixed ***  These were plain .72em / .66em,
+   which is right at hero size and silently ILLEGAL below it: on a 13px money
+   the unit rendered at 8.58px, the smallest type anywhere in the system. max()
+   keeps the ratio where there is room and clamps to the 11px floor where there
+   is not. Never reintroduce a bare em font-size on a nested text node.
+   ============================================================================ */
+.kit-money {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 1px;
+  font-family: var(--font);
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: "tnum" 1;
+  letter-spacing: var(--ls-tight);
+  white-space: nowrap;
+  color: var(--text);
+}
+.kit-money__cur { font-size: max(var(--text-micro), 0.72em); font-weight: var(--fw-bold); }
+.kit-money__val { font-weight: var(--fw-black); min-width: calc(var(--digits, 4) * 0.62em); text-align: right; transition: color var(--dur-feedback) var(--ease-out); }
+.kit-money__unit { font-size: max(var(--text-micro), 0.66em); font-weight: var(--fw-bold); letter-spacing: var(--ls-none); }
+
+.kit-money--hero { font-size: var(--text-hero); }
+.kit-money--hero-lg { font-size: var(--text-hero-lg); }
+.kit-money--glance { font-size: var(--text-glance); }
+.kit-money--glance-lg { font-size: var(--text-glance-lg); }
+.kit-money--label { font-size: var(--text-label); }
+.kit-money--micro { font-size: var(--text-micro); }
+.kit-money--gain { color: var(--success-bright); }
+.kit-money--loss { color: #ffa79b; }
+.kit-money--gold { color: var(--gold-bright); }
+.kit-money--low { color: #f0a29c; }        /* cash below the danger threshold */
+
+.kit-money.is-up .kit-money__val { animation: kit-money-up 620ms var(--ease-out); }
+.kit-money.is-down .kit-money__val { animation: kit-money-down 620ms var(--ease-out); }
+@keyframes kit-money-up { 0% { color: var(--success-bright); transform: translateY(3px); } 100% { transform: translateY(0); } }
+@keyframes kit-money-down { 0% { color: var(--danger-bright); transform: translateY(-3px); } 100% { transform: translateY(0); } }
+
+/* Delta chip that rides next to a money value. */
+.kit-delta { display: inline-flex; align-items: center; gap: 2px; font: var(--fw-black) var(--text-micro-lg) / var(--lh-flat) var(--font); font-variant-numeric: tabular-nums; padding: 0 var(--sp-1); border-radius: var(--r-xs); }
+.kit-delta--up { color: var(--success-bright); background: rgb(70 177 106 / 14%); }
+.kit-delta--down { color: var(--danger-bright); background: rgb(229 83 61 / 14%); }
+
+
+/* ============================================================================
+   12. SET-PROGRESS PIPS
+   ----------------------------------------------------------------------------
+   *** A MANDATED FLAT FALLBACK, NOT AN OPTION. ***
+   Numeric counts are a proven world-space failure: a glowing tile band conveys
+   WHICH tiles brilliantly and HOW MANY OF HOW MANY not at all — there is no
+   world object that reads as "2 of 3". The board carries the recognition, this
+   flat index carries the count. Any screen showing set progress needs both.
+
+   R1: NO NEGATIVE MARGIN on the completed pill. It used to carry
+   margin-left:-5px to optically align its swatch with the unpilled rows, and
+   that 5px overhang was sliced off by any clipping ancestor. The alignment is
+   achieved by insetting ALL rows by 5px instead, so every row shares one left
+   edge with zero overhang and the pill survives any container.
+   ============================================================================ */
+.kit-set { display: flex; align-items: center; gap: var(--sp-2); height: 26px; padding-left: 5px; font-family: var(--font); pointer-events: none; }
+.kit-set__swatch { width: 4px; height: 14px; border-radius: 2px; flex: 0 0 auto; background: var(--gc, var(--gold)); box-shadow: 0 0 8px 1px var(--gc); }
+.kit-pips { display: flex; gap: 3px; flex: 0 0 auto; }
+.kit-pip { width: 12px; height: 8px; border-radius: 2px; background: rgb(232 232 240 / 14%); box-shadow: inset 0 0 0 1px rgb(0 0 0 / 50%); }
+.kit-pip.is-on { background: var(--gc, var(--gold)); box-shadow: 0 0 9px 1px var(--gc), inset 0 1px 0 rgb(255 255 255 / 40%); }
+/* Hatched, not faded: a pip is not text, but consistency with R3 keeps the
+   whole system alpha-free where a state must survive a frozen frame. */
+.kit-pip.is-mortgaged { background: repeating-linear-gradient(45deg, var(--gc) 0 3px, rgb(0 0 0 / 55%) 3px 6px); }
+.kit-set__count { font: var(--fw-black) var(--text-micro) / var(--lh-flat) var(--font); font-variant-numeric: tabular-nums; color: var(--text-2); text-shadow: var(--text-legible); }
+.kit-set.is-complete {
+  height: 26px;
+  padding: 0 var(--sp-2) 0 5px;
+  border-radius: var(--r-pill);
+  background: linear-gradient(90deg, color-mix(in srgb, var(--gc) 24%, transparent), transparent 90%);
+  box-shadow: inset 0 0 0 1px rgb(240 208 96 / 55%);
+}
+.kit-set.is-complete .kit-pip.is-on { box-shadow: 0 0 12px 2px var(--gc), inset 0 1px 0 rgb(255 255 255 / 50%); filter: brightness(1.25) saturate(1.2); }
+.kit-set__flag { font: var(--fw-black) var(--text-micro) / var(--lh-flat) var(--font); text-transform: uppercase; letter-spacing: var(--ls-wider); color: var(--gold-bright); text-shadow: var(--text-legible); }
+.kit-set-cap { font: var(--fw-bold) var(--text-micro) / var(--lh-snug) var(--font); text-transform: uppercase; letter-spacing: var(--ls-widest); color: var(--text-2); text-shadow: var(--text-legible); margin-bottom: var(--sp-1); padding-left: 5px; }
+
+
+/* ============================================================================
+   13. TOAST
+   Read-only. Place it top-centre-left or above the action cluster — never where
+   it can cover the primary button.
+   ============================================================================ */
+.kit-toasts { display: flex; flex-direction: column; gap: var(--sp-2); z-index: var(--z-toast); pointer-events: none; }
+.kit-toast {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-2);
+  max-width: 300px;
+  padding: var(--sp-2) var(--sp-3);
+  border-radius: var(--r-pill);
+  background: var(--surface-glass);
+  box-shadow: var(--lift-top), var(--shadow-3);
+  backdrop-filter: blur(var(--blur-sm));
+  font: var(--fw-semibold) var(--text-label-lg) / var(--lh-snug) var(--font);
+  color: var(--text);
+  opacity: 0;
+  transform: translateY(-8px);
+  pointer-events: none;
+  transition: opacity var(--dur-swap) var(--ease-out), transform var(--dur-swap) var(--ease-out);
+}
+/* R5: <BlurScope> sets this when a toast renders inside an already-blurred
+   surface. Opaque fill, no second backdrop-filter. */
+.kit-toast--flat { backdrop-filter: none; background: var(--surface-panel); }
+.kit-toast.is-on { opacity: 1; transform: translateY(0); }
+.kit-toast__icon { display: grid; place-items: center; flex: 0 0 auto; width: 20px; height: 20px; border-radius: 50%; font: var(--fw-black) var(--text-micro-lg) / 1 var(--font); color: var(--text-on-accent); background: var(--gold); }
+.kit-toast__text b { font-weight: var(--fw-black); color: var(--success-bright); }
+.kit-toast--good .kit-toast__icon { background: var(--success); }
+.kit-toast--bad .kit-toast__icon { background: var(--danger); }
+.kit-toast--bad .kit-toast__text b { color: var(--danger-bright); }
+.kit-toast--warn .kit-toast__icon { background: var(--warn); }
+.kit-toast--info .kit-toast__icon { background: var(--info); }
+
+
+/* ============================================================================
+   14. EVENT LOG — collapsed last-event strip that expands to full history
+   ----------------------------------------------------------------------------
+   *** A MANDATED FLAT FALLBACK, NOT AN OPTION. ***
+   "Priya paid you £1.2M rent on Mayfair" carries four facts — actor, action,
+   amount, place. The world can stage exactly one of them (a coin flying between
+   tokens); it cannot say the sentence. The world animation is the exclamation
+   mark, this strip is the sentence.
+   The strip lives in the read-only LEFT column, so its tap is a convenience
+   only — the canonical route to history is an icon button in the bottom-right
+   cluster. The peek row is still a full 44px so the convenience is not a
+   mis-tap trap.
+   ============================================================================ */
+.kit-eventlog { width: var(--zone-read-w); pointer-events: auto; font-family: var(--font); }
+.kit-eventlog__peek {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--sp-2);
+  width: 100%;
+  min-height: var(--tap-min);
+  padding: var(--sp-2) 0;
+  border: 0;
+  background: none;
+  text-align: left;
+  cursor: pointer;
+  touch-action: manipulation;
+}
+.kit-eventlog__tick { width: 3px; align-self: stretch; flex: 0 0 auto; border-radius: 2px; background: var(--gold-dim); margin-top: 2px; }
+.kit-eventlog__last {
+  flex: 1 1 auto;
+  font: var(--fw-semibold) var(--text-label-lg) / var(--lh-snug) var(--font);
+  color: var(--text);
+  text-shadow: var(--text-legible);
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.kit-eventlog__last b { font-weight: var(--fw-black); color: var(--success-bright); }
+/* 12x12 BORDER box — 10px of stroke span plus the two 2px borders that draw the
+   chevron. Written as 10x10 it rendered 12x12 under content-box, and a
+   border-box 10x10 shrinks the rotated glyph's bounding box from 17px to 14px. */
+.kit-eventlog__chev {
+  flex: 0 0 auto;
+  width: 12px;
+  height: 12px;
+  margin-top: 5px;
+  border-right: 2px solid var(--text-2);
+  border-bottom: 2px solid var(--text-2);
+  transform: rotate(45deg);
+  transition: transform var(--dur-swap) var(--ease-out);
+}
+.kit-eventlog.is-open .kit-eventlog__chev { transform: rotate(-135deg); }
+.kit-eventlog__list { max-height: 0; overflow: hidden; transition: max-height var(--dur-panel) var(--ease-out); }
+.kit-eventlog.is-open .kit-eventlog__list { max-height: 212px; overflow-y: auto; overscroll-behavior: contain; }
+.kit-eventlog__item {
+  display: flex;
+  gap: var(--sp-2);
+  padding: var(--sp-1) 0;
+  border-top: 1px solid rgb(232 232 240 / 7%);
+  font: var(--fw-medium) var(--text-label) / var(--lh-snug) var(--font);
+  color: var(--text-2);
+  text-shadow: var(--text-legible);
+}
+.kit-eventlog__item time { flex: 0 0 34px; font-size: var(--text-micro); font-variant-numeric: tabular-nums; color: var(--text-3); padding-top: 1px; }
+.kit-eventlog__item b { font-weight: var(--fw-bold); color: var(--text); }
+.kit-eventlog__item.is-fresh { color: var(--text); animation: kit-in-left 320ms var(--ease-out); }
+
+
+/* ============================================================================
+   15. DEED CARD
+   ----------------------------------------------------------------------------
+   SIZED TO FIT. At these button sizes the panel body has ~223px of usable
+   height, so --deed-row is 24px: 7 rent rows (168) + meta (~30) + gaps = ~206,
+   which clears with slack. The 8th row used to be clipped mid-text at 26px rows
+   against 64/56px buttons.
+   ============================================================================ */
+.kit-deed { display: flex; flex-direction: column; gap: var(--sp-1); width: 100%; max-width: 312px; font-family: var(--font); }
+.kit-deed--card { padding: var(--sp-3); border-radius: var(--r-lg); background: var(--surface-panel); box-shadow: var(--ring-hair), var(--shadow-3); }
+.kit-deed__band { height: 16px; border-radius: var(--r-xs); flex: 0 0 auto; background: var(--gc, var(--gold)); box-shadow: 0 0 18px 3px color-mix(in srgb, var(--gc) 55%, transparent), inset 0 1px 0 rgb(255 255 255 / 30%); }
+.kit-deed__title { font: var(--fw-black) var(--text-hero) / var(--lh-tight) var(--font); letter-spacing: var(--ls-tight); margin-top: 2px; }
+.kit-deed__sub { font: var(--fw-semibold) var(--text-label) / var(--lh-snug) var(--font); text-transform: uppercase; letter-spacing: var(--ls-wide); color: var(--gold); }
+.kit-deed__rents { margin-top: var(--sp-1); }
+
+/* Inline padding on the CONTENT, not the box: the background gradient and the
+   bottom hairline still span the full row width, but the label is inset
+   --row-pad (12px) so it clears the 2px gold bar that .is-current adds. Without
+   this the label sat flush on the bar. */
+.kit-deed__row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-2);
+  height: var(--deed-row);
+  padding-inline: var(--row-pad);
+  border-bottom: 1px solid rgb(232 232 240 / 8%);
+}
+/* B4: the row is fixed-height, so a label that wrapped spilled across the
+   hairlines into the row below. Truncate instead — the value is the payload. */
+.kit-deed__label {
+  font: var(--fw-medium) var(--text-label) / var(--lh-flat) var(--font);
+  text-transform: uppercase;
+  letter-spacing: var(--ls-wide);
+  color: var(--text-2);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+.kit-deed__value { font: var(--fw-black) var(--text-label) / var(--lh-flat) var(--font); font-variant-numeric: tabular-nums; }
+.kit-deed__row.is-current { background: linear-gradient(90deg, rgb(212 175 55 / 12%), transparent); box-shadow: inset 2px 0 0 var(--gold); }
+.kit-deed__row.is-current .kit-deed__label { color: var(--text); }
+/* B3: was opacity:.45 on a text row (R3). A locked rent row is literally a
+   disabled row, which is exactly what --text-3 is for. */
+.kit-deed__row.is-locked .kit-deed__label { color: var(--text-3); }
+.kit-deed__row.is-locked .kit-deed__value, .kit-deed__row.is-locked .kit-money { color: var(--text-3); }
+.kit-deed__meta { display: flex; gap: var(--sp-5); margin-top: var(--sp-1); padding-inline: var(--row-pad); }
+.kit-deed__metaitem { display: flex; flex-direction: column; gap: 1px; }
+.kit-deed__metalabel { font: var(--fw-bold) var(--text-micro) / var(--lh-snug) var(--font); text-transform: uppercase; letter-spacing: var(--ls-wider); color: var(--text-2); }
+.kit-deed.is-mortgaged .kit-deed__band { filter: grayscale(0.85) brightness(0.6); box-shadow: none; }
+.kit-deed.is-mortgaged .kit-deed__title { color: var(--text-2); text-decoration: line-through; }
+
+
+/* ============================================================================
+   16. FORM CONTROLS — all >=44px tap height
+   ============================================================================ */
+
+/* --- 16.1 text field ---------------------------------------------------- */
+.kit-field { display: flex; flex-direction: column; gap: var(--sp-1); width: 100%; font-family: var(--font); }
+.kit-field__label { font: var(--fw-bold) var(--text-micro) / var(--lh-snug) var(--font); text-transform: uppercase; letter-spacing: var(--ls-widest); color: var(--text-2); }
+.kit-field__input {
+  width: 100%;
+  height: var(--tap-min);
+  padding: 0 var(--sp-3);
+  border: 0;
+  border-radius: var(--r-md) var(--r-md) var(--r-xs) var(--r-xs);
+  font: var(--fw-bold) var(--btn-fs) / var(--lh-flat) var(--font);
+  color: var(--text);
+  background: linear-gradient(180deg, rgb(8 8 15 / 32%), rgb(8 8 15 / 64%));
+  box-shadow: inset 0 -2px 0 var(--gold-dim), inset 0 0 0 1px rgb(232 232 240 / 7%);
+  transition: box-shadow var(--dur-feedback) var(--ease-out);
+}
+.kit-field__input::placeholder { color: var(--text-3); font-weight: var(--fw-medium); }
+.kit-field__input:focus, .kit-field__input.is-focus { outline: none; box-shadow: inset 0 -2px 0 var(--gold-bright), inset 0 0 0 1px rgb(240 208 96 / 35%), 0 0 24px rgb(212 175 55 / 20%); }
+.kit-field__hint { font: var(--fw-medium) var(--text-micro) / var(--lh-snug) var(--font); color: var(--text-2); }
+.kit-field__hint--error { color: var(--danger-bright); }
+
+/* --- 16.2 room-code input ------------------------------------------------
+   DELIBERATE EXCEPTION to the 12px dead-space rule: the cells are DISPLAY ONLY
+   (pointer-events:none) and the wrapper is the single 44px tap target. That is
+   why they may sit 8px apart. */
+.kit-code {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-2);
+  height: var(--tap-min);
+  padding: 0 var(--sp-2);
+  cursor: text;
+  border-radius: var(--r-md);
+  font-family: var(--font);
+  background: linear-gradient(180deg, rgb(8 8 15 / 32%), rgb(8 8 15 / 64%));
+  box-shadow: inset 0 -2px 0 var(--gold-dim), inset 0 0 0 1px rgb(232 232 240 / 7%);
+  transition: box-shadow var(--dur-feedback) var(--ease-out);
+}
+.kit-code.is-focus { box-shadow: inset 0 -2px 0 var(--gold-bright), inset 0 0 0 1px rgb(240 208 96 / 35%), 0 0 24px rgb(212 175 55 / 20%); }
+/* The real input: full-bleed, invisible, keyboard + paste + autofill all work. */
+.kit-code__input { position: absolute; inset: 0; width: 100%; height: 100%; padding: 0; border: 0; background: none; color: transparent; caret-color: transparent; font-size: 16px; outline: none; }
+.kit-code__cell {
+  display: grid;
+  place-items: center;
+  pointer-events: none;
+  width: 22px;
+  height: 28px;
+  border-radius: var(--r-xs);
+  font: var(--fw-bold) var(--text-glance-lg) / 1 var(--font-mono);
+  letter-spacing: var(--ls-none);
+  color: var(--text);
+  background: rgb(232 232 240 / 5%);
+  box-shadow: inset 0 -1px 0 rgb(232 232 240 / 14%);
+}
+.kit-code__cell:empty::after { content: ""; width: 8px; height: 2px; background: var(--text-3); }
+.kit-code__cell.is-caret::after { content: ""; width: 2px; height: 17px; background: var(--gold-bright); animation: kit-caret 1.1s steps(1) infinite; }
+@keyframes kit-caret { 0%, 49% { opacity: 1; } 50%, 100% { opacity: 0; } }
+
+/* --- 16.3 stepper --------------------------------------------------------
+   Buttons are 44x44 with the value between them, so the two tap targets are
+   more than 12px apart by construction. */
+.kit-stepper { display: inline-flex; align-items: center; gap: var(--tap-gap); padding: 0 var(--sp-1); border-radius: var(--r-lg); background: rgb(8 8 15 / 44%); box-shadow: var(--ring-hair); font-family: var(--font); }
+.kit-stepper__btn {
+  width: var(--tap-min);
+  height: var(--tap-min);
+  flex: 0 0 auto;
+  display: grid;
+  place-items: center;
+  border: 0;
+  border-radius: var(--r-md);
+  font: var(--fw-bold) 19px / 1 var(--font);
+  color: var(--gold);
+  background: linear-gradient(180deg, rgb(28 30 48 / 80%), rgb(9 10 18 / 78%));
+  box-shadow: var(--lift-top), var(--ring-hair);
+  cursor: pointer;
+  touch-action: manipulation;
+  transition: transform var(--dur-tap) var(--ease-out), box-shadow var(--dur-tap) var(--ease-out);
+}
+.kit-stepper__btn:active { transform: scale(0.94); box-shadow: var(--ring-focus); }
+.kit-stepper__btn[disabled] { color: var(--text-3); pointer-events: none; }
+.kit-stepper__val { min-width: 76px; text-align: center; justify-content: center; }
+
+/* --- 16.4 slider ---------------------------------------------------------
+   The INPUT itself is 44px tall, not just its wrapper — the hit area has to be
+   on the interactive element. Track stays 6px, thumb 26px; both centred inside
+   the 44px box, so it looks identical and taps correctly. */
+.kit-slider { display: flex; align-items: center; height: var(--tap-min); width: 100%; padding: 0 var(--sp-2); }
+.kit-slider__input { appearance: none; width: 100%; height: var(--tap-min); background: none; cursor: pointer; }
+.kit-slider__input::-webkit-slider-runnable-track { height: 6px; border-radius: var(--r-pill); background: linear-gradient(90deg, var(--gold) 0%, var(--gold) var(--fill, 60%), rgb(232 232 240 / 14%) var(--fill, 60%)); }
+.kit-slider__input::-webkit-slider-thumb { appearance: none; width: 26px; height: 26px; margin-top: -10px; border-radius: 50%; background: radial-gradient(circle at 34% 30%, #fff, var(--gold) 62%, #7a6014); box-shadow: 0 2px 10px rgb(0 0 0 / 60%), 0 0 14px 2px var(--gold-glow); }
+.kit-slider__input::-moz-range-track { height: 6px; border-radius: var(--r-pill); background: rgb(232 232 240 / 14%); }
+.kit-slider__input::-moz-range-thumb { width: 26px; height: 26px; border: 0; border-radius: 50%; background: radial-gradient(circle at 34% 30%, #fff, var(--gold) 62%, #7a6014); box-shadow: 0 2px 10px rgb(0 0 0 / 60%); }
+
+/* --- 16.5 toggle -------------------------------------------------------- */
+.kit-switch { display: inline-flex; align-items: center; gap: var(--sp-3); min-height: var(--tap-min); cursor: pointer; user-select: none; font-family: var(--font); }
+.kit-switch__box { position: absolute; opacity: 0; width: 0; height: 0; }
+.kit-switch__track { position: relative; flex: 0 0 auto; width: 46px; height: 26px; border-radius: var(--r-pill); background: rgb(8 8 15 / 62%); box-shadow: inset 0 0 0 1px rgb(232 232 240 / 14%); transition: background var(--dur-feedback) var(--ease-out), box-shadow var(--dur-feedback) var(--ease-out); }
+.kit-switch__knob { position: absolute; top: 3px; left: 3px; width: 20px; height: 20px; border-radius: 50%; background: linear-gradient(180deg, #3a3a52, #20203a); box-shadow: 0 2px 6px rgb(0 0 0 / 60%); transition: transform var(--dur-feedback) var(--ease-out), background var(--dur-feedback) var(--ease-out); }
+.kit-switch__box:checked + .kit-switch__track { background: rgb(212 175 55 / 30%); box-shadow: inset 0 0 0 1px var(--gold), 0 0 16px 2px var(--gold-glow); }
+.kit-switch__box:checked + .kit-switch__track .kit-switch__knob { transform: translateX(20px); background: radial-gradient(circle at 34% 30%, #fff, var(--gold-bright) 60%, var(--gold)); }
+.kit-switch__label { font: var(--fw-semibold) var(--text-label) / var(--lh-snug) var(--font); text-transform: uppercase; letter-spacing: var(--ls-wide); color: var(--text-2); }
+.kit-switch__box:checked ~ .kit-switch__label { color: var(--text); }
+
+/* --- 16.6 segmented choice ----------------------------------------------
+   Like the code input this is a single logical control, so the 12px rule
+   applies to the GROUP, not the items. Do not exceed 4 items — 4x44 + 3x12 =
+   212px, inside the 250px right column. */
+.kit-segs { display: inline-flex; gap: var(--sp-3); padding: 3px; border-radius: var(--r-lg); background: rgb(8 8 15 / 44%); box-shadow: var(--ring-hair); font-family: var(--font); }
+.kit-segs__item {
+  min-width: var(--tap-min);
+  height: var(--tap-min);
+  padding: 0 var(--sp-3);
+  border: 0;
+  border-radius: var(--r-md);
+  font: var(--fw-bold) var(--btn-fs) / 1 var(--font);
+  color: var(--text-2);
+  background: none;
+  cursor: pointer;
+  touch-action: manipulation;
+  transition: background var(--dur-feedback) var(--ease-out), color var(--dur-feedback) var(--ease-out), box-shadow var(--dur-feedback) var(--ease-out);
+}
+.kit-segs__item.is-on { color: var(--text); background: rgb(212 175 55 / 20%); box-shadow: var(--ring-gold); }
+.kit-segs__item:active { transform: scale(0.96); }
+.kit-segs__item[disabled] { color: var(--text-3); pointer-events: none; }
+
+
+/* ============================================================================
+   17. MODAL-FREE CONFIRMATION
+   ----------------------------------------------------------------------------
+   Confirmation dialogs are replaced everywhere except bankruptcy and
+   accept-trade. Two patterns cover the rest.
+   17a ARM-THEN-FIRE for reversible-but-costly actions (mortgage, sell house,
+       decline a trade). First tap arms and restates the consequence; second tap
+       fires. Auto-disarms after 4s.
+   17b HOLD-TO-CONFIRM for irreversible actions (bankruptcy, leave game). A ring
+       fills over --dur-hold; releasing early cancels.
+   ============================================================================ */
+.kit-arm {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: var(--tap-min);
+  padding: 0 var(--sp-4);
+  border: 0;
+  border-radius: var(--r-lg);
+  font: var(--fw-bold) var(--btn-fs) / var(--lh-flat) var(--font);
+  text-transform: uppercase;
+  letter-spacing: var(--ls-wide);
+  color: var(--text);
+  background: linear-gradient(180deg, rgb(28 30 48 / 80%), rgb(9 10 18 / 78%));
+  box-shadow: var(--lift-top), var(--ring-hair), var(--shadow-2);
+  cursor: pointer;
+  touch-action: manipulation;
+  transition: background var(--dur-swap) var(--ease-out), box-shadow var(--dur-swap) var(--ease-out), color var(--dur-swap) var(--ease-out);
+}
+/* Two labels stay mounted so the box never resizes between stages. This is a
+   full show/hide (a transition to a declared end state), not opacity used to
+   de-emphasise, so it is outside R3; `visibility` guarantees the hidden label
+   can never leave a ghost if a frame is dropped. */
+.kit-arm__face, .kit-arm__confirm { display: block; white-space: nowrap; transition: opacity var(--dur-swap) var(--ease-out); }
+.kit-arm__confirm { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; opacity: 0; visibility: hidden; font-size: var(--text-label-lg); color: var(--warn-bright); }
+.kit-arm.is-armed { background: linear-gradient(180deg, rgb(232 163 61 / 26%), rgb(9 10 18 / 86%)); box-shadow: var(--lift-top), inset 0 0 0 2px var(--warn), 0 0 24px 3px rgb(232 163 61 / 34%); }
+.kit-arm.is-armed .kit-arm__face { opacity: 0; visibility: hidden; }
+.kit-arm.is-armed .kit-arm__confirm { opacity: 1; visibility: visible; }
+.kit-arm__timer { position: absolute; left: 0; bottom: 0; height: 3px; width: 100%; transform-origin: left center; transform: scaleX(0); background: var(--warn); }
+.kit-arm.is-armed .kit-arm__timer { animation: kit-arm-timer 4s var(--ease-linear) forwards; }
+@keyframes kit-arm-timer { from { transform: scaleX(1); } to { transform: scaleX(0); } }
+.kit-arm:active { transform: translateY(2px) scale(0.98); }
+/* B1: .arm[disabled] was completely unstyled — a disabled two-stage confirm
+   rendered fully lit but inert, which is the worst possible affordance. It now
+   matches .kit-btn[disabled] exactly, and both stage-2 layers are neutralised
+   so a disable mid-arm cannot leave a lit warning bar behind. */
+.kit-arm[disabled], .kit-arm.is-disabled {
+  pointer-events: none;
+  color: var(--text-3);
+  background: linear-gradient(180deg, rgb(18 18 30 / 70%), rgb(9 10 18 / 70%));
+  box-shadow: inset 0 0 0 1px rgb(232 232 240 / 6%);
+  filter: saturate(0.4);
+}
+.kit-arm[disabled] .kit-arm__timer, .kit-arm.is-disabled .kit-arm__timer { animation: none; transform: scaleX(0); }
+.kit-arm[disabled] .kit-arm__confirm, .kit-arm.is-disabled .kit-arm__confirm { opacity: 0; visibility: hidden; }
+.kit-arm[disabled] .kit-arm__face, .kit-arm.is-disabled .kit-arm__face { opacity: 1; visibility: visible; }
+
+.kit-hold {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: var(--tap-primary);
+  padding: 0 var(--sp-5);
+  border: 0;
+  border-radius: var(--r-xl);
+  font: var(--fw-black) var(--btn-fs) / var(--lh-flat) var(--font);
+  text-transform: uppercase;
+  letter-spacing: var(--ls-wide);
+  color: #ffd8d1;
+  background: linear-gradient(180deg, rgb(229 83 61 / 22%), rgb(9 10 18 / 88%));
+  box-shadow: var(--lift-top), inset 0 0 0 1px rgb(229 83 61 / 60%), var(--shadow-3);
+  cursor: pointer;
+  touch-action: manipulation;
+  user-select: none;
+  transition: box-shadow var(--dur-swap) var(--ease-out);
+}
+.kit-hold__label { position: relative; z-index: 3; }
+/* Linear fill — the guaranteed-visible progress layer. Goes inside .kit-fx-clip
+   (full-width + scaleX, same case as the clock fill). */
+.kit-hold__fill { position: absolute; inset: 0; z-index: 0; transform-origin: left center; transform: scaleX(0); background: linear-gradient(180deg, rgb(229 83 61 / 55%), rgb(229 83 61 / 20%)); }
+/* Conic ring — the refined layer. inset:0 for an exact radius match, so it
+   needs no clip and no reserved overhang. */
+.kit-hold__ring {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  border-radius: inherit;
+  padding: 3px;
+  pointer-events: none;
+  background: conic-gradient(from -90deg, var(--danger-bright) calc(var(--hold-p) * 1%), rgb(232 232 240 / 8%) 0);
+  mask: linear-gradient(#000, #000) content-box, linear-gradient(#000, #000);
+  mask-composite: exclude;
+}
+.kit-hold.is-holding .kit-hold__fill { animation: kit-hold-fill var(--dur-hold) var(--ease-linear) forwards; }
+.kit-hold.is-holding .kit-hold__ring { animation: kit-hold-sweep var(--dur-hold) var(--ease-linear) forwards; }
+.kit-hold.is-holding { box-shadow: var(--lift-top), inset 0 0 0 2px var(--danger-bright), 0 0 30px 5px rgb(229 83 61 / 45%); }
+.kit-hold.is-done { color: #fff; background: linear-gradient(180deg, rgb(229 83 61 / 75%), rgb(140 30 18 / 90%)); box-shadow: inset 0 0 0 2px var(--danger-bright), 0 0 40px 8px rgb(229 83 61 / 55%); }
+.kit-hold.is-done .kit-hold__fill { transform: scaleX(1); animation: none; }
+.kit-hold[disabled], .kit-hold.is-disabled {
+  pointer-events: none;
+  color: var(--text-3);
+  background: linear-gradient(180deg, rgb(18 18 30 / 70%), rgb(9 10 18 / 70%));
+  box-shadow: inset 0 0 0 1px rgb(232 232 240 / 6%);
+  filter: saturate(0.4);
+}
+@keyframes kit-hold-fill { from { transform: scaleX(0); } to { transform: scaleX(1); } }
+@keyframes kit-hold-sweep { from { --hold-p: 0; } to { --hold-p: 100; } }
+/* Gold variant, for irreversible-but-positive actions. */
+.kit-hold--gold { color: var(--gold-bright); background: linear-gradient(180deg, rgb(212 175 55 / 22%), rgb(9 10 18 / 88%)); box-shadow: var(--lift-top), var(--ring-gold), var(--shadow-3); }
+.kit-hold--gold .kit-hold__fill { background: linear-gradient(180deg, rgb(212 175 55 / 50%), rgb(212 175 55 / 18%)); }
+.kit-hold--gold .kit-hold__ring { background: conic-gradient(from -90deg, var(--gold-bright) calc(var(--hold-p) * 1%), rgb(232 232 240 / 8%) 0); }
+.kit-hold--gold.is-holding { box-shadow: var(--lift-top), inset 0 0 0 2px var(--gold-bright), 0 0 30px 5px var(--gold-glow); }
+
+
+/* ============================================================================
+   18. TURN STRIP + METER
+   ----------------------------------------------------------------------------
+   The turn strip is the flat, unambiguous statement of whose turn it is. Light
+   cues (board glow, token spotlight) are atmospheric; this one is the text of
+   record. Read-only, lives top-left inside the safe box.
+   ============================================================================ */
+.kit-turnstrip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-2);
+  height: 26px;
+  padding: 0 var(--sp-3) 0 var(--sp-2);
+  border-radius: var(--r-pill);
+  background: linear-gradient(180deg, rgb(8 8 15 / 66%), rgb(8 8 15 / 20%));
+  font-family: var(--font);
+  pointer-events: none;
+  /* R2: settles UPWARD from +6px. The strip is anchored at the very top of the
+     safe box; a negative translate pushed it above the frame edge where
+     overflow:hidden sliced it for 250ms on every screen load. */
+  animation: kit-in-top var(--dur-swap) var(--ease-out);
+}
+.kit-turnstrip__dot { width: 9px; height: 9px; border-radius: 50%; flex: 0 0 auto; background: var(--pc, var(--turn)); box-shadow: 0 0 10px 2px var(--pc, var(--turn)); transition: background var(--dur-light) var(--ease-io); }
+.kit-turnstrip__who { font: var(--fw-black) var(--text-glance) / var(--lh-flat) var(--font); text-transform: uppercase; letter-spacing: var(--ls-wide); color: var(--text); text-shadow: var(--text-legible); }
+.kit-turnstrip__sep { width: 1px; height: 13px; background: rgb(232 232 240 / 24%); }
+.kit-turnstrip__phase { font: var(--fw-semibold) var(--text-label) / var(--lh-flat) var(--font); text-transform: uppercase; letter-spacing: var(--ls-wide); color: var(--gold); text-shadow: var(--text-legible); }
+
+/* A textless proportional bar. Pips count DISCRETE items ("2 of 3"); neither a
+   bid against my cash nor money-raised against money-needed is discrete, and no
+   other primitive covers a continuous ratio. Deliberately TEXTLESS: the exact
+   figures always sit beside it at >=11px. Clips its own child, which has no
+   overhang (R1). */
+.kit-meter { height: 6px; border-radius: 3px; overflow: hidden; background: var(--surface-sunken); box-shadow: var(--ring-hair); }
+/* display:block is load-bearing: the fill is an <i>, and on an inline box
+   neither height:100% nor width applies — the bar rendered as nothing at 0%
+   AND as nothing at 100%. */
+.kit-meter__fill { display: block; height: 100%; width: calc(var(--pct, 0) * 1%); background: linear-gradient(90deg, var(--gold), var(--gold-bright)); transition: width var(--dur-swap) var(--ease-out); }
+.kit-meter--good .kit-meter__fill { background: linear-gradient(90deg, var(--success), var(--success-bright)); }
+.kit-meter--warn .kit-meter__fill { background: linear-gradient(90deg, var(--warn), var(--warn-bright)); }
+.kit-meter--bad .kit-meter__fill { background: linear-gradient(90deg, var(--danger), var(--danger-bright)); }
+
+
+/* ============================================================================
+   18.5 BRAND / LOBBY PIECES
+   Off-board only (menu, lobby, game over). Ported because otherwise every
+   screen invents its own wordmark and its own token plinth.
+   ============================================================================ */
+
+/* --text-display is BRAND ONLY. Never reuse it for functional UI. */
+.kit-wordmark {
+  font: var(--fw-black) var(--text-display) / var(--lh-flat) var(--font);
+  letter-spacing: var(--ls-widest);
+  background: linear-gradient(176deg, #fff6d8 4%, var(--gold-bright) 34%, var(--gold) 62%, #8e6d18 100%);
+  background-clip: text;
+  color: transparent;
+  filter: drop-shadow(0 2px 0 rgb(0 0 0 / 70%)) drop-shadow(0 0 24px var(--gold-glow));
+}
+
+/* Live-status dot + label. */
+.kit-live { display: inline-flex; align-items: center; gap: var(--sp-2); font: var(--fw-bold) var(--text-micro-lg) / var(--lh-snug) var(--font); text-transform: uppercase; letter-spacing: var(--ls-wider); color: var(--text-2); text-shadow: var(--text-legible); }
+.kit-live__dot { width: 8px; height: 8px; border-radius: 50%; background: var(--success); box-shadow: 0 0 10px 2px rgb(70 177 106 / 60%); animation: kit-pulse 2.6s var(--ease-io) infinite; }
+
+/* A standing token on a plinth — token picker, lobby seat. Textless, so the
+   float loop is safe. */
+.kit-plinth { position: relative; width: 52px; height: 52px; display: flex; align-items: flex-end; justify-content: center; }
+.kit-plinth__ball {
+  position: relative;
+  bottom: 7px;
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  background: radial-gradient(circle at 33% 28%, #fff 0%, var(--tc, var(--p-blue)) 36%, rgb(0 0 0 / 60%) 120%);
+  box-shadow: 0 0 22px 5px var(--tc), inset 0 -4px 8px rgb(0 0 0 / 50%);
+  animation: kit-float 3s var(--ease-io) infinite;
+  transition: background var(--dur-swap) var(--ease-out), box-shadow var(--dur-swap) var(--ease-out);
+}
+.kit-plinth__ground { position: absolute; bottom: 0; width: 40px; height: 11px; border-radius: 50%; background: radial-gradient(closest-side, var(--tc), transparent 72%); transition: background var(--dur-swap) var(--ease-out); }
+@keyframes kit-float { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-4px); } }
+
+
+/* ============================================================================
+   19. ENTRANCES (R2) + GUARDS (R5)
+   ----------------------------------------------------------------------------
+   THE ONLY ENTRANCE KEYFRAMES IN THE SYSTEM. Each is named for the EDGE THE
+   ELEMENT IS ANCHORED TO and travels INWARD from it, so an outward entrance is
+   not available to pick by mistake. None of them animates opacity (R4) and none
+   of them scales — a scale() on a container shrinks every tap target inside it
+   for the duration (B7).
+   ============================================================================ */
+@keyframes kit-in-top { from { transform: translateY(6px); } }     /* top-anchored */
+@keyframes kit-in-bottom { from { transform: translateY(-6px); } } /* bottom-anchored */
+@keyframes kit-in-left { from { transform: translateX(8px); } }    /* left-anchored */
+@keyframes kit-in-right { from { transform: translateX(-8px); } }  /* right-anchored */
+.kit-in-top { animation: kit-in-top var(--dur-swap) var(--ease-out); }
+.kit-in-bottom { animation: kit-in-bottom var(--dur-swap) var(--ease-out); }
+.kit-in-left { animation: kit-in-left var(--dur-swap) var(--ease-out); }
+.kit-in-right { animation: kit-in-right var(--dur-swap) var(--ease-out); }
+
+/* R5, belt-and-braces behind <BlurScope>. Anything blurred that ends up nested
+   inside another blurred surface loses its blur and gets an opaque fill
+   instead. Visually near-identical, and it cannot blank the compositor. */
+.kit-panel .kit-toast,
+.kit-takeover .kit-toast,
+.kit-panel .kit-panel,
+.kit-takeover .kit-panel { backdrop-filter: none !important; }
+.kit-panel .kit-toast, .kit-takeover .kit-toast { background: var(--surface-panel); }
+.kit-takeover.is-on ~ .kit-panel, .kit-takeover.is-on ~ .kit-scrim { backdrop-filter: none !important; }
+.kit-scrim { backdrop-filter: none !important; }
+
+
+/* ============================================================================
+   20. REDUCED MOTION
+   Kill decoration, keep information. The turn clock, the hold ring and the arm
+   timer encode state the user needs, so they are explicitly re-enabled at full
+   duration; everything ambient stops.
+   ============================================================================ */
+@media (prefers-reduced-motion: reduce) {
+  .kit-sheen, .kit-badge--count, .kit-dot--pulse, .kit-code__cell.is-caret::after,
+  .kit-turnstrip, .kit-eventlog__item.is-fresh, .kit-in-top, .kit-in-bottom,
+  .kit-in-left, .kit-in-right, .kit-money.is-up .kit-money__val,
+  .kit-money.is-down .kit-money__val, .kit-live__dot,
+  .kit-plinth__ball { animation: none !important; }
+
+  .kit-btn--turn[data-clock="warn"] .kit-turn__fill,
+  [data-clock="warn"] .kit-btn--turn .kit-turn__fill { animation: kit-clock-drain var(--dur-turn-warn) var(--ease-linear) forwards !important; }
+  .kit-btn--turn[data-clock="warn"] .kit-turn__ring,
+  [data-clock="warn"] .kit-btn--turn .kit-turn__ring { animation: kit-clock-sweep var(--dur-turn-warn) var(--ease-linear) forwards !important; }
+  .kit-btn--turn[data-clock="urgent"] .kit-turn__fill,
+  [data-clock="urgent"] .kit-btn--turn .kit-turn__fill { animation: kit-clock-drain 5s var(--ease-linear) forwards !important; }
+  .kit-btn--turn[data-clock="urgent"] .kit-turn__ring,
+  [data-clock="urgent"] .kit-btn--turn .kit-turn__ring { animation: kit-clock-sweep 5s var(--ease-linear) forwards !important; }
+  .kit-hold.is-holding .kit-hold__fill { animation: kit-hold-fill var(--dur-hold) var(--ease-linear) forwards !important; }
+  .kit-hold.is-holding .kit-hold__ring { animation: kit-hold-sweep var(--dur-hold) var(--ease-linear) forwards !important; }
+  .kit-arm.is-armed .kit-arm__timer { animation: kit-arm-timer 4s var(--ease-linear) forwards !important; }
+}
