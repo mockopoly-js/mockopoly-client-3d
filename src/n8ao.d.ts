@@ -50,6 +50,13 @@ declare module 'n8ao' {
     depthAwareUpsampling: boolean;
     /** Multiply occlusion tint by the scene colour (true) vs replace with tint (false). */
     colorMultiply: boolean;
+    /**
+     * Render a separate transparency target so transparent surfaces occlude/receive AO.
+     * Assigning it AT ALL also clears the pass's `autoDetectTransparency`, so writing
+     * `false` pins the cheap no-extra-target path instead of letting n8ao decide per
+     * frame — which is exactly why the mobile pipeline sets it explicitly.
+     */
+    transparencyAware: boolean;
   }
 
   export class N8AOPostPass {
@@ -70,5 +77,14 @@ declare module 'n8ao' {
     dispose(): void;
   }
 
+  /**
+   * The package's OTHER entry point — the legacy three `EffectComposer` pass (the
+   * postprocessing-library `N8AOPostPass` above is the one this app uses). It is a real
+   * runtime export of `n8ao`, so it must stay declared: an ambient `declare module` is
+   * a CLOSED description of the module, and omitting it would assert the package has no
+   * such export. Nothing here drives it, and per this file's stated policy we do not
+   * model members we don't use — so the body is deliberately empty rather than invented.
+   */
+  // eslint-disable-next-line @typescript-eslint/no-extraneous-class -- an empty class is the honest shape for "this export exists, its members are intentionally unmodelled"; the rule's suggested alternatives (namespace / standalone fns) cannot describe a constructible class
   export class N8AOPass {}
 }

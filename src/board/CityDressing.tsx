@@ -259,7 +259,12 @@ const CITY_AO_INTENSITY = 0; // DISABLED: the baked city.mobile.ao.webp is noisy
 // OWN <Suspense fallback={null}> so a slow/failed load can never blank the scene. WEBP
 // (no KTX2). Desktop + day never reference it. Gated by MOBILE_NIGHT_WINDOW_LIGHTS.
 const CITY_EMISSIVE_URL_MOBILE = '/images/city.mobile.emissive.webp';
-const MOBILE_NIGHT_WINDOW_LIGHTS = true; // sub-toggle: lit windows/signs at night (A/B)
+// Typed `boolean` (not the literal `true`) so the toggle-OFF path stays a live, type-
+// checked branch for a rebuild-flip A/B, matching MOBILE_FOREST_SHADOWS_ENABLED in
+// positions.ts. As the literal, the `&&` guard at the mount site below is "always
+// truthy" and the not-mounted case reads as dead code.
+// eslint-disable-next-line @typescript-eslint/no-inferrable-types -- the `boolean` annotation is deliberate; see above
+const MOBILE_NIGHT_WINDOW_LIGHTS: boolean = true; // sub-toggle: lit windows/signs at night (A/B)
 // Warm tint the emissive map is multiplied by (three: emissive * emissiveIntensity *
 // emissiveMap). The map itself carries warm windows + hued signs; this biases the whole
 // glow warm. Near-white-warm so baked sign hues survive.
@@ -767,6 +772,7 @@ export function CityDressing({
                 bare 0.95 literal) so the desktop roughness (0.69) stays
                 documented alongside it and this reads as a deliberate
                 mobile-only override, not a silent global change. */}
+            {/* eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- `isMobile` is narrowed to `true` by the enclosing `isMobile &&` guard, so TS is right that the ternary is always taken; the false arm is kept ON PURPOSE as inline documentation of the desktop roughness (see the comment above) and costs nothing at runtime */}
             <meshStandardMaterial color={GRASS_COLOR} roughness={isMobile ? 0.95 : 0.69} metalness={0} />
           </mesh>
         </group>

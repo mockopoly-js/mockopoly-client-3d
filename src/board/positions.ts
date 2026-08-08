@@ -128,6 +128,7 @@ export const FOREST_GROUND_LAYER = 3;
  * Typed `boolean` (not the literal `true`) ON PURPOSE so both branches type-check and
  * survive in the bundle for a rebuild-flip revert. DESKTOP is unaffected either way.
  */
+// eslint-disable-next-line @typescript-eslint/no-inferrable-types -- the `boolean` annotation is the point: without it the type narrows to `true`, every `MOBILE_FOREST_SHADOWS_ENABLED ? … : …` select below collapses to dead code, and the rebuild-flip revert path stops type-checking (same pattern as GLOW_NIGHT_MODE in ownedGlow.ts)
 export const MOBILE_FOREST_SHADOWS_ENABLED: boolean = true;
 
 /** Map a tile index to a world-space [x, y=0, z] on the board plane, centered at origin. */

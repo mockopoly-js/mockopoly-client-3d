@@ -664,9 +664,9 @@ function injectMobileMediump(material: THREE.Material): void {
  */
 function buildMobileForestFadeMaterial(base: THREE.Material): THREE.Material {
   const mat = base.clone() as THREE.MeshStandardMaterial;
-  (mat as THREE.MeshStandardMaterial).roughness = MOBILE_FOREST_ROUGHNESS;
-  (mat as THREE.MeshStandardMaterial).metalness = 0.0;
-  (mat as THREE.MeshStandardMaterial).envMapIntensity = MOBILE_FOREST_ENV_INTENSITY;
+  mat.roughness = MOBILE_FOREST_ROUGHNESS;
+  mat.metalness = 0.0;
+  mat.envMapIntensity = MOBILE_FOREST_ENV_INTENSITY;
   applyForestFade(mat); // same fade + board-clip discard program as desktop
   // PRECISION (MOBILE_FOREST_SHADOWS_ENABLED): the forest is drawn ONCE under
   // shadowMap.enabled=true — the throwaway shadow-bake's beauty pass renders every
@@ -700,9 +700,9 @@ function buildMobileForestFadeMaterial(base: THREE.Material): THREE.Material {
  */
 function buildMobileForestOpaqueMaterial(base: THREE.Material): THREE.Material {
   const mat = base.clone() as THREE.MeshStandardMaterial;
-  (mat as THREE.MeshStandardMaterial).roughness = MOBILE_FOREST_ROUGHNESS;
-  (mat as THREE.MeshStandardMaterial).metalness = 0.0;
-  (mat as THREE.MeshStandardMaterial).envMapIntensity = MOBILE_FOREST_ENV_INTENSITY;
+  mat.roughness = MOBILE_FOREST_ROUGHNESS;
+  mat.metalness = 0.0;
+  mat.envMapIntensity = MOBILE_FOREST_ENV_INTENSITY;
   // PRECISION (MOBILE_FOREST_SHADOWS_ENABLED): HIGHP for the same reason as the fade
   // material — this opaque program (rocks/mountains + far-tree swap target) is compiled
   // under shadowMap.enabled=true during the throwaway shadow bake, and a mediump
@@ -776,9 +776,9 @@ function killGroundSpecular(material: THREE.Material): void {
  */
 function buildMobileForestGroundClipMaterial(base: THREE.Material): THREE.Material {
   const mat = base.clone() as THREE.MeshStandardMaterial;
-  (mat as THREE.MeshStandardMaterial).roughness = MOBILE_FOREST_ROUGHNESS;
-  (mat as THREE.MeshStandardMaterial).metalness = 0.0;
-  (mat as THREE.MeshStandardMaterial).envMapIntensity = MOBILE_FOREST_ENV_INTENSITY;
+  mat.roughness = MOBILE_FOREST_ROUGHNESS;
+  mat.metalness = 0.0;
+  mat.envMapIntensity = MOBILE_FOREST_ENV_INTENSITY;
   applyForestBoardClip(mat); // board-clip discard ONLY — no fade
   // PRECISION: the ground is the terrain shadow RECEIVER. When MOBILE_FOREST_SHADOWS_
   // ENABLED it draws in the GROUND scene sub-pass with shadowMap.enabled=true, which
@@ -1040,7 +1040,12 @@ const MOBILE_FOREST_ENV_INTENSITY = 0.0;
 // rocks (opaque) are NOT touched — the user is happy with those. A/B knob: set false to
 // restore the spec lobe. Diffuse shading, shadow-receive, and the baked AO are unaffected
 // (specular is a separate BRDF term → totalSpecular becomes 0).
-const MOBILE_TERRAIN_KILL_SPECULAR = true;
+// Typed `boolean` (not the literal `true`) so the "restore the spec lobe" A/B path above
+// stays a live, type-checked branch for a rebuild flip — as the literal, the cache-key
+// ternary below collapses to one arm and the '-matte'-less key becomes dead code. Same
+// pattern as MOBILE_FOREST_SHADOWS_ENABLED in positions.ts.
+// eslint-disable-next-line @typescript-eslint/no-inferrable-types -- the `boolean` annotation is deliberate; see above
+const MOBILE_TERRAIN_KILL_SPECULAR: boolean = true;
 
 /**
  * ── MOBILE-ONLY: baked island-wide TOP-DOWN forest CONTACT-AO ground decal ────

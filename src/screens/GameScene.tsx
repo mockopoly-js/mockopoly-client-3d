@@ -328,6 +328,7 @@ const MOBILE_AMBIENT_INTENSITY = 0.06;
  * Typed `boolean` (not literal `true`) so both day and night branches type-check and
  * survive in the bundle for a rebuild-flip A/B, matching MOBILE_FOREST_SHADOWS_ENABLED.
  */
+// eslint-disable-next-line @typescript-eslint/no-inferrable-types -- the `boolean` annotation is the point: without it the type narrows to `true` and every `MOBILE_NIGHT_MODE ? night : day` select below becomes dead code, killing the rebuild-flip A/B documented above (same pattern as MOBILE_FOREST_SHADOWS_ENABLED in positions.ts)
 const MOBILE_NIGHT_MODE: boolean = true;
 
 // Moon KEY — stays the SOLE shadow caster (same position + the whole highp/layer-split
@@ -383,7 +384,10 @@ const MOBILE_NIGHT_WARM_DISTANCE = 40; // world units — fades to 0 by here (in
 const MOBILE_NIGHT_WARM_DECAY = 2; // physical inverse-square falloff
 // Sub-toggle: cheap warm street-lamp emissive markers around the board (see
 // NightStreetLights). Emissive-only (no real light) → ~0 fps. A/B knob.
-const MOBILE_NIGHT_STREETLIGHTS = true;
+// Typed `boolean` (not the literal `true`) so the toggle-OFF path stays a live,
+// type-checked branch for a rebuild-flip A/B, matching MOBILE_NIGHT_MODE above.
+// eslint-disable-next-line @typescript-eslint/no-inferrable-types -- the `boolean` annotation is deliberate; see above
+const MOBILE_NIGHT_STREETLIGHTS: boolean = true;
 // Fog — recolor to dark blue ONLY (near/far are coupled to FOREST_CULL_DISTANCE +
 // density bands + a test, so FOG_FAR/FOG_NEAR are left exactly as day; see the fog note).
 const MOBILE_NIGHT_FOG_COLOR = '#0e1830';
@@ -462,6 +466,15 @@ const MOBILE_SHADOW_CAMERA_FAR = MOBILE_FOREST_SHADOWS_ENABLED ? 45 : 30;
  * user stops moving the camera — paired with a faster OrbitControls damping decay
  * on mobile (see CameraRig.tsx) so the drift tail no longer keeps re-arming this
  * debounce for ~1s after release.
+ *
+ * THERMAL STEP-DOWN: all three values below, plus MOBILE_SCENE_DPR /
+ * MOBILE_CITY_DPR, are now the TIER-0 CEILING rather than the values that
+ * necessarily run. Over a long session the device thermally throttles, and
+ * mobileRender.ts ratchets a one-way tier that caps them further (tier 1 →
+ * still 1.5 / scene 1.25, tier 2 → still 1.5 / scene 1.0; see thermalDpr.ts for
+ * the measured table). Tier 0 is exactly what is written here, so first load and
+ * desktop are unchanged. Editing any value below moves the ceiling; editing a
+ * tier moves the floor.
  */
 const MOBILE_DPR_MOVING = 1.3;
 // MOBILE-ONLY fps/crispness knob. Cap the native present dpr at 2 (was 3): this is
@@ -497,6 +510,13 @@ const MOBILE_SETTLE_MS = 120;
 // to cut that pass's pixel count by ~44%, directly targeting the low-angle
 // 3rd-person forest overdraw that pushes the phone below 30fps. Raise back toward 2
 // if distant foliage aliasing becomes objectionable.
+// THERMAL: this is the CEILING. A measured pass census showed that 11 of the 14
+// mobile passes are pinned by this value and MOBILE_CITY_DPR (6 at scene res + 5
+// half-scene AO passes = 5.37 MP of the 9.32 MP frame), which is why a thermal
+// step-down that only lowered MOBILE_DPR_STILL would buy 19% instead of ~39%.
+// The tier table in thermalDpr.ts therefore caps THIS independently of the still
+// dpr — that is what lets it take the scene saving without dragging the
+// native-crisp board pass down with it.
 const MOBILE_SCENE_DPR = 1.5;
 const MOBILE_BOARD_DEPTH_BIAS = 0.03;
 const MOBILE_CITY_DPR = 1.5;

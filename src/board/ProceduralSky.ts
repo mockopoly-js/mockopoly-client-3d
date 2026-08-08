@@ -122,7 +122,12 @@ const NIGHT_CANVAS_W = 1024;
 const NIGHT_CANVAS_H = 512;
 
 // ── STAR / MOON art knobs (tasteful, not a planetarium) ──────────────────────
-const NIGHT_STARS_ENABLED = true; // draw the star field (A/B)
+// Typed `boolean` (not the literal `true`) so the stars-OFF art A/B stays a live,
+// type-checked branch for a rebuild flip; as the literal, the `if` below is "always
+// truthy" and the no-stars sky reads as dead code. Same pattern as
+// MOBILE_FOREST_SHADOWS_ENABLED in positions.ts.
+// eslint-disable-next-line @typescript-eslint/no-inferrable-types -- the `boolean` annotation is deliberate; see above
+const NIGHT_STARS_ENABLED: boolean = true; // draw the star field (A/B)
 // Bumped 340 → 800 now that stars cover the whole VISIBLE sky band (see the loop), not
 // just the zenith. The across/down gameplay camera mostly sees the horizon-to-mid band.
 const NIGHT_STAR_COUNT = 800;
@@ -133,7 +138,10 @@ const NIGHT_STAR_COUNT = 800;
 // the last sliver near the fogged horizon stays sparse — no hard "star line".
 const NIGHT_STAR_SPREAD = 0.72;
 const NIGHT_STAR_BIAS = 1.3; // pow(random, BIAS): >1 = mild zenith bias (NOT bunched at top)
-const NIGHT_MOON_ENABLED = true; // draw the moon disc + halo (A/B)
+// Typed `boolean` (see NIGHT_STARS_ENABLED) so the moonless-sky A/B stays a live,
+// type-checked branch for a rebuild flip.
+// eslint-disable-next-line @typescript-eslint/no-inferrable-types -- the `boolean` annotation is deliberate; see above
+const NIGHT_MOON_ENABLED: boolean = true; // draw the moon disc + halo (A/B)
 const NIGHT_MOON_U = 0.6; // equirect azimuth (0-1), roughly toward the moon KEY [7,5.5,6]
 const NIGHT_MOON_V = 0.8; // equirect elevation (0-1); higher = nearer zenith
 const NIGHT_MOON_RADIUS = 13; // disc radius (px on the 1024-wide canvas)
