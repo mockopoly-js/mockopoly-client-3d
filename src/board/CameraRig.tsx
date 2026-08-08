@@ -5,12 +5,50 @@ import * as THREE from 'three';
 import type { OrbitControls as OrbitControlsImpl } from 'three-stdlib';
 import { useGameStore, selectCurrentPlayer, selectMyPlayer } from '../state/gameStore';
 import type { CameraReadout } from '../state/gameStore';
-import { thirdPersonPose } from './positions';
-import { INITIAL_CAM_TARGET, INITIAL_CAM_OFFSET } from './cameraConstants';
+import { thirdPersonPose, thirdPersonPoseAt } from './positions';
+import { getLiveTokenPosition } from './liveTokenPositions';
+import { INITIAL_CAM_TARGET, INITIAL_CAM_OFFSET, MOBILE_INITIAL_CAM_OFFSET } from './cameraConstants';
+import { useIsMobile } from '../ui/useIsMobile';
+import { beginCameraMotion, endCameraMotion } from './mobileRender';
 
 // Frame-rate-aware smoothing rate for the follow lerp. Higher = snappier.
 // alpha = 1 - exp(-RATE * delta) → ease-out, no snapping, stable at any FPS.
 const FOLLOW_LERP_RATE = 6;
+
+// OrbitControls damping factor: how fast the inertial drift after a
+// release decays (higher = faster stop). Desktop keeps the original feel;
+// mobile uses a much faster decay so the inertial drift tail after a release
+// clears in ~150-250ms instead of ~1s. Adaptive dpr is now driven by the
+// 'start'/'end' gesture events (see onStart/onEnd below), so the settle timer
+// is armed on gesture end — the faster mobile decay keeps the post-release
+// drift short so the crisp dpr restores promptly after the camera stops.
+const DESKTOP_DAMPING_FACTOR = 0.08;
+const MOBILE_DAMPING_FACTOR = 0.25;
+
+// ── MOBILE-ONLY camera-collision clamps (desktop FROZEN) ──────────────────────
+// The free/Blender-style camera has NO scene collision, so on mobile the user
+// could orbit/pan/zoom the camera BELOW the terrain floor or INTO the rocks/city.
+// From inside a mesh, its backface-culled far side reads as see-through ("clip
+// through the floor and rocks"). These clamps keep the camera above the ground
+// plane and out of the props. They are all MOBILE-gated — desktop keeps the
+// original relaxed clamps (the DESKTOP_* values below) so the desktop
+// OrbitControls props AND runtime behavior stay byte-identical (no clamp listener
+// ever mutates the desktop camera; see the isMobileRef guard in handleMount).
+//
+// The hard GUARANTEE against going under the floor is the per-'change' Y clamp
+// (MOBILE_MIN_CAM_Y / MOBILE_MIN_TARGET_Y): polar/distance limits shape the feel
+// but panning the pivot could still drag the camera down, so we also clamp world
+// Y directly after every OrbitControls move. Terrain floor near the board sits at
+// FOREST_Y ≈ -0.48 (board bottom) with the board top at y ≈ 0.02.
+const MOBILE_MAX_POLAR_ANGLE = 1.52; // rad (~87°): a low, near-horizon board view so the starfield/Milky Way fills the upper view, just short of tipping under the floor
+const MOBILE_MIN_DISTANCE = 4.0;     // world units: can't dolly INSIDE the city/rocks (initial mobile framing sits at MOBILE_CAM_DIST = 6.9, so zoom-in still works)
+const MOBILE_MIN_CAM_Y = 1.0;        // world units: HARD floor — the camera's world Y can never dip below this (safely above the −0.48 terrain floor and low ground clutter)
+const MOBILE_MIN_TARGET_Y = -0.3;    // world units: the orbit pivot can't be aimed below ~board level (aiming lower would drag the whole view under the terrain)
+
+// Desktop clamps (UNCHANGED — hoisted to named consts so the mobile/desktop split
+// in the OrbitControls props below is explicit and desktop stays byte-identical).
+const DESKTOP_MAX_POLAR_ANGLE = 1.55;
+const DESKTOP_MIN_DISTANCE = 2.5;
 
 /**
  * CameraRig: free Blender-style viewport navigation with a fixed initial framing.
@@ -66,6 +104,14 @@ export function CameraRig() {
   // Access the R3F camera for the initial snap (sets camera position too).
   const camera = useThree((s) => s.camera);
 
+  // Mobile framing: dolly the initial view IN so the board fills the short
+  // landscape viewport. Read into a ref so the (dependency-array-free) initial
+  // snap effect always sees the current value without re-subscribing. Desktop
+  // (isMobile === false) uses INITIAL_CAM_OFFSET exactly as before.
+  const isMobile = useIsMobile();
+  const isMobileRef = useRef(isMobile);
+  isMobileRef.current = isMobile;
+
   // Active player = whose turn it is (NOT socket.id). Doubles as the store-hydration
   // guard for the initial snap below.
   const activePlayer = useGameStore(selectCurrentPlayer);
@@ -82,6 +128,12 @@ export function CameraRig() {
   const followTileRef = useRef<number | null>(null);
   followTileRef.current =
     activePlayer?.position ?? myPlayer?.position ?? null;
+  // Id of the SAME follow-target player (active player, else my player), used to
+  // look up that token's LIVE animated world position from the live-position bus.
+  // Parallels followTileRef so the tile (for the behind-direction) and the live
+  // position (for the location) always describe the same token.
+  const followIdRef = useRef<string | null>(null);
+  followIdRef.current = activePlayer?.id ?? myPlayer?.id ?? null;
 
   // Reusable scratch vectors so the follow lerp allocates nothing per frame.
   const scratchCamPos = useRef(new THREE.Vector3());
@@ -100,10 +152,12 @@ export function CameraRig() {
     const target = new THREE.Vector3(...INITIAL_CAM_TARGET);
     controls.target.copy(target);
 
+    // Same aim/angle on both; mobile just dollies closer (MOBILE_CAM_DIST).
+    const offset = isMobileRef.current ? MOBILE_INITIAL_CAM_OFFSET : INITIAL_CAM_OFFSET;
     camera.position.set(
-      target.x + INITIAL_CAM_OFFSET[0],
-      target.y + INITIAL_CAM_OFFSET[1],
-      target.z + INITIAL_CAM_OFFSET[2],
+      target.x + offset[0],
+      target.y + offset[1],
+      target.z + offset[2],
     );
     controls.update();
 
@@ -190,7 +244,16 @@ export function CameraRig() {
     if (cameraModeRef.current === 'thirdPerson') {
       const tile = followTileRef.current;
       if (tile != null) {
-        const pose = thirdPersonPose(tile);
+        // Follow the LIVE animated token world position (published every frame by
+        // PlayerTokens) so the camera eases along WITH the walking character —
+        // not just snapping to the destination tile once the walk stops. The
+        // behind-direction still comes from the discrete ring tile. Fall back to
+        // the discrete-tile pose before any live position has been published
+        // (e.g. the very first frame). getLiveTokenPosition returns the shared
+        // stored vector; thirdPersonPoseAt clones it and never mutates it.
+        const followId = followIdRef.current;
+        const livePos = followId != null ? getLiveTokenPosition(followId) : undefined;
+        const pose = livePos ? thirdPersonPoseAt(livePos, tile) : thirdPersonPose(tile);
         // Frame-rate-aware ease-out: alpha grows with delta, capped at 1.
         const alpha = 1 - Math.exp(-FOLLOW_LERP_RATE * delta);
         const cam = controls.object;
@@ -230,6 +293,27 @@ export function CameraRig() {
     controls.mouseButtons.LEFT = THREE.MOUSE.ROTATE;
     controls.mouseButtons.MIDDLE = undefined;
     controls.mouseButtons.RIGHT = undefined;
+
+    // MOBILE-ONLY camera-collision clamp. OrbitControls fires 'change' after EVERY
+    // move — user gesture (orbit/pan/zoom) OR programmatic update() — so clamping
+    // the camera + pivot world-Y here is the hard guarantee that no interaction can
+    // push the camera under the terrain (or the pivot below board level), which is
+    // what made the floor/rocks read as see-through from inside. Reads isMobileRef
+    // inside the handler so it self-enables/disables on rotate/resize, and
+    // early-returns on desktop → the desktop camera is NEVER touched (byte-identical).
+    // Idempotent (only lowers-nothing, raises to the floor), so re-firing every
+    // damped frame — or under StrictMode double-invoke — is harmless and stable:
+    // the next update() recomputes the orbit offset from the already-clamped
+    // camera/target, so the camera simply rests against the floor with no creep.
+    // Guarded by a typeof check so the unit-test fake (no addEventListener) is safe.
+    if (typeof controls.addEventListener === 'function') {
+      controls.addEventListener('change', () => {
+        if (!isMobileRef.current) return;
+        const cam = controls.object;
+        if (controls.target.y < MOBILE_MIN_TARGET_Y) controls.target.y = MOBILE_MIN_TARGET_Y;
+        if (cam.position.y < MOBILE_MIN_CAM_Y) cam.position.y = MOBILE_MIN_CAM_Y;
+      });
+    }
   }, []);
 
   return (
@@ -238,11 +322,25 @@ export function CameraRig() {
       enablePan
       screenSpacePanning
       enableDamping
-      dampingFactor={0.08}
+      dampingFactor={isMobile ? MOBILE_DAMPING_FACTOR : DESKTOP_DAMPING_FACTOR}
       minPolarAngle={0.05}
-      maxPolarAngle={1.55}
-      minDistance={2.5}
+      // MOBILE tightens the low-angle + zoom-in limits so the camera can't tip
+      // under the floor or dolly into the city/rocks; DESKTOP keeps the original
+      // relaxed values (byte-identical). The hard world-Y floor is enforced by the
+      // 'change' clamp in handleMount (mobile only).
+      maxPolarAngle={isMobile ? MOBILE_MAX_POLAR_ANGLE : DESKTOP_MAX_POLAR_ANGLE}
+      minDistance={isMobile ? MOBILE_MIN_DISTANCE : DESKTOP_MIN_DISTANCE}
       maxDistance={70}
+      // MOBILE adaptive dpr: driven ONLY by genuine user camera gestures. The
+      // 'start' event (real drag / pinch / wheel) drops to the cheap MOVING dpr;
+      // the 'end' event arms the settle timer that restores the crisp dpr once the
+      // gesture finishes (see mobileRender.ts). Crucially, these interaction events
+      // do NOT fire for programmatic controls.update() — so the third-person
+      // follow-lerp (which moves the camera via controls.update() while a token
+      // walks), token walk, dice and character anim never touch dpr. Desktop passes
+      // undefined → OrbitControls behaves exactly as before (byte-identical).
+      onStart={isMobile ? beginCameraMotion : undefined}
+      onEnd={isMobile ? endCameraMotion : undefined}
     />
   );
 }

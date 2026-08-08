@@ -1,17 +1,32 @@
-import React, { useEffect, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useGameBusEvent } from '../state/useGameBus';
-import { FONT_FAMILY } from '../constants/fonts';
+import { KIT } from './kit';
+import type { KitStyle } from './kit';
 import type { S_CardDrawn } from '../types/SocketEvents';
 
-// ─── CardDrawnOverlay ────────────────────────────────────────────────────────
-// Chance / Community-Chest reveal, mirroring the 2D `CardDisplay` object:
-// full-screen 50%-dim backdrop + a centered cream card with a colored header
-// strip (ORANGE for Chance, BLUE for Community Chest), the card `description`
-// in the body, a scale/flip pop-in, then auto-dismiss after 2500 ms (matches
-// the server `ANIMATION_CARD_REVEAL_MS`). Non-blocking (backdrop ignores
-// pointer events); rapid consecutive draws reset the dismiss timer.
+/**
+ * Chance / Community-Chest reveal: a dimmed backdrop and a centred cream card
+ * with a coloured header, held for the server's ANIMATION_CARD_REVEAL_MS.
+ *
+ * DELIBERATELY NOT A KIT SURFACE. Every other overlay in this HUD is dark glass
+ * because it is chrome sitting on the world; this one is a physical object being
+ * shown to the table, and reading as a real card is the whole point. What it
+ * does take from the kit is the geometry and the type scale (17px header, 15px
+ * body, --r-lg, --shadow-4, --z-takeover) so it is sized like everything else,
+ * and the deck colours stay hard-coded because they are DATA — the same class of
+ * value as TOKEN_HEX, not a design decision.
+ *
+ * ENTRANCE IS TRANSFORM-ONLY. The previous version animated opacity with
+ * `both`, so a throttled frame could freeze the card half-visible over the
+ * board; the fade is now a transition to a declared end state, which cannot.
+ *
+ * GUARANTEED TEARDOWN by two independent mechanisms: a per-draw timer AND a
+ * 200ms watchdog that clears by measured age.
+ */
 
 const HOLD_MS = 2500; // ANIMATION_CARD_REVEAL_MS
+const SWEEP_MS = 200;
+const GRACE_MS = 400;
 
 const CHANCE = '#f39c12';
 const COMMUNITY = '#3498db';
@@ -22,6 +37,7 @@ interface Draw {
   description: string;
   header: string;
   id: number;
+  bornAt: number;
 }
 
 export function CardDrawnOverlay() {
@@ -40,17 +56,19 @@ export function CardDrawnOverlay() {
       description: d.card?.description ?? '',
       header: isChance ? CHANCE : COMMUNITY,
       id: (prev?.id ?? 0) + 1,
+      bornAt: Date.now(),
     }));
   });
 
-  // Auto-dismiss; re-armed whenever a new draw arrives. `draw` is only ever
-  // replaced with a fresh object carrying an incremented id, so depending on the
-  // whole `draw` re-arms the timer exactly once per draw (same as keying on id).
   useEffect(() => {
     if (!draw) return;
-    if (typeof window === 'undefined') return;
-    const t = window.setTimeout(() => setDraw(null), HOLD_MS);
-    return () => window.clearTimeout(t);
+    const id = draw.id;
+    const clear = () => { setDraw((cur) => (cur?.id === id ? null : cur)); };
+    const timer = setTimeout(clear, HOLD_MS);
+    const sweep = setInterval(() => {
+      if (Date.now() - draw.bornAt > HOLD_MS + GRACE_MS) clear();
+    }, SWEEP_MS);
+    return () => { clearTimeout(timer); clearInterval(sweep); };
   }, [draw]);
 
   if (!draw) return null;
@@ -66,31 +84,36 @@ export function CardDrawnOverlay() {
   );
 }
 
+/** Transform only — no opacity, so a frozen frame can never strand it. */
 const KEYFRAMES = `
 @keyframes cardDrawnPop {
-  0%   { transform: scale(0.2) rotateY(90deg); opacity: 0; }
-  60%  { transform: scale(1.04) rotateY(0deg); opacity: 1; }
-  100% { transform: scale(1) rotateY(0deg); opacity: 1; }
+  0%   { transform: scale(0.86) rotateY(48deg); }
+  62%  { transform: scale(1.03) rotateY(0deg); }
+  100% { transform: scale(1) rotateY(0deg); }
 }`;
 
-const backdrop: React.CSSProperties = {
-  position: 'fixed', inset: 0, zIndex: 55, display: 'grid', placeItems: 'center',
-  background: 'rgba(0,0,0,.5)', pointerEvents: 'none', fontFamily: FONT_FAMILY,
+const backdrop: KitStyle = {
+  position: 'fixed', inset: 0, zIndex: KIT.zTakeover,
+  display: 'grid', placeItems: 'center',
+  background: KIT.surfaceScrim, pointerEvents: 'none', fontFamily: KIT.font,
 };
 
-const card: React.CSSProperties = {
-  width: 300, minHeight: 200, background: '#f5f0e1', color: '#1a1a2e',
-  borderRadius: 14, overflow: 'hidden', boxShadow: '0 28px 70px -20px rgba(0,0,0,.75)',
-  animation: 'cardDrawnPop 380ms cubic-bezier(.2,.9,.3,1.2) both',
+const card: KitStyle = {
+  width: 'min(300px, 60vw)', minHeight: 168, maxHeight: '80dvh',
+  background: '#f5f0e1', color: '#12121e',
+  borderRadius: KIT.rLg, overflow: 'hidden', boxShadow: KIT.shadow4,
+  animation: `cardDrawnPop var(--dur-scene) var(--ease-celebrate)`,
   transformOrigin: 'center', display: 'flex', flexDirection: 'column',
 };
 
-const header: React.CSSProperties = {
-  color: '#fff', fontWeight: 800, fontSize: 18, letterSpacing: '.04em',
-  textAlign: 'center', padding: '12px 16px',
+const header: KitStyle = {
+  color: '#fff', fontWeight: 800, fontSize: 17, lineHeight: 1.08,
+  letterSpacing: KIT.lsWider, textTransform: 'uppercase',
+  textAlign: 'center', padding: `${KIT.sp3} ${KIT.sp4}`,
 };
 
-const body: React.CSSProperties = {
+const body: KitStyle = {
   flex: 1, display: 'grid', placeItems: 'center', textAlign: 'center',
-  padding: '20px 22px', fontSize: 16, fontWeight: 600, lineHeight: 1.35,
+  padding: `${KIT.sp4} ${KIT.sp5}`,
+  fontSize: 15, fontWeight: 600, lineHeight: 1.38,
 };

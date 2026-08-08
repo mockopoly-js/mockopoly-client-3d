@@ -3,11 +3,15 @@ import { useFrame } from '@react-three/fiber';
 import * as THREE from 'three';
 import { useGameStore } from '../state/gameStore';
 import { useGameBusEvent } from '../state/useGameBus';
-import { tileToWorld, buildTilePath } from './positions';
+import { tileToWorld, tileToWorldXZInto, buildTilePath, BOARD_LAYER, type WorldXZ } from './positions';
+import { setLiveTokenPosition } from './liveTokenPositions';
+import { getTokenBlobShadowTexture } from './TokenBlobShadow';
 import { stackOffset } from './hopPath';
 import { TOKEN_HEX } from '../constants/theme';
 import { CharacterToken, type CharacterTokenHandle } from './CharacterToken';
-import { resolveCharacter, DEFAULT_CHARACTER } from '../constants/characters';
+import { resolveCharacter, DEFAULT_CHARACTER, toMobileCharacterUrl } from '../constants/characters';
+import { useIsMobile } from '../ui/useIsMobile';
+import { getDebugVisibility, subscribeDebugVisibility } from '../dev/debugVisibility';
 import type { Player } from '../types/GameState';
 
 const BASE_Y = 0.15;
@@ -70,14 +74,47 @@ function stepYaw(cur: number, target: number, frac: number): number {
 }
 
 /**
- * Rest offset for a token: its planar (x,z) nudge based on its index among the
- * players currently sharing its tile, so up to 4 co-located tokens don't overlap.
+ * Zero-allocation rest offset: writes the token's planar (x,z) nudge into `out`
+ * (based on its index among the players currently sharing its tile, so up to 4
+ * co-located tokens don't overlap) and returns `out`.
+ *
+ * Computes the co-located count and this player's ordinal among them with a
+ * single plain loop — NO `players.filter()` / intermediate array — so it can run
+ * in the per-frame idle path without allocating. `stackOffset` returns a shared
+ * constant tuple (no allocation), so this whole call allocates nothing.
+ * Behavior-identical to the old filter+findIndex: the ordinal is the number of
+ * co-located, non-bankrupt players ahead of `player` in `players` order.
+ */
+function restOffsetInto(
+  player: Player,
+  players: Player[],
+  out: [number, number],
+): [number, number] {
+  let count = 0;
+  let idx = -1;
+  for (const q of players) {
+    if (q.isBankrupt || q.position !== player.position) continue;
+    if (q.id === player.id) idx = count;
+    count++;
+  }
+  if (count <= 1) {
+    out[0] = 0;
+    out[1] = 0;
+    return out;
+  }
+  const [sx, sz] = stackOffset(idx < 0 ? 0 : idx);
+  out[0] = sx;
+  out[1] = sz;
+  return out;
+}
+
+/**
+ * Rest offset for a token — allocating convenience wrapper over
+ * {@link restOffsetInto} for the (non-per-frame) initial-render path. Returns a
+ * fresh tuple; hot paths should use restOffsetInto with a reused scratch array.
  */
 function restOffset(player: Player, players: Player[]): [number, number] {
-  const coLocated = players.filter((p) => p.position === player.position && !p.isBankrupt);
-  if (coLocated.length <= 1) return [0, 0];
-  const idx = coLocated.findIndex((p) => p.id === player.id);
-  return stackOffset(idx < 0 ? 0 : idx);
+  return restOffsetInto(player, players, [0, 0]);
 }
 
 /**
@@ -153,6 +190,24 @@ function destOffset(playerId: string, to: number, players: Player[]): [number, n
 export function PlayerTokens() {
   const players = (useGameStore((s) => s.state?.players) ?? []).filter((p) => !p.isBankrupt);
 
+  // MOBILE-ONLY: load the meshopt-compressed character variants (smaller
+  // download + faster parse, skinning + animation preserved LOSSLESSLY — see
+  // toMobileCharacterUrl). Desktop keeps the byte-identical originals. The
+  // decoder is bundled in three-stdlib + auto-installed by drei's useGLTF, so no
+  // client wiring is needed. Mirrors the isMobile gating used by
+  // ForestEnvironment / CityDressing.
+  const isMobile = useIsMobile();
+  const charUrl = (id: string | null | undefined): string => {
+    const url = resolveCharacter(id ?? DEFAULT_CHARACTER).url;
+    return isMobile ? toMobileCharacterUrl(url) : url;
+  };
+
+  // MOBILE-ONLY fake contact shadow under each token. Built lazily (only touched
+  // on mobile — never in tests/desktop, where the blob mesh below is gated out),
+  // shared across all tokens. Tokens are excluded from the static shadow bake
+  // (CharacterToken castShadow={!isMobile}); this decal replaces their shadow.
+  const blobTex = isMobile ? getTokenBlobShadowTexture() : null;
+
   // Stable identity key for the current roster's (id, character) pairs. Extracted
   // so the preload effect below depends on the CONTENT (re-runs only when a
   // player's chosen character actually changes), not on the players array's
@@ -165,10 +220,12 @@ export function PlayerTokens() {
   // fresh `players` runs only when a player's chosen character actually changes.
   useEffect(() => {
     for (const p of players) {
-      CharacterToken.preload(resolveCharacter(p.character ?? DEFAULT_CHARACTER).url);
+      // Preload the SAME variant the token will actually load (mobile meshopt vs
+      // desktop original) so the drei cache is warm for the right url.
+      CharacterToken.preload(charUrl(p.character));
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- rosterCharKey is the content-hash of exactly the (id, character) info the loop reads; adding `players` would re-run this preload on every unrelated GAME_STATE_UPDATE
-  }, [rosterCharKey]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- rosterCharKey is the content-hash of exactly the (id, character) info the loop reads; adding `players` would re-run this preload on every unrelated GAME_STATE_UPDATE. isMobile is included so a viewport crossing the mobile breakpoint preloads the correct variant.
+  }, [rosterCharKey, isMobile]);
 
   // Per-player "is walking" → drives Idle↔Walk. React state so the clip prop
   // re-renders; a ref mirror lets useFrame flip it without a stale closure and
@@ -181,6 +238,14 @@ export function PlayerTokens() {
   const playersRef = useRef<Player[]>(players);
   playersRef.current = players;
   const groups = useRef<Record<string, THREE.Group | null>>({});
+  // Reused scratch for reading each token's live world position each frame (fed
+  // to the live-position bus for the follow cam) — allocates nothing per frame.
+  const scratchWorld = useRef(new THREE.Vector3());
+  // Reused scratch for the idle reconcile so the per-frame path allocates
+  // NOTHING (tile world x/z + stack offset). Each is written then read within
+  // the same loop iteration, so a single shared instance is safe.
+  const scratchTile = useRef<WorldXZ>({ x: 0, z: 0 });
+  const scratchOffset = useRef<[number, number]>([0, 0]);
   // Value types carry `| undefined` because these are sparse, id-keyed maps:
   // a key is absent until that token first walks / is seeded, so reads must be
   // (and are) guarded. Typing them honestly keeps the runtime guards meaningful.
@@ -194,6 +259,21 @@ export function PlayerTokens() {
   const targetYaw = useRef<Record<string, number | undefined>>({});
   // Imperative handles to each character, for one-shot Victory/Defeat clips.
   const chars = useRef<Record<string, CharacterTokenHandle | null>>({});
+
+  // DEV-ONLY: tokens debug-visibility toggle (see src/dev/debugVisibility.ts).
+  // Ref on the outer wrapper group (a sibling of the per-player animated
+  // groups below) so toggling it off/on hides/shows every token at once
+  // without touching the per-frame walk/facing logic (which only ever writes
+  // to the per-player groups, never to this wrapper).
+  const tokensGroupRef = useRef<THREE.Group>(null);
+  useEffect(() => {
+    if (!import.meta.env.DEV) return;
+    const apply = () => {
+      if (tokensGroupRef.current) tokensGroupRef.current.visible = getDebugVisibility().tokens;
+    };
+    apply();
+    return subscribeDebugVisibility(apply);
+  }, []);
 
   // ── Victory-on-gain detection ─────────────────────────────────────────────
   // Previous snapshot values keyed by player id. Null until the first snapshot
@@ -498,9 +578,11 @@ export function PlayerTokens() {
         }
       } else {
         // Reconcile to the authoritative tile + stack offset (world space).
-        const [x, , z] = tileToWorld(p.position);
-        const [ox, oz] = restOffset(p, current);
-        group.position.set(x + ox, BASE_Y, z + oz);
+        // Zero-allocation: reuse scratch for the tile world (x,z) and the stack
+        // offset so this per-frame idle path never allocates (no GC dips).
+        const tile = tileToWorldXZInto(p.position, scratchTile.current);
+        const off = restOffsetInto(p, current, scratchOffset.current);
+        group.position.set(tile.x + off[0], BASE_Y, tile.z + off[1]);
         seeded.current[p.id] = true;
 
         // Continue lerping toward targetYaw even while idle — the token pivots
@@ -528,17 +610,26 @@ export function PlayerTokens() {
           });
         }
       }
+
+      // Publish this token's LIVE world position for the third-person follow cam.
+      // Runs for BOTH branches above (walking → smoothly interpolated position;
+      // idle → resting tile + stack slot), AFTER group.position is fully updated
+      // this frame. getWorldPosition() applies the parent BOARD_ROTATION group's
+      // transform, so the value is the token's ACTUAL world position — the same
+      // space the camera lives in. This is a plain ref/map write: no re-render.
+      group.getWorldPosition(scratchWorld.current);
+      setLiveTokenPosition(p.id, scratchWorld.current);
     }
   });
 
   return (
-    <group>
+    <group ref={tokensGroupRef}>
       {players.map((p) => {
         // Initial placement only (before the first useFrame tick paints it).
         const [x, , z] = tileToWorld(p.position);
         const [ox, oz] = restOffset(p, players);
         const hex = TOKEN_HEX[p.token];
-        const char = resolveCharacter(p.character ?? DEFAULT_CHARACTER);
+        const url = charUrl(p.character);
         const clip = moving[p.id] ? 'Run' : 'Idle';
         return (
           <group
@@ -572,12 +663,16 @@ export function PlayerTokens() {
               ref={(h) => {
                 chars.current[p.id] = h;
               }}
-              url={char.url}
+              url={url}
               scale={CHAR_SCALE}
               clip={clip}
               isCelebrating={!!isCelebrating.current[p.id]}
               y={-BASE_Y}
               baseColor={p.characterColor ?? undefined}
+              // MOBILE: tokens move, so they can't be in the frozen shadow bake
+              // (would pin a stuck shadow) — they cast nothing and use the blob
+              // decal below. DESKTOP: real dynamic shadows, so cast as before.
+              castShadow={!isMobile}
             />
             {/* IDENTITY RING — a thin hollow annulus in the player's TOKEN_HEX
                 color. Since the character is no longer tinted, THIS is how you
@@ -596,6 +691,41 @@ export function PlayerTokens() {
                 side={THREE.DoubleSide}
               />
             </mesh>
+            {/* MOBILE-ONLY blob shadow — a soft warm-brown decal faking the token's
+                contact shadow (tokens are excluded from the static bake). As a CHILD
+                of this animated group it inherits the token's x/z every frame with
+                zero per-frame code (the group's Y-spin only rotates a symmetric disc
+                → invisible). Local y ⇒ world ≈ 0.026: just above the board top
+                (0.02), below the identity ring (0.06). It MUST live on BOARD_LAYER so
+                it composites in the BOARD pass onto the board slab — on layer 0 it
+                would render in the SCENE pass (where the board is absent) and blend
+                over sky/forest. depthWrite=false ⇒ it only tints boardColor and does
+                NOT write boardDepth, so it is auto-clipped to the board footprint
+                (past the edge boardDepth=1.0 → the composite drops it) and the token
+                mesh (SCENE pass, nearer) still draws over its own blob. MeshBasic is
+                unlit so it needs no lights and renders correctly in any pass. */}
+            {isMobile && (
+              <mesh
+                renderOrder={2}
+                position={[0, -BASE_Y + 0.026, 0]}
+                rotation={[-Math.PI / 2, 0, 0]}
+                ref={(m) => {
+                  if (m) m.layers.set(BOARD_LAYER);
+                }}
+              >
+                <circleGeometry args={[0.42, 32]} />
+                <meshBasicMaterial
+                  map={blobTex}
+                  transparent
+                  depthWrite={false}
+                  fog={false}
+                  toneMapped
+                  side={THREE.DoubleSide}
+                  polygonOffset
+                  polygonOffsetFactor={-2}
+                />
+              </mesh>
+            )}
           </group>
         );
       })}

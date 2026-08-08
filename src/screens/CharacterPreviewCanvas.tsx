@@ -19,6 +19,8 @@
 import { Canvas } from '@react-three/fiber';
 import { OrbitControls } from '@react-three/drei';
 import { CharacterToken } from '../board/CharacterToken';
+import { toMobileCharacterUrl } from '../constants/characters';
+import { useIsMobile } from '../ui/useIsMobile';
 
 interface PreviewSceneProps {
   url: string;
@@ -57,6 +59,12 @@ function PreviewScene({ url, accent = '#2a2a40', baseColor }: PreviewSceneProps)
 }
 
 export function CharacterPreviewCanvas({ url, accent, baseColor }: PreviewSceneProps) {
+  // MOBILE-ONLY: preview the meshopt-compressed variant (smaller download +
+  // faster parse, skinning + animation preserved). Desktop keeps the original.
+  // The decoder is bundled + auto-installed by drei's useGLTF. CharacterSelect
+  // still passes the desktop url; the mobile mapping happens here only.
+  const isMobile = useIsMobile();
+  const modelUrl = isMobile ? toMobileCharacterUrl(url) : url;
   return (
     <Canvas
       style={{ width: '100%', height: '100%' }}
@@ -82,7 +90,7 @@ export function CharacterPreviewCanvas({ url, accent, baseColor }: PreviewSceneP
       <directionalLight position={[1.5, 3, 2]} intensity={1.25} />
       <directionalLight position={[-1.8, 1.5, -0.6]} intensity={0.35} color="#9aa6ff" />
 
-      <PreviewScene url={url} accent={accent} baseColor={baseColor} />
+      <PreviewScene url={modelUrl} accent={accent} baseColor={baseColor} />
 
       {/*
        * OrbitControls — handles both autoRotate and drag-to-rotate:

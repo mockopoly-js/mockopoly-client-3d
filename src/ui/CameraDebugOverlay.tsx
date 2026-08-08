@@ -1,4 +1,5 @@
 import { useGameStore } from '../state/gameStore';
+import { useIsMobile } from './useIsMobile';
 
 function fmt(v: number): string {
   return v.toFixed(2);
@@ -15,7 +16,9 @@ function fmtVec(v: [number, number, number]): string {
  */
 export function CameraDebugOverlay() {
   const r = useGameStore((s) => s.cameraReadout);
-  if (!r) return null;
+  const isMobile = useIsMobile();
+  // Dev-gated already; also hidden on mobile so the in-game view stays clean.
+  if (!import.meta.env.DEV || isMobile || !r) return null;
 
   return (
     <div

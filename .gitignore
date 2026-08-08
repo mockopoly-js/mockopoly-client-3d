@@ -7,3 +7,7 @@ dist-ssr
 .env.*
 !.env.example
 scripts/blender/__pycache__/
+
+# Build-time-only KTX-Software toktx binary (downloaded, platform-specific).
+# Only needed to regenerate board.mobile.ktx2; the .ktx2 itself IS committed.
+tools/ktx/

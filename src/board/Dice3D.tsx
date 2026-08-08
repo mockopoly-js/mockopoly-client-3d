@@ -273,6 +273,8 @@ export function Dice3D() {
       root.visible = false;
       return;
     }
+    // frameloop="always": Rapier is stepped every frame by R3F's render loop, so
+    // this useFrame simply advances the dice state machine each frame.
     const dtMs = delta * 1000;
 
     for (let i = 0; i < 2; i++) {
@@ -370,9 +372,10 @@ export function Dice3D() {
       }
     }
 
-    // Once BOTH dice have finished their hold, retire and hide.
     const s0 = states.current[0];
     const s1 = states.current[1];
+
+    // Once BOTH dice have finished their hold, retire and hide.
     const done0 = s0.phase === 'idle' || (s0.phase === 'holding' && s0.holdElapsed >= HOLD_MS);
     const done1 = s1.phase === 'idle' || (s1.phase === 'holding' && s1.holdElapsed >= HOLD_MS);
     if (done0 && done1) {

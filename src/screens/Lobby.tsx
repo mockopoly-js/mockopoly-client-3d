@@ -1,31 +1,55 @@
 import { useEffect, useState } from 'react';
-import { Check } from 'lucide-react';
+import { X } from 'lucide-react';
 import { socketManager } from '../network/SocketManager';
 import { gameBus } from '../state/gameBus';
 import { useGameStore, selectMyPlayer } from '../state/gameStore';
 import { EVENTS } from '../types/SocketEvents';
-import { TOKEN_HEX, GOLD } from '../constants/theme';
+import { TOKEN_HEX } from '../constants/theme';
 import type { Player } from '../types/GameState';
-import { FONT_FAMILY } from '../constants/fonts';
-import { useIsMobile } from '../ui/useIsMobile';
-import { GameButton } from '../ui/GameButton';
+import {
+  Badge, Button, KIT, Pod, Rule, SafeBox, Switch, ZoneMid, ZoneRead, ZoneTop,
+} from '../ui/kit';
+import type { KitStyle } from '../ui/kit';
+import { CAP_LINE, COL_ACT, NEUTRAL_TURN, SHELL_BACKDROP, SHELL_STAGE } from './shellChrome';
 
+/**
+ * LOBBY — who is at the table, who is ready, and the code that gets them here.
+ *
+ * ONE LAYOUT. Like the menu, this replaced three (desktop / portrait /
+ * landscape) that disagreed with each other; the kit's geometry is
+ * landscape-first, so there is nothing left to branch on.
+ *
+ * THE THREE COLUMNS EARN THEIR SPLIT HERE MORE THAN ANYWHERE:
+ *   left   — the other seats. Read-only by definition: you cannot ready up on
+ *            someone else's behalf, so nothing there is tappable.
+ *   centre — the room code. Display-only, and the code is the one place in the
+ *            whole system that uses the mono face. During the countdown the
+ *            same band becomes the numeral, because nothing is interactive then
+ *            either.
+ *   right  — MY seat, my ready switch, and the host's controls.
+ *
+ * WHO IS WHO IS CARRIED THREE WAYS, never by colour alone: the pod's own left
+ * bar in the player's token colour, a badge (HOST / READY / OFFLINE), and — for
+ * a disconnect — the kit's `is-offline` treatment, which desaturates the chrome
+ * without ever putting opacity on the name (rule R3).
+ */
 export function Lobby() {
   const state = useGameStore((s) => s.state);
   const roomCode = useGameStore((s) => s.roomCode);
   const setScreen = useGameStore((s) => s.setScreen);
   const [countdown, setCountdown] = useState<number | null>(null);
+  const [copied, setCopied] = useState(false);
 
   const players: Player[] = state?.players ?? [];
   const myId = useGameStore((s) => s.myPlayerId);
-  const me = selectMyPlayer(useGameStore.getState());
-  const isHost = !!me?.isHost;
+  const me = useGameStore(selectMyPlayer);
+  const isHost = me?.isHost ?? false;
   const status = state?.status;
   // devHacks is typed non-optional on GameState but real server snapshots (and
   // partial lobby states) can arrive without it, so the optional chain guards a
   // genuine runtime path — do NOT collapse it.
   // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- state.devHacks may be absent on early/partial snapshots
-  const soloPlay = !!state?.devHacks?.soloPlay;
+  const soloPlay = state?.devHacks?.soloPlay ?? false;
 
   // route into the game once the server flips to in-progress
   useEffect(() => {
@@ -34,10 +58,18 @@ export function Lobby() {
 
   // ephemeral countdown ticks
   useEffect(() => {
-    const onTick = (d: { seconds: number }) => setCountdown(d.seconds);
+    const onTick = (d: { seconds: number }) => { setCountdown(d.seconds); };
     gameBus.on('countdown', onTick);
     return () => { gameBus.off('countdown', onTick); };
   }, []);
+
+  // The copy confirmation is the only feedback a clipboard write ever gives —
+  // it has to time out, or the button lies about the next tap.
+  useEffect(() => {
+    if (!copied) return;
+    const id = setTimeout(() => { setCopied(false); }, 1600);
+    return () => { clearTimeout(id); };
+  }, [copied]);
 
   const toggleReady = () => socketManager.emit(EVENTS.ROOM_READY, { isReady: !me?.isReady });
   const start = () => socketManager.emit(EVENTS.ROOM_START);
@@ -47,7 +79,8 @@ export function Lobby() {
   // promise (fire-and-forget; copy failure is non-critical).
   const copyCode = () => {
     // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- navigator.clipboard can be undefined at runtime (insecure context / old browser)
-    if (roomCode && navigator.clipboard) void navigator.clipboard.writeText(roomCode);
+    if (roomCode !== null && navigator.clipboard) void navigator.clipboard.writeText(roomCode);
+    setCopied(true);
   };
 
   const locked = status === 'starting';
@@ -55,220 +88,261 @@ export function Lobby() {
   // snapshots; keep the optional chain (falls back to 4 max players).
   // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- state.config may be absent on early/partial snapshots
   const maxPlayers = state?.config?.maxPlayers ?? 4;
-  const isMobile = useIsMobile();
 
-  const playerSlots = Array.from({ length: maxPlayers }).map((_, i) => {
-    const p = players[i];
-    // players[i] is typed non-undefined, but `i` iterates up to maxPlayers which
-    // exceeds the seated-players count — empty slots (p === undefined) are real.
-    // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- array index past players.length is undefined at runtime
-    if (!p) return <div key={i} style={isMobile ? emptySlotMobile : emptySlot}>Empty</div>;
-    const tags = [p.isHost ? 'HOST' : null, p.id === myId ? 'YOU' : null].filter(Boolean).join(' • ');
-    return (
-      <div key={i} style={{ ...(isMobile ? slotMobile : slot), opacity: p.isConnected ? 1 : 0.5 }}>
-        <span style={{ ...(isMobile ? dotMobile : dot), background: TOKEN_HEX[p.token] }} />
-        <span style={{ fontWeight: 800, flex: 1, fontSize: isMobile ? 15 : undefined }}>
-          {p.name}{tags && <small style={{ color: '#6d6151', fontWeight: 700 }}> {tags}</small>}
-        </span>
-        {!p.isConnected && <span style={{ color: '#c53a26', fontWeight: 800, fontSize: 11 }}>DISCONNECTED</span>}
-        <span style={{ color: p.isReady ? '#2f9153' : '#9a8f7c', fontWeight: 800, fontSize: 12 }}>
-          {p.isReady ? 'READY' : 'NOT READY'}
-        </span>
-      </div>
-    );
-  });
-
-  if (isMobile) {
-    return (
-      <div style={wrapMobile}>
-        <div style={panelMobile}>
-          <button onClick={copyCode} style={codeChipMobile}>Room {roomCode ?? '----'}</button>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 10, width: '100%', maxWidth: 400 }}>
-            {playerSlots}
-          </div>
-          {isHost && status !== 'starting' && (
-            <label style={soloToggleMobile}>
-              <input
-                type="checkbox"
-                checked={soloPlay}
-                onChange={() => socketManager.emit(EVENTS.DEV_SET_HACK, { hack: 'soloPlay', enabled: !soloPlay })}
-                style={{ marginRight: 8, cursor: 'pointer', width: 18, height: 18 }}
-              />
-              <span style={{ fontSize: 14, fontWeight: 700 }}>Solo play (1 player)</span>
-            </label>
-          )}
-          {countdown !== null && status === 'starting'
-            ? <div style={{ fontWeight: 800, fontSize: 20, color: '#e07d0a' }}>Starting in {countdown}...</div>
-            : (
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 10, width: '100%', maxWidth: 400 }}>
-                <GameButton variant={me?.isReady ? 'success' : 'primary'} onClick={toggleReady} disabled={locked} fullWidth>
-                  {me?.isReady ? <><span>Ready</span><Check size={16} aria-hidden style={{ marginLeft: 4 }} /></> : 'Ready'}
-                </GameButton>
-                {isHost && (
-                  <GameButton variant="primary" onClick={start} disabled={locked || players.length < (soloPlay ? 1 : 2)} fullWidth>
-                    Start Game
-                  </GameButton>
-                )}
-                <GameButton variant="tertiary" onClick={leave} disabled={locked} fullWidth>Back</GameButton>
-              </div>
-            )}
-        </div>
-      </div>
-    );
-  }
+  const others = players.filter((p) => p.id !== myId);
+  const openSeats = Math.max(0, maxPlayers - players.length);
+  const readyCount = players.filter((p) => p.isReady).length;
+  const minPlayers = soloPlay ? 1 : 2;
+  const counting = countdown !== null && status === 'starting';
 
   return (
-    <div style={wrap}>
-      <div style={panel}>
-        <button onClick={copyCode} style={codeChip}>Room {roomCode ?? '----'}</button>
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 10, width: '100%' }}>
-          {playerSlots}
-        </div>
+    <div style={{ ...SHELL_STAGE, ...NEUTRAL_TURN }}>
+      <i style={SHELL_BACKDROP} aria-hidden="true" />
 
-        {isHost && status !== 'starting' && (
-          <label style={soloToggle}>
-            <input
-              type="checkbox"
-              checked={soloPlay}
-              onChange={() => socketManager.emit(EVENTS.DEV_SET_HACK, { hack: 'soloPlay', enabled: !soloPlay })}
-              style={{ marginRight: 8, cursor: 'pointer', width: 16, height: 16 }}
-            />
-            <span style={{ fontSize: 13, fontWeight: 700 }}>Solo play (1 player)</span>
-          </label>
-        )}
+      <SafeBox>
+        <ZoneTop style={zoneTopPad}>
+          <Button
+            variant="icon"
+            bare
+            glyph={<X size={18} aria-hidden />}
+            ariaLabel="Leave lobby"
+            disabled={locked}
+            onClick={leave}
+          />
+        </ZoneTop>
 
-        {countdown !== null && status === 'starting'
-          ? <div style={{ fontWeight: 800, fontSize: 20, color: '#e07d0a' }}>Starting in {countdown}...</div>
-          : (
-            <div style={{ display: 'flex', gap: 10 }}>
-              <GameButton variant={me?.isReady ? 'success' : 'primary'} onClick={toggleReady} disabled={locked} fullWidth>
-                {me?.isReady ? 'Ready ✓' : 'Ready'}
-              </GameButton>
-              {isHost && (
-                <GameButton variant="primary" onClick={start} disabled={locked || players.length < (soloPlay ? 1 : 2)} fullWidth>
-                  Start Game
-                </GameButton>
-              )}
-              <GameButton variant="tertiary" onClick={leave} disabled={locked} fullWidth>Back</GameButton>
+        <ZoneRead>
+          <div style={seatSlot}>
+            <div style={CAP_LINE}>{`Table · ${players.length}/${maxPlayers}`}</div>
+            {others.map((p) => (
+              <Pod
+                key={p.id}
+                name={p.name}
+                color={TOKEN_HEX[p.token]}
+                swatch
+                glass
+                isOffline={!p.isConnected}
+                badges={
+                  !p.isConnected
+                    ? <Badge tone="offline">Offline</Badge>
+                    : p.isHost
+                      ? <Badge tone="gold">Host</Badge>
+                      : p.isReady
+                        ? <Badge tone="good">Ready</Badge>
+                        : <Badge>Waiting</Badge>
+                }
+              />
+            ))}
+            {Array.from({ length: openSeats }, (_, i) => (
+              <div key={`open-${i}`} style={openSeat}>Open seat</div>
+            ))}
+          </div>
+        </ZoneRead>
+
+        <ZoneMid>
+          <div style={codeSlot}>
+            {counting ? (
+              <>
+                <div className="kit-eyebrow">Game starting</div>
+                <div
+                  style={countNumeral}
+                  data-testid="countdown"
+                  role="status"
+                  aria-live="assertive"
+                  aria-label={`Starting in ${countdown} seconds`}
+                >
+                  {countdown}
+                </div>
+                <div style={codeHint}>Get ready</div>
+              </>
+            ) : (
+              <>
+                <div className="kit-eyebrow">Room code</div>
+                <div style={codeMark}>{roomCode ?? '——————'}</div>
+                <div style={codeHint}>Share this to invite friends</div>
+              </>
+            )}
+          </div>
+        </ZoneMid>
+
+        <div style={COL_ACT}>
+          {/*
+            MY SEAT IS NOT A <Pod>. A pod is a compact 40px READ-ONLY row — right
+            for the other players, too small for the one seat that has to hold a
+            host badge and a real 44px switch. Same materials, more room.
+          */}
+          <div style={CAP_LINE}>Your seat</div>
+          <div style={mySeat(me ? TOKEN_HEX[me.token] : KIT.text3)}>
+            <div style={mySeatTop}>
+              <i style={seatDot(me ? TOKEN_HEX[me.token] : KIT.text3)} aria-hidden="true" />
+              <span className="kit-trunc" style={mySeatName}>{me?.name ?? 'You'}</span>
+              {isHost && <Badge tone="gold">Host</Badge>}
             </div>
+            <Switch
+              checked={me?.isReady ?? false}
+              onChange={toggleReady}
+              ariaLabel="Ready"
+              label="Ready"
+            />
+          </div>
+
+          {isHost && !locked && (
+            <Switch
+              checked={soloPlay}
+              ariaLabel="Solo play"
+              label="Solo play"
+              onChange={(next) => socketManager.emit(EVENTS.DEV_SET_HACK, { hack: 'soloPlay', enabled: next })}
+            />
           )}
-      </div>
+
+          <Rule />
+
+          <Button
+            variant="secondary"
+            block
+            label={copied ? 'Code copied' : 'Copy code'}
+            disabled={roomCode === null}
+            onClick={copyCode}
+          />
+
+          {isHost ? (
+            <Button
+              variant="gold"
+              block
+              sheen
+              label={`Start · ${readyCount}/${players.length} ready`}
+              disabled={locked || players.length < minPlayers}
+              onClick={start}
+            />
+          ) : (
+            <Button variant="primary" block waiting label={locked ? 'Starting…' : 'Waiting for host'} />
+          )}
+        </div>
+      </SafeBox>
     </div>
   );
 }
 
-const FONT = FONT_FAMILY;
-const BG_URL = '/images/lobby-bg.webp';
+// ────────────────────────────────────────────────────────────────────────────
+// GEOMETRY
+// ────────────────────────────────────────────────────────────────────────────
 
-// ── Backdrop (toy-city diorama; the empty plaza sits dead-center) ──
-const backdropBase: React.CSSProperties = {
-  position: 'fixed',
+/** 4px of INTERIOR offset, not stacked onto --sa-l: the bare icon button's own
+ *  ring would otherwise sit on the safe line. */
+const zoneTopPad: KitStyle = { padding: '4px 0 0 2px' };
+
+/** Vertically centred, 4px in from the safe line. Four seats at 40-44px plus a
+ *  caption is ~200px in a 369px column, so centring never overflows. */
+const seatSlot: KitStyle = {
+  position: 'absolute',
   inset: 0,
-  backgroundImage: `url(${BG_URL})`,
-  backgroundColor: '#5aa9e6', // sky fallback while the webp loads
-  backgroundRepeat: 'no-repeat',
-  backgroundSize: 'cover',
-  fontFamily: FONT,
-  color: '#3b3224',
-  display: 'flex',
-  boxSizing: 'border-box',
-};
-
-// ── Desktop: cover + centered so the panel lands in the mid-frame plaza ──
-const wrap: React.CSSProperties = {
-  ...backdropBase,
-  backgroundPosition: 'center center',
-  alignItems: 'center',
-  justifyContent: 'center',
-};
-
-// ── Desktop control panel — floats in the sandy plaza (centered both axes) ──
-const panel: React.CSSProperties = {
+  paddingLeft: 4,
   display: 'flex',
   flexDirection: 'column',
-  gap: 14,
-  alignItems: 'center',
-  width: 'min(420px, 90vw)',
-  boxSizing: 'border-box',
-  padding: '24px 26px',
-  borderRadius: 24,
-  background: 'rgba(255, 251, 240, 0.9)',
-  border: `3px solid ${GOLD}`,
-  boxShadow: '0 18px 48px rgba(0,0,0,0.45), inset 0 0 0 1px rgba(255,255,255,0.6)',
-  backdropFilter: 'blur(2px)',
-  WebkitBackdropFilter: 'blur(2px)',
+  justifyContent: 'center',
+  gap: KIT.sp1,
 };
 
-const codeChip: React.CSSProperties = { fontFamily: FONT, fontWeight: 800, border: `1px solid ${GOLD}`, background: '#fbf6ec', borderRadius: 999, padding: '8px 16px', cursor: 'pointer' };
-const slot: React.CSSProperties = { display: 'flex', alignItems: 'center', gap: 10, background: '#fbf6ec', borderRadius: 14, padding: '10px 14px' };
-const emptySlot: React.CSSProperties = { ...slot, justifyContent: 'center', color: '#9a8f7c', fontWeight: 700 };
-const dot: React.CSSProperties = { width: 22, height: 22, borderRadius: '50%' };
-
-// ── Mobile: same fixed bg (top center) with a centered scrim panel ──
-const wrapMobile: React.CSSProperties = {
-  ...backdropBase,
-  backgroundPosition: 'top center',
+const openSeat: KitStyle = {
+  display: 'flex',
   alignItems: 'center',
   justifyContent: 'center',
-  padding: '20px 12px',
-  paddingTop: 'calc(20px + env(safe-area-inset-top))',
-  paddingBottom: 'calc(20px + env(safe-area-inset-bottom))',
-  overflowY: 'auto',
+  minHeight: 32,
+  borderRadius: KIT.rSm,
+  border: `1.5px dashed ${KIT.borderSoft}`,
+  font: `600 ${KIT.fsMicro}/1.22 ${KIT.font}`,
+  textTransform: 'uppercase',
+  letterSpacing: KIT.lsWider,
+  color: KIT.text2,
 };
 
-// ── Mobile control panel — near-full-width scrim card, centered ──
-const panelMobile: React.CSSProperties = {
+/** The centre band, vertically centred and inert (ZoneMid forces that). */
+const codeSlot: KitStyle = {
+  position: 'absolute',
+  inset: 0,
   display: 'flex',
   flexDirection: 'column',
-  gap: 14,
-  alignItems: 'center',
-  width: '100%',
-  maxWidth: 440,
-  boxSizing: 'border-box',
-  padding: '20px 16px',
-  borderRadius: 22,
-  background: 'rgba(255, 251, 240, 0.92)',
-  border: `3px solid ${GOLD}`,
-  boxShadow: '0 12px 36px rgba(0,0,0,0.4), inset 0 0 0 1px rgba(255,255,255,0.6)',
-  backdropFilter: 'blur(2px)',
-  WebkitBackdropFilter: 'blur(2px)',
-};
-const codeChipMobile: React.CSSProperties = {
-  fontFamily: FONT, fontWeight: 800, border: `1px solid ${GOLD}`, background: '#fbf6ec',
-  borderRadius: 999, padding: '12px 20px', cursor: 'pointer', fontSize: 16, minHeight: 44,
-  touchAction: 'manipulation',
-};
-const slotMobile: React.CSSProperties = { display: 'flex', alignItems: 'center', gap: 10, background: '#fbf6ec', borderRadius: 14, padding: '13px 14px' };
-const emptySlotMobile: React.CSSProperties = { ...slotMobile, justifyContent: 'center', color: '#9a8f7c', fontWeight: 700 };
-const dotMobile: React.CSSProperties = { width: 26, height: 26, borderRadius: '50%', flexShrink: 0 };
-
-const soloToggle: React.CSSProperties = {
-  display: 'flex',
   alignItems: 'center',
   justifyContent: 'center',
-  gap: 8,
-  padding: '8px 14px',
-  background: '#fbf6ec',
-  borderRadius: 12,
-  border: `1px solid ${GOLD}`,
-  cursor: 'pointer',
-  fontFamily: FONT,
-  color: '#3b3224',
-  touchAction: 'manipulation',
+  gap: 6,
+  textAlign: 'center',
 };
 
-const soloToggleMobile: React.CSSProperties = {
-  display: 'flex',
-  alignItems: 'center',
-  justifyContent: 'center',
-  gap: 8,
-  padding: '10px 14px',
-  background: '#fbf6ec',
-  borderRadius: 12,
-  border: `1px solid ${GOLD}`,
-  cursor: 'pointer',
-  fontFamily: FONT,
-  color: '#3b3224',
-  minHeight: 44,
-  touchAction: 'manipulation',
+/** THE ONE MONO USE IN THE SYSTEM. A room code is read aloud and typed back in
+ *  character by character, so its glyphs have to be unambiguous and evenly set. */
+const codeMark: KitStyle = {
+  // Longhands, not the `font` shorthand: a shorthand carrying var() becomes a
+  // pending-substitution value that reads back as an empty string, which makes
+  // "is the room code actually in the mono face" untestable.
+  fontFamily: KIT.fontMono,
+  fontSize: KIT.fsHeroLg,
+  fontWeight: 800,
+  lineHeight: KIT.lhFlat,
+  letterSpacing: KIT.lsWidest,
+  color: KIT.goldBright,
+  textShadow: KIT.textLegible,
 };
+
+/**
+ * --text-display is the scale's ceiling (32px) and a countdown numeral is one
+ * of its named uses. Rather than invent a bigger token, the DECLARED size stays
+ * exactly 32 and `transform: scale()` does the rest — the type scale is never
+ * violated, and nothing else on the screen learns a new size.
+ */
+const countNumeral: KitStyle = {
+  font: `800 ${KIT.fsDisplay}/${KIT.lhFlat} ${KIT.font}`,
+  color: KIT.goldBright,
+  textShadow: `0 2px 0 rgb(0 0 0 / 75%), 0 0 32px ${KIT.goldGlow}`,
+  transform: 'scale(2.2)',
+  margin: '18px 0',
+  fontVariantNumeric: 'tabular-nums',
+};
+
+const codeHint: KitStyle = {
+  font: `500 ${KIT.fsLabel}/${KIT.lhSnug} ${KIT.font}`,
+  color: KIT.text2,
+  textShadow: KIT.textLegible,
+};
+
+/**
+ * MY seat: the pod's materials at the size a switch needs.
+ *
+ * Lit in MY token colour, taken directly rather than through `--turn`. There is
+ * no turn in a lobby, and overloading the turn variable to mean "me" here would
+ * make the same cue mean two different things in two places.
+ */
+function mySeat(hex: string): KitStyle {
+  return {
+    borderRadius: KIT.rLg,
+    padding: `${KIT.sp2} ${KIT.rowPad}`,
+    display: 'flex',
+    flexDirection: 'column',
+    gap: 2,
+    background: 'linear-gradient(180deg, rgb(28 30 48 / 62%), rgb(9 10 18 / 58%))',
+    // 8px blur (10px reach), not 20: this sits inside a column with 12px of
+    // block padding, and a 22px reach would clip against the stage edge.
+    boxShadow: `inset 0 0 0 1px ${hex}, ${KIT.liftTop}, 0 0 8px 2px color-mix(in srgb, ${hex} 34%, transparent)`,
+  };
+}
+
+const mySeatTop: KitStyle = { display: 'flex', alignItems: 'center', gap: KIT.sp2, minHeight: 22 };
+
+const mySeatName: KitStyle = {
+  flex: 1,
+  minWidth: 0,
+  font: `700 ${KIT.fsLabelLg}/${KIT.lhSnug} ${KIT.font}`,
+  textTransform: 'uppercase',
+  letterSpacing: KIT.lsWide,
+  color: KIT.text,
+};
+
+function seatDot(hex: string): KitStyle {
+  return {
+    width: 14,
+    height: 14,
+    flex: '0 0 auto',
+    borderRadius: '50%',
+    background: `radial-gradient(circle at 33% 28%, #fff 0%, ${hex} 34%, rgb(0 0 0 / 62%) 118%)`,
+    boxShadow: `0 0 14px 2px ${hex}, inset 0 -3px 6px rgb(0 0 0 / 55%)`,
+  };
+}

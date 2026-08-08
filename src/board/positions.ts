@@ -46,10 +46,112 @@ export const BOARD_WORLD_SIZE = 10;
  */
 export const BOARD_ROTATION = -Math.PI / 2;
 
+/**
+ * BOARD_LAYER — dedicated three.js render LAYER for the board slab (edge box +
+ * artwork plane), used by the MOBILE crisp-board pipeline ONLY.
+ *
+ * On mobile, MobileCrispBoardPipeline renders the board in its own pass at NATIVE
+ * device-pixel-ratio by pointing the camera at this layer, and renders the
+ * expensive scene (forest / city / tokens / sky) at dpr 2 with the camera on the
+ * default layer 0 — which EXCLUDES the board (so the board is drawn exactly once,
+ * native). The two linear-HDR passes are then depth-composited and graded once.
+ *
+ * LIGHTING PARITY: three gates lights by layer too (a light is only collected if
+ * `light.layers.test(camera.layers)`), so the pipeline additively enables this
+ * layer on every scene light. The board therefore inherits the SAME lights and
+ * the SAME scene.environment (HDRI IBL) as the main pass and is lit identically.
+ *
+ * Desktop never touches this: the board stays on the default layer 0 and renders
+ * in the normal single pass, so this constant is inert there.
+ */
+export const BOARD_LAYER = 1;
+
+/**
+ * CITY_LAYER — dedicated three.js render LAYER for the low-poly center city,
+ * used by the MOBILE crisp-board pipeline ONLY.
+ *
+ * On mobile, MobileCrispBoardPipeline renders the city in its OWN pass at a
+ * reduced device-pixel-ratio (MOBILE_CITY_DPR ≈ 1.5) by pointing the camera at
+ * this layer, then depth-composites it with the board pass (native dpr) and the
+ * scene pass (dpr 2 — forest / tokens / ground / sky, camera on the default
+ * layer 0 which EXCLUDES both board AND city). Splitting the city into its own
+ * pass is the only way to give it a per-object resolution: a single FBO has one
+ * resolution, so per-object resolution ⇒ per-object pass.
+ *
+ * LIGHTING PARITY: three gates lights by layer too (a light is only collected if
+ * `light.layers.test(camera.layers)`), so the pipeline additively enables this
+ * layer on every scene light alongside BOARD_LAYER. The city therefore inherits
+ * the SAME lights and the SAME scene.environment (HDRI IBL — not layer gated) as
+ * the main pass and is lit identically. scene.fog is likewise not layer gated, so
+ * the city stays fogged exactly as it was in the single scene pass.
+ *
+ * Desktop never touches this: the city stays on the default layer 0 and renders
+ * in the normal single pass, so this constant is inert there.
+ */
+export const CITY_LAYER = 2;
+
+/**
+ * FOREST_GROUND_LAYER — dedicated render LAYER for the MOBILE forest TERRAIN GROUND
+ * (meadow / path / lake floor), used ONLY by MobileCrispBoardPipeline when
+ * MOBILE_FOREST_SHADOWS_ENABLED is on.
+ *
+ * WHY A SEPARATE LAYER (the iOS shadow landmine): enabling `renderer.shadowMap.enabled`
+ * injects shadow-sampling GLSL (the ~6e-8 RGBA depth-unpack constants) into EVERY
+ * MeshStandard program in that (sub)pass — three gates USE_SHADOWMAP on
+ * `shadowMap.enabled && shadows.length`, NOT on `object.receiveShadow`. The forest's
+ * foliage/rock materials run `precision mediump float`, and those constants underflow
+ * mediump so the iOS/Metal compiler REJECTS the program → INVISIBLE forest. To let the
+ * terrain ground RECEIVE real tree shadows we isolate it (a HIGHP material) on this
+ * layer and draw it in its own scene sub-pass with shadowMap.enabled=true, while the
+ * mediump foliage/rocks draw in a second sub-pass with shadowMap.enabled=false — so no
+ * mediump program is ever compiled under shadow injection. The pipeline additively
+ * enables this layer on every scene light (same as BOARD/CITY) so the ground is lit.
+ *
+ * Desktop never touches this (inert). When MOBILE_FOREST_SHADOWS_ENABLED is off the
+ * ground stays on layer 0 (mediump, no shadow receipt) and this layer is unused.
+ */
+export const FOREST_GROUND_LAYER = 3;
+
+/**
+ * MASTER TOGGLE — real-time TREE (+ rock) shadows cast into the frozen static shadow
+ * map and RECEIVED by the terrain ground, on the MOBILE path. It is the SAME frozen
+ * one-shot shadow-map that already makes the building-on-board shadow work, extended
+ * so trees cast into it and the ground receives from it.
+ *
+ * A/B + instant on-device revert: flip to `false` to restore the pre-feature path
+ * byte-for-byte — ground mediump on layer 0, a single shadows-OFF scene pass, ortho
+ * ±12 / 1536² frozen map, forest non-casting, the baked contact-AO at full strength,
+ * and NO blank screen (it is the exact current code path). `true` = trees/rocks cast +
+ * the highp ground receives (see the scene-pass split in MobileCrispBoardPipeline and
+ * the material/caster wiring in ForestEnvironment).
+ *
+ * Typed `boolean` (not the literal `true`) ON PURPOSE so both branches type-check and
+ * survive in the bundle for a rebuild-flip revert. DESKTOP is unaffected either way.
+ */
+// eslint-disable-next-line @typescript-eslint/no-inferrable-types -- the `boolean` annotation is the point: without it the type narrows to `true`, every `MOBILE_FOREST_SHADOWS_ENABLED ? … : …` select below collapses to dead code, and the rebuild-flip revert path stops type-checking (same pattern as GLOW_NIGHT_MODE in ownedGlow.ts)
+export const MOBILE_FOREST_SHADOWS_ENABLED: boolean = true;
+
 /** Map a tile index to a world-space [x, y=0, z] on the board plane, centered at origin. */
 export function tileToWorld(index: number): [number, number, number] {
   const pos = SPACE_POSITIONS[index];
   return [(pos.x - 0.5) * BOARD_WORLD_SIZE, 0, (pos.y - 0.5) * BOARD_WORLD_SIZE];
+}
+
+/** Mutable planar (x, z) pair — the board plane is at y=0 so y is never stored. */
+export interface WorldXZ { x: number; z: number }
+
+/**
+ * Zero-allocation variant of {@link tileToWorld}: writes the tile's world (x, z)
+ * into the provided `out` and returns it. Identical math to tileToWorld (y is
+ * always 0 on the board plane, so it is omitted). Use in hot per-frame paths
+ * (e.g. the PlayerTokens idle reconcile) to avoid the fresh tuple tileToWorld
+ * allocates on every call.
+ */
+export function tileToWorldXZInto(index: number, out: WorldXZ): WorldXZ {
+  const pos = SPACE_POSITIONS[index];
+  out.x = (pos.x - 0.5) * BOARD_WORLD_SIZE;
+  out.z = (pos.y - 0.5) * BOARD_WORLD_SIZE;
+  return out;
 }
 
 /**
@@ -133,37 +235,48 @@ export interface ThirdPersonPose {
 }
 
 /**
- * Compute the over-the-shoulder camera pose for a token sitting on `tileIndex`.
- *
- * The pose is derived PURELY from tile indices — no dependency on any token
- * facing rotation (the token has none at rest). The forward direction is the
- * normalized world-space vector from the current tile to the NEXT tile in the
- * ring, i.e. the token's direction of travel.
- *
- * CRITICAL: every position here comes from `tileToWorldRotated`, which already
- * applies BOARD_ROTATION and therefore returns the token's ACTUAL visual world
- * position. The returned pose is in that same world space — the space the camera
- * and OrbitControls live in — so it must NOT be rotated again by the caller.
+ * Ring "direction of travel" for `tileIndex`: the normalized, planar, world-space
+ * vector from the current tile to the NEXT tile in the ring. World-space because
+ * it comes from `tileToWorldRotated` (BOARD_ROTATION already applied), matching
+ * the camera's space. Falls back to +Z on the (impossible for a 40-tile ring)
+ * degenerate case.
  */
-export function thirdPersonPose(tileIndex: number): ThirdPersonPose {
+function ringForward(tileIndex: number): THREE.Vector3 {
   const cur = ((tileIndex % 40) + 40) % 40;
   const next = (cur + 1) % 40;
-
-  const curPos = tileToWorldRotated(cur);
-  const nextPos = tileToWorldRotated(next);
-
-  // Direction of travel in world space (planar; y is flat on the board).
-  const forward = nextPos.clone().sub(curPos);
+  const forward = tileToWorldRotated(next).sub(tileToWorldRotated(cur));
   forward.y = 0;
   if (forward.lengthSq() < 1e-8) {
-    // Degenerate (should not happen for a 40-tile ring) — face +Z as a fallback.
     forward.set(0, 0, 1);
   } else {
     forward.normalize();
   }
+  return forward;
+}
 
-  // Token position at its base height.
-  const tokenPos = curPos.clone();
+/**
+ * Compute the over-the-shoulder camera pose for a token at an EXPLICIT world
+ * position `tokenWorldPos`, with the "behind" direction taken from the ring
+ * (tile → next) via `tileIndex`.
+ *
+ * This is the LIVE-position variant used by the third-person follow cam: the
+ * token LOCATION comes from the actual animated mesh position (so the camera
+ * eases along with the walking character every frame), while the behind-direction
+ * still tracks the discrete ring tile the token is moving along.
+ *
+ * `tokenWorldPos` MUST be the token's ACTUAL world-space position (BOARD_ROTATION
+ * applied — i.e. `group.getWorldPosition(...)`), so it lives in the same world
+ * space the camera / OrbitControls do and the returned pose must NOT be rotated
+ * again by the caller. `tokenWorldPos` is treated as read-only (it is cloned).
+ */
+export function thirdPersonPoseAt(
+  tokenWorldPos: THREE.Vector3,
+  tileIndex: number,
+): ThirdPersonPose {
+  const forward = ringForward(tileIndex);
+
+  // Token position at its base height (do NOT mutate the caller's vector).
+  const tokenPos = tokenWorldPos.clone();
   tokenPos.y = TOKEN_BASE_Y;
 
   // Camera sits BEHIND the token (−forward) and ABOVE it.
@@ -177,4 +290,27 @@ export function thirdPersonPose(tileIndex: number): ThirdPersonPose {
   target.y = TOKEN_BASE_Y + THIRD_PERSON_TARGET_Y;
 
   return { cameraPos, target };
+}
+
+/**
+ * Compute the over-the-shoulder camera pose for a token sitting on `tileIndex`.
+ *
+ * The pose is derived PURELY from tile indices — no dependency on any token
+ * facing rotation (the token has none at rest). The forward direction is the
+ * normalized world-space vector from the current tile to the NEXT tile in the
+ * ring, i.e. the token's direction of travel.
+ *
+ * CRITICAL: every position here comes from `tileToWorldRotated`, which already
+ * applies BOARD_ROTATION and therefore returns the token's ACTUAL visual world
+ * position. The returned pose is in that same world space — the space the camera
+ * and OrbitControls live in — so it must NOT be rotated again by the caller.
+ *
+ * This is the DISCRETE-tile pose (used as the follow-cam fallback before a live
+ * token position has been published, and everywhere else the tile is the source
+ * of truth); `thirdPersonPoseAt` is the live-position variant. Delegating keeps
+ * the two byte-for-byte consistent.
+ */
+export function thirdPersonPose(tileIndex: number): ThirdPersonPose {
+  const cur = ((tileIndex % 40) + 40) % 40;
+  return thirdPersonPoseAt(tileToWorldRotated(cur), tileIndex);
 }

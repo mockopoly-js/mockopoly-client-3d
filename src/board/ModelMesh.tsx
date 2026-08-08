@@ -17,12 +17,20 @@ export function ModelMesh({
   position = [0, 0, 0] as [number, number, number],
   scale = 1,
   rotation = [0, 0, 0] as [number, number, number],
+  receiveShadow = false,
 }: {
   url: string;
   tint?: string;
   position?: [number, number, number];
   scale?: number | [number, number, number];
   rotation?: [number, number, number];
+  /**
+   * Whether the mesh receives shadows. Default false (desktop byte-identical —
+   * buildings historically only cast). Buildings pass true on mobile so they
+   * receive the static baked golden-hour shadow (e.g. a hotel's cast onto
+   * neighbouring houses). Desktop keeps false → no render change.
+   */
+  receiveShadow?: boolean;
 }) {
   const gltf = useGLTF(url);
 
@@ -53,8 +61,9 @@ export function ModelMesh({
     });
     const m = new THREE.Mesh(geometry, material);
     m.castShadow = true;
+    m.receiveShadow = receiveShadow;
     return m;
-  }, [gltf, tint]);
+  }, [gltf, tint, receiveShadow]);
 
   // GPU cleanup: the memo above allocates a per-instance geometry CLONE and a
   // per-instance MeshStandardMaterial each time `gltf`/`tint` changes. Without

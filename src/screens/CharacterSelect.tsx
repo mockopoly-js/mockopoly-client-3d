@@ -1,784 +1,493 @@
-import { lazy, Suspense, useState, useMemo, useCallback } from 'react';
-import { Lock, Star } from 'lucide-react';
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import type { RefObject } from 'react';
+import { Lock } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { useGameStore } from '../state/gameStore';
-import { CHARACTERS, CHARACTER_CATEGORIES, resolveCharacter } from '../constants/characters';
-import type { CharacterCategory } from '../constants/characters';
+import { resolveCharacter } from '../constants/characters';
+import { RARITY_COLOR, RARITY_LABEL, resolveSkinMeta } from '../constants/skins';
 import {
-  resolveSkinMeta,
-  isSkinUnlocked,
-  skinThumbnailUrl,
-  RARITY_COLOR,
-  RARITY_LABEL,
-} from '../constants/skins';
-import { TOKEN_HEX, GOLD, GOLD_BRIGHT } from '../constants/theme';
-import type { TokenType } from '../types/GameState';
-import { FONT_FAMILY } from '../constants/fonts';
-import { GameButton } from '../ui/GameButton';
-import { useIsMobile } from '../ui/useIsMobile';
+  Button, Field, KIT, Segs, Takeover, TakeoverCol, TakeoverRule, cx,
+} from '../ui/kit';
+import type { KitStyle } from '../ui/kit';
+import { buildLocker, isUnlocked, ownedCount } from './characterLocker';
+import type { LockerFilter, LockerTile } from './characterLocker';
+import { NEUTRAL_TURN, SHELL_BACKDROP, SHELL_STAGE_TAKEOVER } from './shellChrome';
+import { SkinColorPicker } from './TokenPicker';
 
-/** Curated palette for skin base-color recoloring — 16 tasteful swatches. */
-const SKIN_COLOR_PALETTE = [
-  { label: 'Crimson',    hex: '#e53935' },
-  { label: 'Rose',       hex: '#e91e8c' },
-  { label: 'Cobalt',     hex: '#1565c0' },
-  { label: 'Sky',        hex: '#0288d1' },
-  { label: 'Teal',       hex: '#00897b' },
-  { label: 'Forest',     hex: '#2e7d32' },
-  { label: 'Lime',       hex: '#7cb342' },
-  { label: 'Amber',      hex: '#f59e0b' },
-  { label: 'Orange',     hex: '#e64a19' },
-  { label: 'Purple',     hex: '#7b1fa2' },
-  { label: 'Violet',     hex: '#5c35c1' },
-  { label: 'Gold',       hex: '#d4af37' },
-  { label: 'Slate',      hex: '#455a64' },
-  { label: 'Onyx',       hex: '#1a1a2e' },
-  { label: 'Snow',       hex: '#f0f0f0' },
-  { label: 'Blush',      hex: '#f48fb1' },
-] as const;
+/**
+ * THE LOCKER — 52 cosmetic skins, laid out Fortnite-style.
+ *
+ * *** PAYMENTS ARE DEFERRED. *** There is no purchase flow, no price and no
+ * store anywhere on this screen. What there is, is the shape a store needs:
+ * owned tiles and locked tiles, visibly different, driven by ONE predicate —
+ * `isUnlocked(characterId)` in `characterLocker.ts` — which returns true for
+ * everything today. A later commit flips that one function body and this
+ * layout does not move.
+ *
+ * WHY A TAKEOVER. The kit reserves takeovers for comparative, full-attention
+ * surfaces. A browsable 52-tile grid beside a pinned live preview is exactly
+ * that shape: you are comparing a candidate against what you have equipped, and
+ * a 250px read-only column cannot host either half. The approved mockup uses
+ * the takeover's own head / body / two-column / footer structure verbatim, and
+ * so does this.
+ *
+ * THE MEASURED BUDGET, at 844x390 — measured in the browser, not estimated.
+ * The takeover's content box is 750x353. The head is 44 (the close button's
+ * 44px floor sets it, not the title) and the footer 56, leaving 237 for the
+ * body and 233 for a column. The wide column takes 1.9 of 2.9 (454px, 438
+ * inside its padding) and the narrow column the rest (247, 231 inside). The
+ * filter row takes 50, so the grid gets 175 — TWO full rows of 67px tiles plus
+ * a visible slice of a third, which IS the scroll affordance. Everything below
+ * is arithmetic on those numbers.
+ *
+ * BOTH COLUMNS ARE `overflow: visible`. `TakeoverCol` is a scroll container by
+ * default, and `overflow-y:auto` clips the X axis too, which would slice the
+ * tiles' rarity rings and the preview stage's drop shadow. The ONE thing that
+ * scrolls is the grid, in its own wrapper.
+ */
 
 // ── Lazy 3D preview — three/drei stay off the menu-screen entry bundle. This is
-//    the ONLY live WebGL canvas on the screen; the 52 grid cards use static
-//    thumbnail <img>. ──
+//    the ONLY live WebGL canvas on the screen; the 52 grid tiles are static <img>.
 const CharacterPreview = lazy(() =>
   import('./CharacterPreviewCanvas').then((m) => ({ default: m.CharacterPreviewCanvas })),
 );
 
-const TOKENS = Object.keys(TOKEN_HEX) as TokenType[];
-const ALL_CAT = 'All' as const;
-type CatFilter = typeof ALL_CAT | CharacterCategory;
+/**
+ * SIX COLUMNS: (438 - 5x8) / 6 = 66.3px tiles, 74.3px of row pitch, so twelve
+ * portraits and a slice of a thirteenth row are on screen at once.
+ *
+ * The alternative was five 82px tiles, which fits exactly two rows and NO
+ * partial third — a grid with no visible cut edge reads as complete, and a
+ * locker showing 10 of 52 with no sign of the other 42 is the wrong lie to
+ * tell. Seven columns (56px) fits nearly three rows but the portraits stop
+ * being identifiable, which is the only thing a tile is for.
+ */
+const GRID_COLS = 6;
 
-type RightTab = 'skin' | 'color';
+const FILTERS: { value: LockerFilter; label: string }[] = [
+  { value: 'all', label: 'All' },
+  { value: 'owned', label: 'Owned' },
+  { value: 'locked', label: 'Locked' },
+];
 
 export function CharacterSelect() {
   const navigate = useNavigate();
-  const isMobile = useIsMobile();
 
-  // Persisted selections from the store.
   const storeCharacter = useGameStore((s) => s.selectedCharacter);
   const setSelectedCharacter = useGameStore((s) => s.setSelectedCharacter);
   const storeCharacterColor = useGameStore((s) => s.selectedCharacterColor);
   const setSelectedCharacterColor = useGameStore((s) => s.setSelectedCharacterColor);
-  const storeToken = useGameStore((s) => s.selectedToken);
-  const setSelectedToken = useGameStore((s) => s.setSelectedToken);
 
-  // Local drafts — committed on Equip.
+  // Local drafts — committed on Equip, so backing out changes nothing.
   const [selectedId, setSelectedId] = useState(storeCharacter);
   const [characterColor, setCharacterColor] = useState<string | null>(storeCharacterColor);
-  // hexDraft drives the hex text input so the user can type character-by-character.
-  // It is synced FROM characterColor whenever the color changes via swatch/wheel/reset.
-  const [hexDraft, setHexDraft] = useState<string>(storeCharacterColor ?? '');
-  // Use this instead of calling setCharacterColor directly from swatch/wheel/reset so
-  // hexDraft stays in sync. The hex text input manages hexDraft itself and only
-  // calls setCharacterColor when the typed value becomes a valid #RRGGBB.
-  const applyColor = useCallback((hex: string | null) => {
-    setCharacterColor(hex);
-    setHexDraft(hex ?? '');
-  }, []);
-  const [token, setToken] = useState<TokenType>(storeToken);
-  const [category, setCategory] = useState<CatFilter>(ALL_CAT);
+  const [filter, setFilter] = useState<LockerFilter>('all');
   const [search, setSearch] = useState('');
-  const [rightTab, setRightTab] = useState<RightTab>('skin');
 
   const selectedDef = useMemo(() => resolveCharacter(selectedId), [selectedId]);
   const selectedMeta = useMemo(() => resolveSkinMeta(selectedDef.id), [selectedDef]);
   const accent = RARITY_COLOR[selectedMeta.rarity];
+  const tiles = useMemo(() => buildLocker(search, filter), [search, filter]);
+  const owned = ownedCount();
 
-  const filtered = useMemo(() => {
-    const lc = search.trim().toLowerCase();
-    return CHARACTERS.filter((c) => {
-      const catOk = category === ALL_CAT || c.category === category;
-      const searchOk =
-        !lc || c.name.toLowerCase().includes(lc) || c.id.toLowerCase().includes(lc);
-      return catOk && searchOk;
-    });
-  }, [category, search]);
+  /** A locked skin still previews — you can look at what you do not own. */
+  const canEquip = isUnlocked(selectedDef.id);
 
-  const pickRandom = useCallback(() => {
-    const pool = filtered.length > 0 ? filtered : CHARACTERS;
-    setSelectedId(pool[Math.floor(Math.random() * pool.length)].id);
-  }, [filtered]);
+  /**
+   * THE EQUIPPED SKIN HAS TO BE ON SCREEN WHEN THE LOCKER OPENS. Nine rows of
+   * six, two and a bit visible: open it with your own character equipped from
+   * row eight and the grid shows you six strangers and no sign of yourself.
+   * Runs once, on mount, and only for the id that came out of the store —
+   * tapping a tile must never yank the grid around under the finger.
+   */
+  const equippedRef = useRef<HTMLButtonElement>(null);
+  useEffect(() => {
+    const el = equippedRef.current;
+    // jsdom has no layout and no scrollIntoView; the guard keeps tests honest.
+    if (el && typeof el.scrollIntoView === 'function') el.scrollIntoView({ block: 'nearest' });
+  }, []);
 
+  const back = useCallback(() => { navigate('/'); }, [navigate]);
   const equip = useCallback(() => {
+    if (!isUnlocked(selectedDef.id)) return;
     setSelectedCharacter(selectedDef.id);
     setSelectedCharacterColor(characterColor);
-    setSelectedToken(token);
     navigate('/');
-  }, [selectedDef.id, characterColor, token, setSelectedCharacter, setSelectedCharacterColor, setSelectedToken, navigate]);
+  }, [selectedDef.id, characterColor, setSelectedCharacter, setSelectedCharacterColor, navigate]);
 
-  const back = useCallback(() => navigate('/'), [navigate]);
-
-  // ── The shared building blocks (used by both desktop columns & mobile stack) ──
-
-  const previewPanel = (
-    <div style={s.previewPanel}>
-      <div style={s.canvasWrap(isMobile)}>
-        <Suspense fallback={<div style={s.previewFallback}>Loading preview…</div>}>
-          <CharacterPreview
-            url={selectedDef.url}
-            accent={accent}
-            baseColor={characterColor ?? undefined}
-          />
-        </Suspense>
-      </div>
-
-      {/* Rarity banner + name + category + description (the "EPIC | OUTFIT" panel) */}
-      <div style={s.infoPanel(accent)} data-testid="rarity-panel">
-        <div style={s.rarityRow}>
-          <span style={s.rarityBadge(accent)} data-testid="rarity-badge">
-            {RARITY_LABEL[selectedMeta.rarity]}
-          </span>
-          <span style={s.rarityDivider}>·</span>
-          <span style={s.categoryLabel}>{selectedDef.category}</span>
-          {selectedMeta.premium && <span style={s.premiumTag}>PREMIUM</span>}
-        </div>
-        <h2 style={s.skinName}>{selectedDef.name}</h2>
-        <p style={s.skinDesc}>{selectedMeta.description}</p>
-      </div>
-
-      {/* TAB SWITCHER: Skin color vs Player color ─────────────────────── */}
-      <div style={s.tabBar} role="tablist" aria-label="Customization tabs">
-        <button
-          role="tab"
-          aria-selected={rightTab === 'skin'}
-          onClick={() => setRightTab('skin')}
-          style={s.tab(rightTab === 'skin')}
-          data-testid="tab-skin-color"
-        >
-          Skin color
-        </button>
-        <button
-          role="tab"
-          aria-selected={rightTab === 'color'}
-          onClick={() => setRightTab('color')}
-          style={s.tab(rightTab === 'color')}
-          data-testid="tab-player-color"
-        >
-          Player color
-        </button>
-      </div>
-
-      {/* SKIN COLOR TAB ─ recolors the Skin/Face materials; outfit/hair/eyes untouched */}
-      {rightTab === 'skin' && (
-        <div style={s.colorBlock} data-testid="skin-color-panel">
-          <div style={s.colorLabel}>Skin color</div>
-          <div style={s.swatchRow} role="group" aria-label="Skin color palette">
-            {SKIN_COLOR_PALETTE.map(({ label, hex }) => (
-              <button
-                key={hex}
-                aria-label={label}
-                aria-pressed={characterColor === hex}
-                onClick={() => applyColor(hex)}
-                style={s.swatch(characterColor === hex, hex)}
-                title={label}
-              />
-            ))}
-          </div>
-          <div style={s.freeColorRow}>
-            <label style={s.freeColorLabel} htmlFor="skin-free-color">
-              Custom
-            </label>
-            <input
-              id="skin-free-color"
-              type="color"
-              value={characterColor ?? '#ffffff'}
-              onChange={(e) => applyColor(e.target.value)}
-              style={s.freeColorInput}
-              aria-label="Custom skin color"
-              data-testid="skin-free-color-input"
-            />
-            {/* hexDraft lets the user type freely character-by-character.
-                characterColor is only updated when a complete #RRGGBB is typed. */}
-            <input
-              type="text"
-              value={hexDraft}
-              placeholder="#rrggbb"
-              maxLength={7}
-              onChange={(e) => {
-                const v = e.target.value;
-                setHexDraft(v);
-                if (/^#[0-9a-fA-F]{6}$/.test(v)) setCharacterColor(v);
-                else if (v === '' || v === '#') setCharacterColor(null);
-              }}
-              style={s.freeColorHex}
-              aria-label="Hex color value"
-              data-testid="skin-color-hex-input"
-            />
-            <button
-              style={s.resetBtn}
-              onClick={() => applyColor(null)}
-              data-testid="skin-color-reset"
-              aria-label="Reset skin color to default"
-            >
-              Default
-            </button>
-          </div>
-        </div>
-      )}
-
-      {/* PLAYER COLOR TAB ─ board-identity puck color (separate from outfit) */}
-      {rightTab === 'color' && (
-        <div style={s.colorBlock} data-testid="player-color-panel">
-          <div style={s.colorLabel}>Player color</div>
-          <div style={s.swatchRow} role="group" aria-label="Your board color">
-            {TOKENS.map((t) => (
-              <button
-                key={t}
-                aria-label={t}
-                aria-pressed={t === token}
-                onClick={() => setToken(t)}
-                style={s.swatch(t === token, TOKEN_HEX[t])}
-              />
-            ))}
-          </div>
-        </div>
-      )}
-
-      <div style={s.actions(isMobile)}>
-        <GameButton variant="tertiary" fullWidth onClick={back}>
-          Back
-        </GameButton>
-        <GameButton variant="primary" fullWidth onClick={equip}>
-          Equip
-        </GameButton>
-      </div>
-    </div>
-  );
-
-  const gridPanel = (
-    <div style={s.gridCol(isMobile)}>
-      <div style={s.gridHeader}>
-        <h1 style={s.title(isMobile)}>LOCKER</h1>
-        <div style={s.controls}>
-          <input
-            placeholder="Search skins…"
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            style={s.searchInput}
-            aria-label="Search skins"
-          />
-          <GameButton variant="secondary" onClick={pickRandom}>
-            Random
-          </GameButton>
-        </div>
-        <div style={s.chipsRow} role="tablist" aria-label="Skin categories">
-          {([ALL_CAT, ...CHARACTER_CATEGORIES] as CatFilter[]).map((cat) => (
-            <button
-              key={cat}
-              role="tab"
-              aria-selected={category === cat}
-              onClick={() => setCategory(cat)}
-              style={s.chip(category === cat)}
-            >
-              {cat}
-            </button>
-          ))}
-        </div>
-      </div>
-
-      <div style={s.grid} role="listbox" aria-label="Skins">
-        {filtered.length === 0 && (
-          <div style={s.emptyMsg}>No skins match your search.</div>
-        )}
-        {filtered.map((char) => {
-          const meta = resolveSkinMeta(char.id);
-          const frame = RARITY_COLOR[meta.rarity];
-          const isSelected = char.id === selectedId;
-          const locked = !isSkinUnlocked(char.id);
-          return (
-            <button
-              key={char.id}
-              role="option"
-              aria-selected={isSelected}
-              onClick={() => setSelectedId(char.id)}
-              style={s.card(isSelected, frame)}
-              title={char.name}
-              data-rarity={meta.rarity}
-            >
-              <span style={s.cardThumbWrap(frame)}>
-                <img
-                  src={skinThumbnailUrl(char.id)}
-                  alt={char.name}
-                  loading="lazy"
-                  decoding="async"
-                  style={s.cardThumb}
-                />
-                {(locked || meta.premium) && (
-                  <span
-                    style={s.badge(locked)}
-                    aria-label={locked ? 'Locked' : 'Premium'}
-                    data-testid="skin-badge"
-                  >
-                    {locked ? <Lock size={12} aria-hidden /> : <Star size={12} aria-hidden />}
-                  </span>
-                )}
-              </span>
-              <span style={s.cardName}>{char.name}</span>
-            </button>
-          );
-        })}
-      </div>
-    </div>
-  );
-
-  // Desktop: LEFT = grid (~55%), RIGHT = big preview + info (~45%).
-  // Mobile: stack — preview on top, name/rarity/desc + color + Equip, then grid.
   return (
-    <div style={s.page}>
-      {isMobile ? (
-        <div style={s.mobileStack}>
-          {previewPanel}
-          {gridPanel}
-        </div>
-      ) : (
-        <div style={s.desktop}>
-          {gridPanel}
-          {previewPanel}
-        </div>
-      )}
+    <div style={{ ...SHELL_STAGE_TAKEOVER, ...NEUTRAL_TURN }}>
+      <i style={SHELL_BACKDROP} aria-hidden="true" />
+
+      {/*
+        `open` IS A LITERAL HERE, and that is not the mistake it looks like.
+        A <Panel> stays mounted when closed so its exit can animate; this
+        takeover IS the route — React unmounts the whole screen on navigation,
+        so there is no exit to animate and no state to keep. Deferring `open` by
+        a frame to force the fade-in only bought a 450ms delay on a route change
+        and left the surface `aria-hidden` for that frame.
+      */}
+      <Takeover
+        open
+        label="Character select"
+        eyebrow={`Locker · ${RARITY_LABEL[selectedMeta.rarity]} · ${owned}/52 owned`}
+        title={selectedDef.name}
+        onClose={back}
+        footer={
+          <>
+            {/*
+              THE COLOUR PICKER LIVES IN THE FOOTER, and that is worth 100px of
+              preview. Stacked under the preview it took two 44px rows out of a
+              233px column and left the live character 131px tall — about 42px
+              of actual figure, because the camera's vertical field of view is
+              fixed and a short viewport simply renders a smaller person. As one
+              44px row down here the footer does not grow at all (EQUIP is 48),
+              the preview takes the whole column, and the character doubles.
+
+              `marginRight: auto` against the footer's `justify-content:flex-end`
+              is what pushes it left of the two buttons.
+            */}
+            <div style={footerPicker}>
+              <SkinColorPicker value={characterColor} onChange={setCharacterColor} columns={8} />
+            </div>
+            <Button variant="ghost" label="Back" onClick={back} />
+            <Button
+              variant="gold"
+              sheen={canEquip}
+              label={canEquip ? 'Equip' : 'Locked'}
+              disabled={!canEquip}
+              onClick={equip}
+            />
+          </>
+        }
+      >
+        <TakeoverCol top style={wideCol}>
+          <div style={filterRow}>
+            <Segs value={filter} options={FILTERS} onChange={setFilter} ariaLabel="Ownership filter" />
+            {/*
+              SEARCH ALSO MATCHES THE CATEGORY, which is what replaced the old
+              row of 13 category chips: the grid only has 175px of height, and a
+              second filter row would have cost a third of it. Typing "viking"
+              still reaches the nine Viking skins.
+            */}
+            <Field value={search} onChange={setSearch} placeholder="Search skins or theme" />
+          </div>
+
+          <div style={gridWrap}>
+            <div style={grid} role="listbox" aria-label="Skins">
+              {tiles.length === 0 && <div style={emptyMsg}>No skins match that search.</div>}
+              {tiles.map((t) => (
+                <SkinTile
+                  key={t.id}
+                  tile={t}
+                  selected={t.id === selectedId}
+                  tileRef={t.id === storeCharacter ? equippedRef : undefined}
+                  onSelect={() => { setSelectedId(t.id); }}
+                />
+              ))}
+            </div>
+          </div>
+        </TakeoverCol>
+
+        <TakeoverRule />
+
+        {/* Not `top`: the column's auto margins centre the single capped stage. */}
+        <TakeoverCol style={narrowCol}>
+          {/*
+            THE ONE LIVE CANVAS, and it now owns the whole column. `flex:1 1
+            auto; min-height:0` inside a column with a definite height gives it
+            a definite height too — an explicit aspect-ratio here would lose a
+            flexbox auto-minimum-size fight and measure 0px tall.
+          */}
+          <div style={previewStage}>
+            <Suspense fallback={<div style={previewFallback}>Loading preview…</div>}>
+              <CharacterPreview
+                url={selectedDef.url}
+                accent={accent}
+                baseColor={characterColor ?? undefined}
+              />
+            </Suspense>
+            <span style={stageTag(accent)} data-testid="rarity-badge">
+              {RARITY_LABEL[selectedMeta.rarity]}
+            </span>
+            {!canEquip && (
+              <span style={stageLock}>
+                <Lock size={11} aria-hidden />
+                Locked
+              </span>
+            )}
+          </div>
+        </TakeoverCol>
+      </Takeover>
     </div>
   );
 }
 
-// ── Styles ──────────────────────────────────────────────────────────────────
+// ────────────────────────────────────────────────────────────────────────────
+// TILE
+// ────────────────────────────────────────────────────────────────────────────
 
-const FONT = FONT_FAMILY;
-const BG = '#08080f';
-const PANEL_BG = '#12121e';
-const CARD_BG = '#171724';
-const BORDER = '#2a2a40';
-const TEXT_PRIMARY = '#e8e8f0';
-const TEXT_SECONDARY = '#8888a0';
-const CREAM = '#f7f0dd';
-
-/** Convert a #rrggbb accent into an rgba() glow at the given alpha. */
-function glow(hex: string, alpha: number): string {
-  const h = hex.replace('#', '');
-  const r = parseInt(h.slice(0, 2), 16);
-  const g = parseInt(h.slice(2, 4), 16);
-  const b = parseInt(h.slice(4, 6), 16);
-  return `rgba(${r},${g},${b},${alpha})`;
+/**
+ * One skin card. EVERY DECORATION IS INSET — no outward box-shadow, no negative
+ * margin — because these live inside the grid's scroll container, and a
+ * scrolling ancestor beats any z-index (rule R1).
+ *
+ * Locked is carried three ways, never by colour alone: a lock chip, a solid
+ * muted name colour (never opacity — rule R3), and a desaturating filter on the
+ * portrait itself.
+ */
+function SkinTile({
+  tile,
+  selected,
+  tileRef,
+  onSelect,
+}: {
+  tile: LockerTile;
+  selected: boolean;
+  /** Set only on the tile that was equipped when the locker opened. */
+  tileRef?: RefObject<HTMLButtonElement>;
+  onSelect: () => void;
+}) {
+  return (
+    <button
+      ref={tileRef}
+      type="button"
+      role="option"
+      aria-selected={selected}
+      aria-label={tile.locked ? `${tile.name}, locked` : tile.name}
+      data-rarity={tile.rarity}
+      data-locked={tile.locked}
+      title={tile.name}
+      onClick={onSelect}
+      style={tileBox(selected, tile.frame)}
+    >
+      <img
+        src={tile.thumb}
+        alt={tile.name}
+        loading="lazy"
+        decoding="async"
+        style={tile.locked ? tileImgLocked : tileImg}
+      />
+      {tile.locked && (
+        <span style={tileLock} aria-hidden="true">
+          <Lock size={10} />
+        </span>
+      )}
+      <span className={cx('kit-trunc')} style={tile.locked ? tileNameLocked : tileName}>
+        {tile.name}
+      </span>
+    </button>
+  );
 }
 
-const s = {
-  page: {
-    position: 'fixed',
-    inset: 0,
-    background: BG,
-    fontFamily: FONT,
-    color: TEXT_PRIMARY,
-    overflow: 'hidden',
-  } as React.CSSProperties,
+// ────────────────────────────────────────────────────────────────────────────
+// GEOMETRY — every number is arithmetic on the budget in the header note.
+// ────────────────────────────────────────────────────────────────────────────
 
-  // ── Desktop split ──
-  desktop: {
-    display: 'flex',
-    flexDirection: 'row',
-    height: '100%',
-  } as React.CSSProperties,
+/** 1.9 : 1 against the narrow column. overflow:visible — see the header note. */
+const wideCol: KitStyle = { flex: '1.9 1 0', overflow: 'visible' };
+const narrowCol: KitStyle = { flex: '1 1 0', maxWidth: 262, overflow: 'visible' };
 
-  // ── Mobile stack ──
-  mobileStack: {
-    display: 'flex',
-    flexDirection: 'column',
-    height: '100%',
-    overflowY: 'auto',
-    paddingBottom: 'env(safe-area-inset-bottom)',
-  } as React.CSSProperties,
+/** Segs (3 items, ~232 natural) + a flexible search field, on one 50px row. */
+const filterRow: KitStyle = {
+  flex: '0 0 auto',
+  display: 'flex',
+  alignItems: 'center',
+  gap: KIT.tapGap,
+};
 
-  // ── Left: the grid column (desktop ~55%) ──
-  gridCol: (m: boolean): React.CSSProperties => ({
-    display: 'flex',
-    flexDirection: 'column',
-    minHeight: 0,
-    minWidth: 0,
-    flex: m ? 'none' : '0 0 55%',
-    width: m ? '100%' : '55%',
-    padding: m ? '12px 12px 20px' : '20px 22px',
-    gap: 12,
-    boxSizing: 'border-box',
-    borderRight: m ? 'none' : `1px solid ${BORDER}`,
-    overflow: m ? 'visible' : 'hidden',
-  }),
+/**
+ * The one scroll container on the screen. The bottom mask softens the last
+ * visible row instead of hard-clipping it, so a half-row reads as "there is
+ * more" rather than as a rendering error.
+ */
+const gridWrap: KitStyle = {
+  flex: '1 1 auto',
+  minHeight: 0,
+  overflowY: 'auto',
+  overscrollBehavior: 'contain',
+  WebkitOverflowScrolling: 'touch',
+  // scrollIntoView on the equipped tile lands it flush against the edge
+  // otherwise, which reads as clipped rather than as scrolled.
+  scrollPaddingBlock: 8,
+  maskImage: 'linear-gradient(180deg, #000 0, #000 calc(100% - 18px), rgb(0 0 0 / 12%) 100%)',
+  WebkitMaskImage: 'linear-gradient(180deg, #000 0, #000 calc(100% - 18px), rgb(0 0 0 / 12%) 100%)',
+};
 
-  gridHeader: {
-    display: 'flex',
-    flexDirection: 'column',
-    gap: 10,
-    flexShrink: 0,
-  } as React.CSSProperties,
+const grid: KitStyle = {
+  display: 'grid',
+  gridTemplateColumns: `repeat(${GRID_COLS}, 1fr)`,
+  gap: KIT.sp2,
+  gridAutoRows: 'min-content',
+  alignContent: 'start',
+  paddingBottom: 2,
+};
 
-  title: (m: boolean): React.CSSProperties => ({
-    fontFamily: FONT,
-    fontWeight: 800,
-    fontSize: m ? 22 : 28,
-    color: GOLD,
-    margin: 0,
-    letterSpacing: '0.08em',
-  }),
+const emptyMsg: KitStyle = {
+  gridColumn: '1 / -1',
+  padding: `${KIT.sp6} 0`,
+  textAlign: 'center',
+  font: `500 ${KIT.fsLabelLg}/${KIT.lhSnug} ${KIT.font}`,
+  color: KIT.text2,
+};
 
-  controls: {
-    display: 'flex',
-    gap: 10,
-    alignItems: 'center',
-  } as React.CSSProperties,
-
-  searchInput: {
-    fontFamily: FONT,
-    fontSize: 16, // 16px avoids iOS focus zoom
-    fontWeight: 600,
-    color: TEXT_PRIMARY,
-    background: PANEL_BG,
-    border: `1px solid ${BORDER}`,
-    borderRadius: 12,
-    padding: '10px 14px',
-    outline: 'none',
-    flex: 1,
-    minWidth: 0,
-    boxSizing: 'border-box',
-    minHeight: 44,
-  } as React.CSSProperties,
-
-  chipsRow: {
-    display: 'flex',
-    gap: 6,
-    flexWrap: 'wrap',
-  } as React.CSSProperties,
-
-  chip: (active: boolean): React.CSSProperties => ({
-    fontFamily: FONT,
-    fontSize: 12,
-    fontWeight: active ? 800 : 600,
-    padding: '7px 11px',
-    borderRadius: 999,
-    border: active ? `1px solid ${GOLD}` : `1px solid ${BORDER}`,
-    background: active ? glow(GOLD, 0.18) : PANEL_BG,
-    color: active ? GOLD : TEXT_SECONDARY,
-    cursor: 'pointer',
-    whiteSpace: 'nowrap',
-    minHeight: 32,
-  }),
-
-  grid: {
-    display: 'grid',
-    gridTemplateColumns: 'repeat(auto-fill, minmax(120px, 1fr))',
-    gap: 10,
-    overflowY: 'auto',
-    flex: 1,
-    minHeight: 0,
-    paddingBottom: 8,
-    alignContent: 'start',
-  } as React.CSSProperties,
-
-  emptyMsg: {
-    gridColumn: '1 / -1',
-    color: TEXT_SECONDARY,
-    fontFamily: FONT,
-    fontSize: 14,
-    textAlign: 'center',
-    padding: '32px 0',
-  } as React.CSSProperties,
-
-  card: (selected: boolean, frame: string): React.CSSProperties => ({
-    display: 'flex',
-    flexDirection: 'column',
-    alignItems: 'center',
-    gap: 6,
-    padding: 8,
-    borderRadius: 14,
-    // Rarity-colored frame; SELECTED = prominent gold ring on top.
-    border: selected ? `2px solid ${GOLD}` : `2px solid ${frame}`,
-    background: selected ? glow(GOLD, 0.14) : CARD_BG,
-    boxShadow: selected
-      ? `0 0 0 3px ${glow(GOLD, 0.35)}, 0 4px 14px ${glow(GOLD, 0.25)}`
-      : `0 2px 8px rgba(0,0,0,0.35)`,
-    cursor: 'pointer',
-    boxSizing: 'border-box',
-    width: '100%',
-    textAlign: 'center',
-  }),
-
-  cardThumbWrap: (frame: string): React.CSSProperties => ({
+/**
+ * ~67px square at six columns. Comfortably above the 44px tap floor, and small
+ * enough that twelve portraits and a slice of a thirteenth row are on screen at
+ * once — a locker that shows four skins is a list, not a locker.
+ */
+function tileBox(selected: boolean, frame: string): KitStyle {
+  return {
     position: 'relative',
-    width: '100%',
-    aspectRatio: '1 / 1',
-    borderRadius: 10,
-    // A subtle rarity-tinted gradient behind the transparent portrait.
-    background: `radial-gradient(circle at 50% 38%, ${glow(frame, 0.28)}, ${glow(frame, 0.06)} 70%, transparent)`,
+    aspectRatio: '1',
+    minHeight: 44,
+    padding: 0,
+    border: 0,
+    borderRadius: KIT.rMd,
+    cursor: 'pointer',
+    touchAction: 'manipulation',
     overflow: 'hidden',
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'center',
-  }),
+    // SELECTED MUST NOT READ AS "LEGENDARY". Legendary's frame is already gold,
+    // so a gold ring alone is ambiguous: selection adds a gold WASH and a
+    // second, brighter ring inside it. Both are inset — nothing may overhang a
+    // scroll container (rule R1).
+    background: selected
+      ? 'linear-gradient(160deg, rgb(212 175 55 / 24%), rgb(9 10 18 / 92%))'
+      : `linear-gradient(160deg, ${KIT.surfaceRaised}, ${KIT.surfaceSunken})`,
+    boxShadow: selected
+      ? `inset 0 0 0 2px ${KIT.goldBright}, inset 0 0 0 5px rgb(240 208 96 / 30%)`
+      : `inset 0 0 0 2px ${frame}`,
+    transition: `box-shadow ${KIT.durTap} ${KIT.easeOut}, transform ${KIT.durTap} ${KIT.easeOut}`,
+  };
+}
 
-  cardThumb: {
-    width: '100%',
-    height: '100%',
-    objectFit: 'contain',
-    imageRendering: 'auto',
-  } as React.CSSProperties,
+/** The art stops 15px short of the bottom so the name band is never drawn over
+ *  a face. A portrait centred in the remaining 52px still reads at 67px wide. */
+const tileImg: KitStyle = {
+  position: 'absolute',
+  inset: '0 0 15px',
+  width: '100%',
+  height: 'calc(100% - 15px)',
+  objectFit: 'contain',
+};
+/** Locked art is desaturated, not faded — opacity on a tile would fade its
+ *  name and ring with it (rule R3). */
+const tileImgLocked: KitStyle = { ...tileImg, filter: 'grayscale(1) brightness(0.6)' };
 
-  badge: (locked: boolean): React.CSSProperties => ({
+/**
+ * The name band. Full-bleed with its own scrim rather than a separate
+ * overlapping element: two absolute siblings would need a z-index to keep the
+ * text above the gradient, and one box cannot be out of order with itself.
+ * Sentence case, no tracking — caps plus 0.4px of tracking cost two characters
+ * of an already tight 61px.
+ */
+const tileNameBase: KitStyle = {
+  position: 'absolute',
+  left: 0,
+  right: 0,
+  bottom: 0,
+  display: 'block',
+  padding: '0 3px 1px',
+  font: `700 ${KIT.fsMicro}/14px ${KIT.font}`,
+  letterSpacing: KIT.lsNone,
+  textAlign: 'center',
+  textShadow: KIT.textLegible,
+  background: 'linear-gradient(180deg, transparent, rgb(4 4 10 / 78%) 55%)',
+};
+const tileName: KitStyle = { ...tileNameBase, color: KIT.text };
+const tileNameLocked: KitStyle = { ...tileNameBase, color: KIT.text3 };
+
+const tileLock: KitStyle = {
+  position: 'absolute',
+  top: 3,
+  right: 3,
+  width: 16,
+  height: 16,
+  borderRadius: '50%',
+  display: 'grid',
+  placeItems: 'center',
+  color: KIT.text2,
+  background: 'rgb(4 4 10 / 82%)',
+  boxShadow: 'inset 0 0 0 1px rgb(232 232 240 / 18%)',
+};
+
+/**
+ * The whole narrow column — see the footer note about why.
+ *
+ * CAPPED AT 200px, AND THAT IS A CAMERA CONSTRAINT, NOT A TASTE ONE.
+ * `CharacterPreviewCanvas` is frozen: its camera is a 38° VERTICAL field of
+ * view at 1.55 units, which puts the podium's 0.6-unit ring exactly at the
+ * frame edge when the stage is square. At the column's full 233px the stage is
+ * 231x233 and the ring is sliced on both sides; at 231x200 the horizontal
+ * half-extent is 0.72 units and it clears. The column's auto margins centre
+ * what is left over.
+ */
+const previewStage: KitStyle = {
+  position: 'relative',
+  flex: '1 1 auto',
+  minHeight: 120,
+  maxHeight: 200,
+  borderRadius: KIT.rLg,
+  overflow: 'hidden',
+  background: 'radial-gradient(120% 90% at 50% 8%, rgb(212 175 55 / 12%), transparent 60%), linear-gradient(180deg, #1c1d30, #0c0c16)',
+  // --shadow-1 (6px reach), not --shadow-2 (16px): this column is only
+  // `overflow: visible` because nothing in it needs to escape far.
+  boxShadow: `${KIT.ringHair}, ${KIT.shadow1}`,
+};
+
+const previewFallback: KitStyle = {
+  width: '100%',
+  height: '100%',
+  display: 'grid',
+  placeItems: 'center',
+  font: `500 ${KIT.fsLabel}/${KIT.lhSnug} ${KIT.font}`,
+  color: KIT.text2,
+};
+
+/** Pushed left of BACK / EQUIP by the footer's own `justify-content:flex-end`. */
+const footerPicker: KitStyle = { marginRight: 'auto' };
+
+/**
+ * A LOCKED SKIN STILL PREVIEWS — you can look at what you do not own, which is
+ * the whole point of a locker. This chip is the second carrier of that state
+ * (the third is EQUIP reading "LOCKED" and being inert), so it never rests on
+ * the tile's lock glyph alone.
+ */
+const stageLock: KitStyle = {
+  position: 'absolute',
+  right: KIT.sp2,
+  bottom: KIT.sp2,
+  height: 16,
+  padding: `0 ${KIT.sp2}`,
+  display: 'inline-flex',
+  alignItems: 'center',
+  gap: 4,
+  borderRadius: KIT.rPill,
+  font: `700 ${KIT.fsMicro}/${KIT.lhFlat} ${KIT.font}`,
+  textTransform: 'uppercase',
+  letterSpacing: KIT.lsWider,
+  color: KIT.text2,
+  background: 'rgb(4 4 10 / 82%)',
+  boxShadow: 'inset 0 0 0 1px rgb(232 232 240 / 18%)',
+};
+
+/** Rarity, pinned to the stage rather than given its own row — the narrow
+ *  column is the live preview and nothing else. */
+function stageTag(hex: string): KitStyle {
+  return {
     position: 'absolute',
-    top: 4,
-    right: 4,
-    lineHeight: 1,
-    padding: '3px 5px',
-    borderRadius: 8,
-    background: locked ? 'rgba(0,0,0,0.65)' : glow(GOLD, 0.85),
-    color: locked ? '#fff' : '#1a1400',
+    left: KIT.sp2,
+    bottom: KIT.sp2,
+    padding: `0 ${KIT.sp2}`,
+    height: 16,
     display: 'inline-flex',
     alignItems: 'center',
-    justifyContent: 'center',
-  }),
-
-  cardName: {
-    fontFamily: FONT,
-    fontSize: 11,
-    fontWeight: 700,
-    color: TEXT_PRIMARY,
-    lineHeight: 1.25,
-    overflow: 'hidden',
-    textOverflow: 'ellipsis',
-    display: '-webkit-box',
-    WebkitLineClamp: 2,
-    WebkitBoxOrient: 'vertical',
-    width: '100%',
-  } as React.CSSProperties,
-
-  // ── Right: the big preview + info panel (desktop ~45%) ──
-  previewPanel: {
-    display: 'flex',
-    flexDirection: 'column',
-    alignItems: 'stretch',
-    gap: 14,
-    flex: 1,
-    minWidth: 0,
-    minHeight: 0,
-    padding: '20px 22px',
-    boxSizing: 'border-box',
-    background: PANEL_BG,
-  } as React.CSSProperties,
-
-  canvasWrap: (m: boolean): React.CSSProperties => ({
-    width: '100%',
-    height: m ? 240 : 340,
-    minHeight: m ? 200 : 260,
-    flex: m ? 'none' : 1,
-    borderRadius: 18,
-    overflow: 'hidden',
-    background: '#0d0d18',
-    border: `1px solid ${BORDER}`,
-  }),
-
-  previewFallback: {
-    width: '100%',
-    height: '100%',
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'center',
-    color: TEXT_SECONDARY,
-    fontFamily: FONT,
-    fontSize: 14,
-  } as React.CSSProperties,
-
-  infoPanel: (accent: string): React.CSSProperties => ({
-    borderRadius: 14,
-    padding: '12px 16px',
-    background: `linear-gradient(135deg, ${glow(accent, 0.22)}, ${glow(accent, 0.06)})`,
-    borderLeft: `4px solid ${accent}`,
-    border: `1px solid ${glow(accent, 0.4)}`,
-  }),
-
-  rarityRow: {
-    display: 'flex',
-    alignItems: 'center',
-    gap: 8,
-    flexWrap: 'wrap',
-  } as React.CSSProperties,
-
-  rarityBadge: (accent: string): React.CSSProperties => ({
-    fontFamily: FONT,
-    fontWeight: 800,
-    fontSize: 12,
-    letterSpacing: '0.08em',
+    borderRadius: KIT.rPill,
+    font: `700 ${KIT.fsMicro}/${KIT.lhFlat} ${KIT.font}`,
     textTransform: 'uppercase',
-    color: accent,
-  }),
-
-  rarityDivider: {
-    color: TEXT_SECONDARY,
-    fontWeight: 800,
-  } as React.CSSProperties,
-
-  categoryLabel: {
-    fontFamily: FONT,
-    fontWeight: 700,
-    fontSize: 12,
-    letterSpacing: '0.06em',
-    textTransform: 'uppercase',
-    color: TEXT_SECONDARY,
-  } as React.CSSProperties,
-
-  premiumTag: {
-    marginLeft: 'auto',
-    fontFamily: FONT,
-    fontWeight: 800,
-    fontSize: 10,
-    letterSpacing: '0.08em',
-    color: '#1a1400',
-    background: GOLD_BRIGHT,
-    borderRadius: 6,
-    padding: '2px 6px',
-  } as React.CSSProperties,
-
-  skinName: {
-    fontFamily: FONT,
-    fontWeight: 800,
-    fontSize: 24,
-    color: CREAM,
-    margin: '6px 0 2px',
-    lineHeight: 1.1,
-  } as React.CSSProperties,
-
-  skinDesc: {
-    fontFamily: FONT,
-    fontWeight: 500,
-    fontSize: 13,
-    color: TEXT_PRIMARY,
-    margin: 0,
-    lineHeight: 1.4,
-    opacity: 0.85,
-  } as React.CSSProperties,
-
-  colorBlock: {
-    display: 'flex',
-    flexDirection: 'column',
-    gap: 8,
-  } as React.CSSProperties,
-
-  colorLabel: {
-    fontFamily: FONT,
-    fontWeight: 700,
-    fontSize: 12,
-    letterSpacing: '0.06em',
-    textTransform: 'uppercase',
-    color: TEXT_SECONDARY,
-  } as React.CSSProperties,
-
-  swatchRow: {
-    display: 'flex',
-    gap: 10,
-    flexWrap: 'wrap',
-  } as React.CSSProperties,
-
-  swatch: (selected: boolean, hex: string): React.CSSProperties => ({
-    width: 36,
-    height: 36,
-    borderRadius: '50%',
-    background: hex,
-    border: selected ? `3px solid ${GOLD}` : '3px solid rgba(255,255,255,0.25)',
-    cursor: 'pointer',
-    padding: 0,
-    boxShadow: selected ? `0 0 0 2px ${glow(GOLD, 0.4)}` : 'none',
-    transform: selected ? 'scale(1.12)' : 'scale(1)',
-    transition: 'transform 0.12s ease',
-    touchAction: 'manipulation',
-  }),
-
-  actions: (m: boolean): React.CSSProperties => ({
-    display: 'flex',
-    gap: 12,
-    marginTop: m ? 4 : 'auto',
-    justifyContent: 'stretch',
-  }),
-
-  // ── Tab switcher ──
-  tabBar: {
-    display: 'flex',
-    gap: 0,
-    borderRadius: 10,
-    overflow: 'hidden',
-    border: `1px solid ${BORDER}`,
-    flexShrink: 0,
-  } as React.CSSProperties,
-
-  tab: (active: boolean): React.CSSProperties => ({
-    flex: 1,
-    fontFamily: FONT,
-    fontWeight: active ? 800 : 600,
-    fontSize: 13,
-    letterSpacing: '0.05em',
-    textTransform: 'uppercase',
-    padding: '10px 12px',
-    background: active ? glow(GOLD, 0.22) : PANEL_BG,
-    color: active ? GOLD : TEXT_SECONDARY,
-    border: 'none',
-    borderRight: `1px solid ${BORDER}`,
-    cursor: 'pointer',
-    minHeight: 44,
-    transition: 'background 0.12s ease, color 0.12s ease',
-  }),
-
-  // ── Free color row (custom picker + hex input + reset) ──
-  freeColorRow: {
-    display: 'flex',
-    alignItems: 'center',
-    gap: 8,
-    flexWrap: 'wrap',
-    marginTop: 6,
-  } as React.CSSProperties,
-
-  freeColorLabel: {
-    fontFamily: FONT,
-    fontWeight: 700,
-    fontSize: 12,
-    color: TEXT_SECONDARY,
-    letterSpacing: '0.05em',
-    textTransform: 'uppercase',
-    flexShrink: 0,
-  } as React.CSSProperties,
-
-  freeColorInput: {
-    width: 44,
-    height: 44,
-    padding: 2,
-    border: `1px solid ${BORDER}`,
-    borderRadius: 8,
-    background: PANEL_BG,
-    cursor: 'pointer',
-    flexShrink: 0,
-  } as React.CSSProperties,
-
-  freeColorHex: {
-    fontFamily: "'Courier New', monospace",
-    fontSize: 13,
-    fontWeight: 600,
-    color: TEXT_PRIMARY,
-    background: PANEL_BG,
-    border: `1px solid ${BORDER}`,
-    borderRadius: 8,
-    padding: '8px 10px',
-    width: 90,
-    minHeight: 44,
-    boxSizing: 'border-box',
-    outline: 'none',
-    flexShrink: 0,
-  } as React.CSSProperties,
-
-  resetBtn: {
-    fontFamily: FONT,
-    fontWeight: 700,
-    fontSize: 12,
-    letterSpacing: '0.05em',
-    textTransform: 'uppercase',
-    color: TEXT_SECONDARY,
-    background: PANEL_BG,
-    border: `1px solid ${BORDER}`,
-    borderRadius: 8,
-    padding: '8px 12px',
-    cursor: 'pointer',
-    minHeight: 44,
-    flexShrink: 0,
-  } as React.CSSProperties,
-};
+    letterSpacing: KIT.lsWider,
+    color: hex,
+    background: 'rgb(4 4 10 / 74%)',
+    boxShadow: `inset 0 0 0 1px color-mix(in srgb, ${hex} 55%, transparent)`,
+  };
+}

@@ -1,3 +1,23 @@
 {
-  "extends": ["stylelint-config-standard"]
+  "extends": ["stylelint-config-standard"],
+  "overrides": [
+    {
+      "files": ["src/ui/kit/**/*.css"],
+      "rules": {
+        "selector-class-pattern": [
+          "^kit-[a-z0-9]+(-[a-z0-9]+)*(__[a-z0-9]+(-[a-z0-9]+)*)?(--[a-z0-9]+(-[a-z0-9]+)*)?$|^is-[a-z0-9]+(-[a-z0-9]+)*$",
+          {
+            "message": "Design-kit classes are BEM under a kit- prefix (.kit-block__elem--mod) or an is-* state class. An unprefixed class here can collide with a legacy screen's CSS."
+          }
+        ],
+        "declaration-block-single-line-max-declarations": null,
+        "rule-empty-line-before": null,
+        "comment-empty-line-before": null,
+        "at-rule-empty-line-before": null,
+        "custom-property-empty-line-before": null,
+        "no-descending-specificity": null,
+        "no-duplicate-selectors": null
+      }
+    }
+  ]
 }
