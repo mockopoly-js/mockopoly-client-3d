@@ -1,8 +1,6 @@
-import type React from 'react';
-import { useGameStore } from '../state/gameStore';
-import { FONT_FAMILY } from '../constants/fonts';
-import { GameButton } from './GameButton';
-import { useActionBadges } from './useActionBadges';
+import { KIT } from './kit';
+import type { KitStyle } from './kit';
+import { HudButtons } from './HudButtons';
 
 interface ActionsSheetProps {
   open: boolean;
@@ -10,76 +8,64 @@ interface ActionsSheetProps {
 }
 
 /**
- * Mobile-only: a small right-docked sheet holding the three secondary actions
- * (Trade / Partnership / Deal) that used to crowd the board on a full-width bar.
- * Opened by the ⋯ button in TurnHud's bottom-right cluster. Each button calls
- * the SAME existing store panel-open handlers the desktop HudButtons uses, then
- * closes the sheet so the full-screen panel (z:40) takes over. A transparent
- * scrim (z:35) sits behind the sheet (z:36) to catch outside taps to dismiss —
- * both below the panel modals so nothing here can cover an open negotiation.
+ * Overflow menu for the three negotiation actions, opened by the ⋯ button in
+ * the bottom-right cluster.
+ *
+ * WHY A POPOVER AND NOT A <Panel>. The kit's right slide-in panel is the detail
+ * surface — a deed, a mortgage ladder, a portfolio. Three buttons do not earn
+ * 392px and a scrim over half the board. This is a small anchored surface built
+ * from the same tokens (surface-panel + ring-hair + shadow-3 + r-lg) with the
+ * kit's own bottom-anchored inward entrance.
+ *
+ * POSITIONING CONTRACT: it must be rendered as a child of <ZoneAct>, which is
+ * `position:absolute` and does not clip. `bottom:100%` anchors it directly above
+ * the cluster WITHOUT joining the cluster's flex flow, so opening it cannot move
+ * the primary button by a pixel — the tap target under the thumb never moves.
+ *
+ * NOT a kit <Panel>, so conditional rendering is correct here: there is no
+ * mounted-while-closed exit transition to preserve.
+ *
+ * NO TAKEOVER STAND-DOWN OF ITS OWN, AND THAT IS DELIBERATE. Every other
+ * HUD-layer surface calls `useHudStandDown()` because each is its own
+ * `position:fixed` stage that inherits nothing from any other. This one is not:
+ * the positioning contract above puts it inside <ZoneAct>, inside TurnHud's
+ * stage, which already yields. `opacity: 0` on that ancestor composites this
+ * whole subtree — including the `position:fixed` scrim, which an opacity
+ * stacking context still paints inside — and the inherited `visibility: hidden`
+ * takes the scrim out of hit-testing, so the tap-catcher cannot swallow a tap
+ * meant for the takeover. Adding a second flag here would be a second mechanism
+ * for one surface, and it would double-fade. The sheet stays OPEN underneath
+ * and is exactly where the thumb left it when the takeover closes.
  */
 export function ActionsSheet({ open, onClose }: ActionsSheetProps) {
-  const trade = useGameStore((s) => s.toggleTradePanel);
-  const partnership = useGameStore((s) => s.togglePartnershipPanel);
-  const deal = useGameStore((s) => s.toggleDealPanel);
-  const badges = useActionBadges();
-
   if (!open) return null;
-
-  const pick = (openPanel: (show?: boolean) => void) => () => {
-    openPanel(true);
-    onClose();
-  };
 
   return (
     <>
+      {/* Transparent full-viewport tap-catcher. Below the sheet, above the HUD. */}
       <div style={scrim} onClick={onClose} aria-hidden="true" />
-      <div style={sheet} role="menu" aria-label="More actions">
-        <div style={btnWrap}>
-          <GameButton variant="dark" onClick={pick(trade)} style={sheetBtn}>Trade</GameButton>
-          {badges.trade && <span style={dot} aria-hidden="true" />}
-        </div>
-        <div style={btnWrap}>
-          <GameButton variant="dark" onClick={pick(partnership)} style={sheetBtn}>Partnership</GameButton>
-          {badges.partnership && <span style={dot} aria-hidden="true" />}
-        </div>
-        <div style={btnWrap}>
-          <GameButton variant="dark" onClick={pick(deal)} style={sheetBtn}>Deal</GameButton>
-          {badges.deal && <span style={dot} aria-hidden="true" />}
-        </div>
+      <div style={sheet} className="kit-in-bottom" role="menu" aria-label="More actions">
+        <HudButtons inline onPick={onClose} />
       </div>
     </>
   );
 }
 
-// Transparent full-screen tap-catcher — dismisses the sheet on any outside tap.
-const scrim: React.CSSProperties = {
-  position: 'fixed', inset: 0, zIndex: 35, background: 'transparent',
+/**
+ * No z-index on purpose. Every kit button is `position:relative`, so within
+ * <ZoneAct>'s stacking context the cluster paints in tree order — this scrim is
+ * the FIRST child, so the sheet and the buttons after it stay tappable and
+ * everything else falls through to the dismiss.
+ */
+const scrim: KitStyle = {
+  position: 'fixed', inset: 0, background: 'transparent', pointerEvents: 'auto',
 };
 
-const sheet: React.CSSProperties = {
-  position: 'fixed',
-  // Docked bottom-right, floating just above the action cluster and clear of the
-  // home indicator / side notch.
-  bottom: 'calc(74px + env(safe-area-inset-bottom))',
-  right: 'calc(12px + env(safe-area-inset-right))',
-  zIndex: 36,
-  display: 'flex', flexDirection: 'column', gap: 8,
-  background: 'rgba(18,18,30,0.96)',
-  border: '1px solid #2a2a40',
-  borderRadius: 14,
-  padding: 10,
-  minWidth: 150,
-  fontFamily: FONT_FAMILY,
-  boxShadow: '0 14px 40px -8px rgba(0,0,0,0.7)',
-};
-
-const btnWrap: React.CSSProperties = { position: 'relative', display: 'flex' };
-const sheetBtn: React.CSSProperties = {
-  flex: 1, minHeight: 44, fontSize: 14, padding: '10px 14px', borderRadius: 12,
-};
-const dot: React.CSSProperties = {
-  position: 'absolute', top: 4, right: 4,
-  width: 8, height: 8, borderRadius: '50%',
-  background: '#e5533d', pointerEvents: 'none',
+const sheet: KitStyle = {
+  position: 'absolute', right: 0, bottom: '100%', marginBottom: KIT.tapGap,
+  display: 'flex', flexDirection: 'column',
+  padding: KIT.sp3, borderRadius: KIT.rLg,
+  background: KIT.surfacePanel,
+  boxShadow: `${KIT.ringHair}, ${KIT.shadow3}`,
+  pointerEvents: 'auto',
 };

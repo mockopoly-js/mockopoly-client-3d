@@ -1,108 +1,113 @@
 import { useGameStore } from '../state/gameStore';
 import { TOKEN_HEX } from '../constants/theme';
-import { formatMoney } from '../utils/format';
-import { useIsMobile } from './useIsMobile';
 import type { Player } from '../types/GameState';
-import { FONT_FAMILY } from '../constants/fonts';
+import { Badge, KIT, Money, Pod, SafeBox, ZoneRead } from './kit';
+import type { KitStyle } from './kit';
+import { useHudStandDown } from './takeoverStage';
 
-/** 1–2 char avatar initials from a player name (word initials, else first chars). */
-function initials(name: string): string {
-  const words = name.trim().split(/\s+/).filter(Boolean);
-  if (words.length >= 2) return (words[0][0] + words[1][0]).toUpperCase();
-  const w = words[0] ?? '';
-  return (w.slice(0, 2) || '?').toUpperCase();
-}
+/** One GO salary. Below this a pod's cash renders in the `low` tone + LOW badge. */
+const LOW_CASH = 2_000_000;
 
+/**
+ * Opponent rows, top of the read-only LEFT column.
+ *
+ * WHO IS IN THE LIST. Opponents only, plus myself if I have gone bankrupt (the
+ * mockup's spectate state, where my own OUT row is the point). My name, my cash
+ * and my jail state live in the centre readout that TurnHud owns, so a pod for
+ * myself would be a second, competing copy of all three — and with four players
+ * it is the row that pushes the pod band into the set strip below it.
+ *
+ * WHOSE-TURN, CUE 2 OF 3. `isTurn` gives the active player's row the colour wash
+ * and ring. The other two cues are TurnHud's turn strip and the screen-edge
+ * perimeter; a single subtle cue is the documented failure.
+ */
 export function PlayerPods() {
   const players: Player[] = useGameStore((s) => s.state?.players) ?? [];
   const currentId = useGameStore((s) => s.state?.turn.currentPlayerId);
   const myId = useGameStore((s) => s.myPlayerId);
-  const isMobile = useIsMobile();
+  // THE POD BAND IS THE ONE THIS WAS MEASURED ON. With only TurnHud yielding,
+  // the takeover screenshot still showed pod ghosts printing behind the YOU
+  // GIVE column at up to 12.9/255 — a swatch, a name and a live cash value are
+  // exactly the kind of bright, high-contrast content the 95%-at-top-centre
+  // fill leaks. See `useHudStandDown` for the whole rationale.
+  const standDown = useHudStandDown();
 
-  if (!players.length) return null;
+  const me = players.find((p) => p.id === myId);
+  const rows = players.filter((p) => p.id !== myId || (me?.isBankrupt ?? false));
 
-  if (isMobile) {
-    // Compact avatar chips (initials) in the top-left safe area. The current
-    // player's chip is ringed gold; bankrupt chips dim. Names/money live in the
-    // top-center chip (me) — the board stays uncluttered.
-    return (
-      <div style={wrapMobile}>
-        {players.map((p) => {
-          const isCurrent = p.id === currentId;
-          return (
-            <div
-              key={p.id}
-              title={`${p.name}${p.id === myId ? ' (you)' : ''} · ${formatMoney(p.money)}`}
-              style={{
-                ...avatarMobile,
-                background: TOKEN_HEX[p.token],
-                outline: isCurrent ? '2px solid #f0d060' : '2px solid rgba(0,0,0,0.35)',
-                boxShadow: isCurrent ? '0 0 10px rgba(240,208,96,0.7)' : '0 2px 6px rgba(0,0,0,0.5)',
-                opacity: p.isBankrupt ? 0.4 : 1,
-              }}
-            >
-              {initials(p.name)}
-            </div>
-          );
-        })}
-      </div>
-    );
-  }
+  if (rows.length === 0) return null;
 
   return (
-    <div style={wrap}>
-      {players.map((p) => {
-        const badges = [
-          p.isHost ? 'HOST' : null,
-          p.isJailed ? 'JAIL' : null,
-          p.isBankrupt ? 'BANKRUPT' : null,
-          !p.isConnected ? 'OFFLINE' : null,
-        ].filter(Boolean).join(' · ');
-        return (
-          <div key={p.id} style={{ ...pod, outline: p.id === currentId ? '2px solid #d4af37' : 'none', opacity: p.isBankrupt ? 0.5 : 1 }}>
-            <span style={{ ...dot, background: TOKEN_HEX[p.token] }} />
-            <div style={{ flex: 1, minWidth: 0 }}>
-              <div style={{ fontWeight: 800, fontSize: 13 }}>
-                {p.name}{p.id === myId && <span style={{ color: '#8888a0' }}> (you)</span>}
-              </div>
-              {badges && <div style={{ fontSize: 10, color: '#8888a0', fontWeight: 700 }}>{badges}</div>}
-            </div>
-            <span style={{ fontWeight: 800, fontSize: 12, fontVariantNumeric: 'tabular-nums', color: p.money < 0 ? '#e5533d' : '#46b16a' }}>
-              {formatMoney(p.money)}
-            </span>
+    <div style={{ ...stage, ...standDown.style }} aria-hidden={standDown.ariaHidden}>
+      <SafeBox>
+        <ZoneRead style={zonePad}>
+          <div style={column}>
+            {rows.map((p) => (
+              <Pod
+                key={p.id}
+                name={p.name}
+                color={TOKEN_HEX[p.token]}
+                swatch
+                glass
+                isTurn={p.id === currentId && !p.isBankrupt}
+                isOut={p.isBankrupt}
+                isOffline={!p.isConnected && !p.isBankrupt}
+                value={
+                  <Money
+                    value={p.money}
+                    size="glance"
+                    tone={p.money < LOW_CASH ? 'low' : 'default'}
+                    digits={3}
+                    legible
+                  />
+                }
+                badges={badgesFor(p, p.id === myId)}
+              />
+            ))}
           </div>
-        );
-      })}
+        </ZoneRead>
+      </SafeBox>
     </div>
   );
 }
 
-// ── Desktop styles (unchanged) ──
-const wrap: React.CSSProperties = {
-  position: 'fixed', top: 14, right: 14, display: 'flex', flexDirection: 'column', gap: 8,
-  fontFamily: FONT_FAMILY, zIndex: 30, width: 200,
-};
-const pod: React.CSSProperties = {
-  display: 'flex', alignItems: 'center', gap: 9, background: '#12121e', color: '#e8e8f0',
-  borderRadius: 12, padding: '8px 11px', boxShadow: '0 8px 22px -12px rgba(0,0,0,.6)',
-};
-const dot: React.CSSProperties = { width: 20, height: 20, borderRadius: '50%', flex: 'none' };
+/**
+ * At most two badges per row. A pod is 40px with a 13px name and a 15px cash
+ * value already competing for 250px, and a badge is supporting information —
+ * bankruptcy and disconnection are also carried by the row's own treatment.
+ */
+function badgesFor(p: Player, isMe: boolean) {
+  const out: React.ReactNode[] = [];
+  if (p.isBankrupt) {
+    out.push(<Badge key="out" tone="out">Bankrupt</Badge>);
+  } else {
+    if (!p.isConnected) out.push(<Badge key="off" tone="offline">Offline</Badge>);
+    if (p.isJailed) out.push(<Badge key="jail" tone="jail" bars>Jail</Badge>);
+    if (out.length < 2 && p.money < LOW_CASH) out.push(<Badge key="low" tone="warn">Low</Badge>);
+    if (out.length === 0 && isMe) out.push(<Badge key="you">You</Badge>);
+  }
+  return out.length > 0 ? out.slice(0, 2) : undefined;
+}
 
-// ── Mobile styles: top-left avatar chips ──
-const wrapMobile: React.CSSProperties = {
-  position: 'fixed',
-  top: 'calc(8px + env(safe-area-inset-top))',
-  left: 'calc(8px + env(safe-area-inset-left))',
-  display: 'flex',
-  flexDirection: 'row',
-  gap: 7,
-  fontFamily: FONT_FAMILY,
-  zIndex: 30,
+/**
+ * The kit's surfaces are `position:absolute` and assume a positioned, full-size
+ * ancestor; App.tsx mounts this as a bare sibling, so it supplies its own.
+ * Sits at --z-hud-under: the read column must never win against the action
+ * cluster or the expanded log.
+ */
+const stage: KitStyle = {
+  position: 'fixed', inset: 0, zIndex: KIT.zHudUnder, pointerEvents: 'none',
 };
-const avatarMobile: React.CSSProperties = {
-  width: 36, height: 36, borderRadius: '50%',
-  display: 'flex', alignItems: 'center', justifyContent: 'center',
-  color: '#fff', fontWeight: 800, fontSize: 13, letterSpacing: '0.02em',
-  textShadow: '0 1px 2px rgba(0,0,0,0.55)',
-  flex: 'none', boxSizing: 'border-box',
-};
+/**
+ * Measured from the mockup: the pod band starts at y 40 inside the safe box.
+ * The 4px left offset is INTERIOR, not stacked onto --sa-l — the flat token's
+ * 0 0 14px 2px glow crossed the safe line at x=0.
+ *
+ * The padding does not widen the zone: `index.css` sets border-box globally, so
+ * `.kit-zone-read`'s 250px is its OUTER width. Before that reset this style
+ * carried its own `boxSizing` because the pods measured 254px and their right
+ * edge poked out from under the expanded event log, which is exactly
+ * --zone-read-w wide.
+ */
+const zonePad: KitStyle = { padding: '40px 0 0 4px' };
+const column: KitStyle = { display: 'flex', flexDirection: 'column', gap: KIT.sp1 };

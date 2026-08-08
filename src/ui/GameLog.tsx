@@ -1,70 +1,95 @@
+import { useState } from 'react';
 import { useGameStore } from '../state/gameStore';
-import { useIsMobile } from './useIsMobile';
+import { useGameBusEvent } from '../state/useGameBus';
 import type { GameLogEntry } from '../types/GameState';
-import { FONT_FAMILY } from '../constants/fonts';
+import { EventLog, KIT, SafeBox, ZoneRead } from './kit';
+import type { EventLogItem, KitStyle } from './kit';
+import { HUD_TOGGLE_LOG } from './TurnHud';
+import { useHudStandDown } from './takeoverStage';
+
+/**
+ * The event channel — a collapsed last-event strip that expands to the history.
+ *
+ * *** IT GROWS FROM A BOTTOM-PINNED ANCHOR. ***
+ * `.kit-eventlog__list` is a following sibling of the peek row, so it grows
+ * DOWNWARD, and a log pinned to the bottom-left grows straight through the
+ * bottom safe inset. `column-reverse` puts the list ABOVE the peek and `bottom:0`
+ * pins the peek's own box: the 44px tap target does not move by a pixel when the
+ * log opens, the history grows up into free space, and no second tap target ever
+ * appears in the worst quadrant on the device.
+ *
+ * OPAQUE WHEN OPEN, not glass. Expanded, the list covers the pod band and the
+ * set strip; at 78% glass the pods ghost through behind 13px log copy.
+ *
+ * Two routes in, neither of which moves: this peek row, and the LOG button in
+ * the bottom-right cluster (which arrives over the game bus, because App.tsx
+ * mounts the two components as unrelated siblings).
+ */
+const MAX_ENTRIES = 8;
 
 export function GameLog() {
   const log: GameLogEntry[] = useGameStore((s) => s.state?.log) ?? [];
-  const isMobile = useIsMobile();
+  const [open, setOpen] = useState(false);
+  // Yields to a takeover like every other HUD-layer surface — and this one
+  // matters twice over when EXPANDED, because the open list is an opaque
+  // 212px panel of 13px copy sitting in the bottom-left. It stays open
+  // underneath and is exactly where it was when the takeover closes.
+  const standDown = useHudStandDown();
 
-  if (!log.length) return null;
-  const recent = log.slice(-6).reverse();
+  useGameBusEvent(HUD_TOGGLE_LOG, () => { setOpen((o) => !o); });
 
-  if (isMobile) {
-    // On mobile: a small, low-opacity toast at the bottom-left showing the two
-    // most recent entries. Each new entry fades in (keyed by timestamp). It sits
-    // clear of the bottom-right action cluster and never covers the board.
-    const slim = recent.slice(0, 2);
-    return (
-      <div style={wrapMobile}>
-        {slim.map((e, i) => (
-          <div key={`${e.timestamp}-${i}`} data-testid="log-entry" style={entryMobile}>{e.message}</div>
-        ))}
-      </div>
-    );
-  }
+  if (log.length === 0) return null;
+
+  // MEASURED in the mockup: the open list is capped at 212px and an item is
+  // 25.4px at one line, so nine entries scroll and silently cut the tail.
+  const items: EventLogItem[] = log
+    .slice(-MAX_ENTRIES)
+    .reverse()
+    .map((e, i) => ({
+      id: `${e.timestamp}-${i}`,
+      time: clock(e.timestamp),
+      text: e.message,
+      fresh: i === 0,
+    }));
 
   return (
-    <div style={wrap}>
-      <div style={hdr}>Log</div>
-      {recent.map((e, i) => (
-        <div key={`${e.timestamp}-${i}`} data-testid="log-entry" style={entry}>{e.message}</div>
-      ))}
+    <div style={{ ...stage, ...standDown.style }} aria-hidden={standDown.ariaHidden}>
+      <SafeBox>
+        <ZoneRead>
+          <EventLog
+            items={items}
+            open={open}
+            onOpenChange={setOpen}
+            style={open ? { ...anchored, ...anchoredOpen } : anchored}
+          />
+        </ZoneRead>
+      </SafeBox>
     </div>
   );
 }
 
-// ── Desktop styles (unchanged) ──
-const wrap: React.CSSProperties = {
-  position: 'fixed', bottom: 14, right: 14, width: 240, background: '#12121e', color: '#8888a0',
-  borderRadius: 12, padding: 12, fontFamily: FONT_FAMILY, zIndex: 30,
-  boxShadow: '0 8px 22px -12px rgba(0,0,0,.6)',
-};
-const hdr: React.CSSProperties = { fontSize: 10, letterSpacing: '.12em', textTransform: 'uppercase', color: '#555570', fontWeight: 800, marginBottom: 6 };
-const entry: React.CSSProperties = { fontSize: 12, fontWeight: 500, padding: '3px 0', lineHeight: 1.35 };
+/** "21:07". Explicit 24h so the 34px time slot is stable in every locale. */
+function clock(ts: number): string {
+  return new Date(ts).toLocaleTimeString('en-GB', {
+    hour: '2-digit', minute: '2-digit', hour12: false,
+  });
+}
 
-// ── Mobile styles: low-opacity fading toast, bottom-left, 2 entries max ──
-const wrapMobile: React.CSSProperties = {
-  position: 'fixed',
-  bottom: 'calc(10px + env(safe-area-inset-bottom))',
-  left: 'calc(10px + env(safe-area-inset-left))',
-  maxWidth: '46vw',
-  display: 'flex',
-  flexDirection: 'column',
-  gap: 4,
-  alignItems: 'flex-start',
-  fontFamily: FONT_FAMILY,
-  zIndex: 28,
-  pointerEvents: 'none',
+/** Sits at --z-toast, the layer the system already reserves for "toasts, event
+ *  log expanded": open, it OVERLAYS the pods and set strip rather than
+ *  displacing them. */
+const stage: KitStyle = {
+  position: 'fixed', inset: 0, zIndex: KIT.zToast, pointerEvents: 'none',
 };
-const entryMobile: React.CSSProperties = {
-  fontSize: 11,
-  fontWeight: 600,
-  color: '#e8e8f0',
-  background: 'rgba(8,8,15,0.55)',
-  borderRadius: 8,
-  padding: '4px 9px',
-  lineHeight: 1.25,
-  opacity: 0.85,
-  animation: 'logToastIn 0.3s ease',
+const anchored: KitStyle = {
+  position: 'absolute', left: 0, right: 0, bottom: 0, width: 'auto',
+  display: 'flex', flexDirection: 'column-reverse',
+  // Applied OPEN AND CLOSED so the peek's text never shifts, and it satisfies
+  // --row-pad for the full-bleed item rows.
+  paddingInline: KIT.rowPad,
+  borderRadius: KIT.rMd,
+};
+const anchoredOpen: KitStyle = {
+  background: KIT.surfacePanel,
+  boxShadow: `${KIT.ringHair}, ${KIT.shadow3}`,
 };

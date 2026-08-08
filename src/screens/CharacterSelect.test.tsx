@@ -1,45 +1,63 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
-import { render, screen, fireEvent, within } from '@testing-library/react';
+import { act, render, screen, fireEvent, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { useGameStore } from '../state/gameStore';
-import { CHARACTERS, CHARACTER_CATEGORIES, DEFAULT_CHARACTER } from '../constants/characters';
-import { resolveSkinMeta, RARITY_LABEL } from '../constants/skins';
+import { CHARACTERS, DEFAULT_CHARACTER } from '../constants/characters';
+import { RARITY_LABEL, resolveSkinMeta } from '../constants/skins';
+import { buildLocker, isUnlocked, ownedCount } from './characterLocker';
 import { requireDefined } from '../test-utils';
 
 // ── Mock the lazy 3D preview canvas — no WebGL in jsdom, and we don't want to
 //    pull three/drei into the test. The locker keeps ONE live canvas; the grid
 //    is static <img>. ──
 vi.mock('./CharacterPreviewCanvas', () => ({
-  CharacterPreviewCanvas: ({ url, accent }: { url: string; accent?: string }) => (
-    <div data-testid="character-preview" data-url={url} data-accent={accent} />
+  CharacterPreviewCanvas: ({ url, accent, baseColor }: { url: string; accent?: string; baseColor?: string }) => (
+    <div data-testid="character-preview" data-url={url} data-accent={accent} data-basecolor={baseColor} />
   ),
 }));
 
 // Import after mocks so the component sees the stub.
 import { CharacterSelect } from './CharacterSelect';
 
-function renderSelect(path = '/character-select') {
-  return render(
+/**
+ * ASYNC ON PURPOSE. The live preview is behind `lazy()` + `<Suspense>`, so it
+ * resolves a microtask AFTER the first commit; rendering synchronously leaves
+ * React warning that a suspended resource finished outside `act(...)` on every
+ * single test. Flushing it here keeps the suite's output clean and means every
+ * assertion runs against the settled tree.
+ */
+async function renderSelect(path = '/character-select') {
+  const utils = render(
     <MemoryRouter initialEntries={[path]}>
       <CharacterSelect />
     </MemoryRouter>,
   );
+  await act(async () => { await Promise.resolve(); });
+  return utils;
 }
+
+const filterTo = (name: RegExp) => {
+  fireEvent.click(within(screen.getByRole('radiogroup', { name: /ownership filter/i })).getByRole('radio', { name }));
+};
+const search = (value: string) => {
+  fireEvent.change(screen.getByPlaceholderText(/search skins/i), { target: { value } });
+};
 
 describe('CharacterSelect (locker)', () => {
   beforeEach(() => {
     useGameStore.getState().reset();
     useGameStore.getState().setSelectedCharacter(DEFAULT_CHARACTER);
-    useGameStore.getState().setSelectedToken('red');
+    useGameStore.getState().setSelectedCharacterColor(null);
     vi.restoreAllMocks();
   });
 
-  it('renders all 52 skin cards as thumbnail images in the grid', () => {
-    renderSelect();
+  // ── the grid ───────────────────────────────────────────────────────────────
+
+  it('renders all 52 skin cards as thumbnail images in the grid', async () => {
+    await renderSelect();
     const cards = screen.getAllByRole('option');
     expect(cards).toHaveLength(CHARACTERS.length);
     expect(cards.length).toBe(52);
-    // Every card carries a thumbnail <img> pointing at /images/characters/<id>.png.
     for (const c of CHARACTERS.slice(0, 5)) {
       const img = screen.getByAltText(c.name);
       expect(img.tagName).toBe('IMG');
@@ -47,107 +65,80 @@ describe('CharacterSelect (locker)', () => {
     }
   });
 
-  it('renders exactly ONE live preview canvas (grid uses static images)', () => {
-    renderSelect();
-    // The single mocked live canvas.
+  it('renders exactly ONE live preview canvas (grid uses static images)', async () => {
+    await renderSelect();
     expect(screen.getAllByTestId('character-preview')).toHaveLength(1);
-    // No <canvas> elements in the grid — those are <img>.
     expect(document.querySelectorAll('canvas')).toHaveLength(0);
-    // 52 thumbnail <img> (one per card).
     const thumbImgs = Array.from(document.querySelectorAll('img')).filter((i) =>
       (i.getAttribute('src') ?? '').startsWith('/images/characters/'),
     );
     expect(thumbImgs).toHaveLength(52);
   });
 
-  it('search filters skins by name', () => {
-    renderSelect();
-    const searchEl = screen.getByPlaceholderText(/search skins/i);
-    fireEvent.change(searchEl, { target: { value: 'ninja' } });
-    const cards = screen.getAllByRole('option');
+  it('every tile clears the 44px tap floor by construction', async () => {
+    // A 52-tile grid is where tile size gets shaved; jsdom has no layout, so
+    // this asserts the declared floor rather than a measured box.
+    await renderSelect();
+    for (const card of screen.getAllByRole('option').slice(0, 6)) {
+      expect((card as HTMLElement).style.minHeight).toBe('44px');
+    }
+  });
+
+  it('search filters skins by name', async () => {
+    await renderSelect();
+    search('ninja');
     const ninjaCount = CHARACTERS.filter(
-      (c) => c.name.toLowerCase().includes('ninja') || c.id.toLowerCase().includes('ninja'),
+      (c) => c.name.toLowerCase().includes('ninja')
+        || c.id.toLowerCase().includes('ninja')
+        || c.category.toLowerCase().includes('ninja'),
     ).length;
-    expect(cards).toHaveLength(ninjaCount);
+    expect(screen.getAllByRole('option')).toHaveLength(ninjaCount);
     expect(ninjaCount).toBeGreaterThan(0);
   });
 
-  it('category chip filters to the correct skins', () => {
-    renderSelect();
-    fireEvent.click(screen.getByRole('tab', { name: /^viking$/i }));
-    const cards = screen.getAllByRole('option');
+  it('search also matches the CATEGORY — this is what replaced the chip row', async () => {
+    await renderSelect();
+    search('viking');
     const vikingCount = CHARACTERS.filter((c) => c.category === 'Viking').length;
-    expect(cards).toHaveLength(vikingCount);
     expect(vikingCount).toBeGreaterThan(0);
+    const shown = screen.getAllByRole('option');
+    expect(shown.length).toBeGreaterThanOrEqual(vikingCount);
+    for (const card of shown) {
+      const name = requireDefined(within(card).getByRole('img').getAttribute('alt'));
+      const def = requireDefined(CHARACTERS.find((c) => c.name === name));
+      expect(
+        def.category === 'Viking' || def.name.toLowerCase().includes('viking') || def.id.toLowerCase().includes('viking'),
+      ).toBe(true);
+    }
   });
 
-  it('category chips cover All + the 12 categories', () => {
-    renderSelect();
-    // Scope to the skin-category tablist (aria-label="Skin categories") to
-    // exclude the tab switcher (Skin color / Player color) which are in their own tablist.
-    const categoryTablist = screen.getByRole('tablist', { name: /skin categories/i });
-    const tabs = within(categoryTablist).getAllByRole('tab');
-    expect(tabs).toHaveLength(CHARACTER_CATEGORIES.length + 1);
+  it('shows empty state when search has no match', async () => {
+    await renderSelect();
+    search('xxxxnoskinxxx');
+    expect(screen.getByText(/no skins match/i)).toBeTruthy();
   });
 
-  it('Random button selects a skin from the current filtered pool', () => {
-    renderSelect();
-    fireEvent.click(screen.getByRole('button', { name: /random/i }));
-    const selected = screen
-      .getAllByRole('option')
-      .filter((el) => el.getAttribute('aria-selected') === 'true');
-    expect(selected).toHaveLength(1);
+  it('rarity is reflected on the cards via data-rarity', async () => {
+    await renderSelect();
+    const cards = screen.getAllByRole('option');
+    expect(cards.filter((c) => c.getAttribute('data-rarity') === 'legendary').length).toBeGreaterThan(0);
   });
 
-  it('clicking a card selects it (aria-selected) and updates the preview', () => {
-    renderSelect();
+  // ── selection + preview ────────────────────────────────────────────────────
+
+  it('clicking a card selects it (aria-selected) and updates the preview', async () => {
+    await renderSelect();
     const cards = screen.getAllByRole('option');
     const notSelected = requireDefined(cards.find((c) => c.getAttribute('aria-selected') !== 'true'));
     const targetName = within(notSelected).getByRole('img').getAttribute('alt');
     const targetDef = requireDefined(CHARACTERS.find((c) => c.name === targetName));
     fireEvent.click(notSelected);
     expect(notSelected.getAttribute('aria-selected')).toBe('true');
-    // The single preview canvas now points at the selected skin's url.
     expect(screen.getByTestId('character-preview').getAttribute('data-url')).toBe(targetDef.url);
   });
 
-  it('shows the selected skin rarity, name, and description in the info panel', () => {
-    renderSelect();
-    const meta = resolveSkinMeta(DEFAULT_CHARACTER);
-    const def = requireDefined(CHARACTERS.find((c) => c.id === DEFAULT_CHARACTER));
-    // Rarity badge label.
-    expect(screen.getByTestId('rarity-badge').textContent).toBe(RARITY_LABEL[meta.rarity]);
-    // Name (heading) + description line present in the panel.
-    const panel = screen.getByTestId('rarity-panel');
-    expect(within(panel).getByText(def.name)).toBeTruthy();
-    expect(within(panel).getByText(meta.description)).toBeTruthy();
-  });
-
-  it('rarity is reflected on the cards via data-rarity', () => {
-    renderSelect();
-    const cards = screen.getAllByRole('option');
-    // Every card exposes its rarity; at least the legendary golden knight is present.
-    const legendary = cards.filter((c) => c.getAttribute('data-rarity') === 'legendary');
-    expect(legendary.length).toBeGreaterThan(0);
-  });
-
-  it('Equip stores the selected character + token color and navigates home', () => {
-    renderSelect();
-    const cards = screen.getAllByRole('option');
-    const targetName = within(cards[0]).getByRole('img').getAttribute('alt');
-    const targetDef = requireDefined(CHARACTERS.find((c) => c.name === targetName));
-    fireEvent.click(cards[0]);
-    // Switch to the Player color tab to access identity swatches.
-    fireEvent.click(screen.getByTestId('tab-player-color'));
-    // Pick a non-default color.
-    fireEvent.click(screen.getByRole('button', { name: 'blue' }));
-    fireEvent.click(screen.getByRole('button', { name: /equip/i }));
-    expect(useGameStore.getState().selectedCharacter).toBe(targetDef.id);
-    expect(useGameStore.getState().selectedToken).toBe('blue');
-  });
-
-  it('shows the store default character pre-selected', () => {
-    renderSelect();
+  it('shows the store default character pre-selected', async () => {
+    await renderSelect();
     const selectedCards = screen
       .getAllByRole('option')
       .filter((el) => el.getAttribute('aria-selected') === 'true');
@@ -157,27 +148,116 @@ describe('CharacterSelect (locker)', () => {
     expect(selName).toBe(defName);
   });
 
-  it('shows empty state when search has no match', () => {
-    renderSelect();
-    fireEvent.change(screen.getByPlaceholderText(/search skins/i), {
-      target: { value: 'xxxxnoskinxxx' },
-    });
-    expect(screen.getByText(/no skins match/i)).toBeTruthy();
+  it('names the selected skin and its rarity in the takeover head', async () => {
+    await renderSelect();
+    const meta = resolveSkinMeta(DEFAULT_CHARACTER);
+    const def = requireDefined(CHARACTERS.find((c) => c.id === DEFAULT_CHARACTER));
+    expect(screen.getByRole('heading', { name: def.name })).toBeTruthy();
+    // Rarity is carried twice: the eyebrow, and a chip on the preview stage.
+    expect(screen.getByTestId('rarity-badge').textContent).toBe(RARITY_LABEL[meta.rarity]);
   });
 
-  it('has 8 color swatch buttons in the Player color tab', () => {
-    renderSelect();
-    // Switch to the Player color tab.
-    fireEvent.click(screen.getByTestId('tab-player-color'));
-    const swatches = screen.getAllByRole('button').filter((b) =>
-      ['red', 'blue', 'green', 'yellow', 'purple', 'orange', 'cyan', 'pink'].includes(
-        b.getAttribute('aria-label') ?? '',
-      ),
-    );
-    expect(swatches).toHaveLength(8);
-    // The player-color panel's section label is shown.
-    expect(screen.getByTestId('player-color-panel')).toBeTruthy();
+  // ── the unlock seam ────────────────────────────────────────────────────────
+
+  it('the unlock seam currently owns everything, so nothing renders locked', async () => {
+    // `isUnlocked` is the ONE predicate the screen consults. While it returns
+    // true for every id the LOCKED filter must be empty and EQUIP always live.
+    expect(CHARACTERS.every((c) => isUnlocked(c.id))).toBe(true);
+    expect(ownedCount()).toBe(CHARACTERS.length);
+
+    await renderSelect();
+    expect(screen.getAllByRole('option').every((c) => c.getAttribute('data-locked') === 'false')).toBe(true);
+    expect((screen.getByRole('button', { name: /equip/i }) as HTMLButtonElement).disabled).toBe(false);
+
+    filterTo(/locked/i);
+    expect(screen.getByText(/no skins match/i)).toBeTruthy();
+
+    filterTo(/owned/i);
+    expect(screen.getAllByRole('option')).toHaveLength(CHARACTERS.length);
   });
+
+  it('buildLocker partitions on the seam, not on rarity or price', () => {
+    // The future entitlement flip is a change to `isUnlocked` alone — this
+    // pins the contract the layout depends on.
+    const all = buildLocker('', 'all');
+    expect(all).toHaveLength(CHARACTERS.length);
+    expect(all.every((t) => t.locked === !isUnlocked(t.id))).toBe(true);
+    expect(buildLocker('', 'owned').every((t) => !t.locked)).toBe(true);
+    expect(buildLocker('', 'locked').every((t) => t.locked)).toBe(true);
+    // No price, no cost, no store — payments are deferred.
+    expect(Object.keys(all[0])).toEqual(
+      expect.not.arrayContaining(['price', 'cost', 'sku', 'product']),
+    );
+  });
+
+  // ── equip ──────────────────────────────────────────────────────────────────
+
+  it('Equip stores the selected character and navigates home', async () => {
+    await renderSelect();
+    const cards = screen.getAllByRole('option');
+    const targetName = within(cards[0]).getByRole('img').getAttribute('alt');
+    const targetDef = requireDefined(CHARACTERS.find((c) => c.name === targetName));
+    fireEvent.click(cards[0]);
+    fireEvent.click(screen.getByRole('button', { name: /equip/i }));
+    expect(useGameStore.getState().selectedCharacter).toBe(targetDef.id);
+  });
+
+  it('Back leaves the drafts uncommitted', async () => {
+    await renderSelect();
+    const cards = screen.getAllByRole('option');
+    const other = requireDefined(cards.find((c) => c.getAttribute('aria-selected') !== 'true'));
+    fireEvent.click(other);
+    fireEvent.click(screen.getByRole('button', { name: /^back$/i }));
+    expect(useGameStore.getState().selectedCharacter).toBe(DEFAULT_CHARACTER);
+  });
+
+  // ── skin colour ────────────────────────────────────────────────────────────
+
+  it('offers a default plus curated swatches and a custom picker, all 44px', async () => {
+    await renderSelect();
+    const group = screen.getByRole('group', { name: /skin colour/i });
+    const swatches = within(group).getAllByRole('button');
+    // 1 default + 6 curated. The 8th cell is the native colour input.
+    expect(swatches).toHaveLength(7);
+    for (const s of swatches) expect((s as HTMLElement).style.height).toBe('44px');
+    expect(screen.getByTestId('skin-color-custom')).toBeTruthy();
+  });
+
+  it('a swatch marks itself pressed and reaches the live preview', async () => {
+    await renderSelect();
+    const crimson = screen.getByRole('button', { name: /crimson/i });
+    fireEvent.click(crimson);
+    expect(crimson.getAttribute('aria-pressed')).toBe('true');
+    expect(screen.getByTestId('character-preview').getAttribute('data-basecolor')).toBe('#e53935');
+  });
+
+  it('Default clears the recolour, and Equip persists null', async () => {
+    await renderSelect();
+    fireEvent.click(screen.getByRole('button', { name: /crimson/i }));
+    fireEvent.click(screen.getByRole('button', { name: /^default$/i }));
+    const group = screen.getByRole('group', { name: /skin colour/i });
+    const pressed = within(group).getAllByRole('button').filter((b) => b.getAttribute('aria-pressed') === 'true');
+    expect(pressed).toHaveLength(1); // only DEFAULT itself
+    expect(pressed[0].getAttribute('aria-label')).toBe('Default');
+
+    fireEvent.click(screen.getByRole('button', { name: /equip/i }));
+    expect(useGameStore.getState().selectedCharacterColor).toBe(null);
+  });
+
+  it('Equip persists a chosen skin colour', async () => {
+    await renderSelect();
+    fireEvent.click(screen.getByRole('button', { name: /cobalt/i }));
+    fireEvent.click(screen.getByRole('button', { name: /equip/i }));
+    expect(useGameStore.getState().selectedCharacterColor).toBe('#1565c0');
+  });
+
+  it('the custom picker accepts any hex', async () => {
+    await renderSelect();
+    fireEvent.change(screen.getByTestId('skin-color-custom'), { target: { value: '#123456' } });
+    expect(screen.getByTestId('character-preview').getAttribute('data-basecolor')).toBe('#123456');
+  });
+
+  // ── data ───────────────────────────────────────────────────────────────────
 
   it('all 52 skins have a resolvable rarity + non-empty description', () => {
     for (const c of CHARACTERS) {
@@ -187,103 +267,10 @@ describe('CharacterSelect (locker)', () => {
     }
   });
 
-  // ── Color tab tests ────────────────────────────────────────────────────────
-
-  it('Color tab shows the skin color panel by default (Skin color tab active)', () => {
-    renderSelect();
-    // Default active tab should be skin color.
-    expect(screen.getByTestId('tab-skin-color').getAttribute('aria-selected')).toBe('true');
-    expect(screen.getByTestId('tab-player-color').getAttribute('aria-selected')).toBe('false');
-    expect(screen.getByTestId('skin-color-panel')).toBeTruthy();
-    expect(screen.queryByTestId('player-color-panel')).toBeNull();
-  });
-
-  it('Color tab shows the palette with 16 curated swatches', () => {
-    renderSelect();
-    // Skin color tab is default — check the skin palette.
-    const palette = screen.getByRole('group', { name: /Skin color palette/i });
-    const swatches = within(palette).getAllByRole('button');
-    expect(swatches).toHaveLength(16);
-  });
-
-  it('Color tab includes a free color picker input and hex text input', () => {
-    renderSelect();
-    expect(screen.getByTestId('skin-free-color-input')).toBeTruthy();
-    expect(screen.getByTestId('skin-color-hex-input')).toBeTruthy();
-  });
-
-  it('Color tab palette swatch click sets characterColor draft', () => {
-    renderSelect();
-    // Find a palette swatch by its aria-label (e.g. "Crimson").
-    const crimsonBtn = screen.getByRole('button', { name: /crimson/i });
-    fireEvent.click(crimsonBtn);
-    // The swatch becomes aria-pressed=true.
-    expect(crimsonBtn.getAttribute('aria-pressed')).toBe('true');
-  });
-
-  it('Color tab Default/Reset button clears the characterColor', () => {
-    renderSelect();
-    // Select a color first.
-    fireEvent.click(screen.getByRole('button', { name: /crimson/i }));
-    // Reset.
-    fireEvent.click(screen.getByTestId('skin-color-reset'));
-    // After reset, no swatch should be pressed.
-    const palette = screen.getByRole('group', { name: /Skin color palette/i });
-    const pressed = within(palette).getAllByRole('button').filter(
-      (b) => b.getAttribute('aria-pressed') === 'true',
-    );
-    expect(pressed).toHaveLength(0);
-  });
-
-  it('Equip stores selectedCharacterColor when a palette swatch is chosen', () => {
-    renderSelect();
-    fireEvent.click(screen.getByRole('button', { name: /cobalt/i }));
-    fireEvent.click(screen.getByRole('button', { name: /equip/i }));
-    // The Cobalt hex should be persisted.
-    expect(useGameStore.getState().selectedCharacterColor).toBe('#1565c0');
-  });
-
-  it('Equip stores null characterColor when Default is chosen', () => {
-    renderSelect();
-    // Pick a color then reset.
-    fireEvent.click(screen.getByRole('button', { name: /crimson/i }));
-    fireEvent.click(screen.getByTestId('skin-color-reset'));
-    fireEvent.click(screen.getByRole('button', { name: /equip/i }));
-    expect(useGameStore.getState().selectedCharacterColor).toBe(null);
-  });
-
-  it('preview receives baseColor prop matching the selected swatch', () => {
-    renderSelect();
-    fireEvent.click(screen.getByRole('button', { name: /forest/i }));
-    // The preview canvas mock should receive the baseColor as data-basecolor.
-    // (The CharacterPreviewCanvas mock doesn't forward it, so we test the panel
-    //  renders the swatch pressed instead.)
-    const forestBtn = screen.getByRole('button', { name: /forest/i });
-    expect(forestBtn.getAttribute('aria-pressed')).toBe('true');
-  });
-
-  it('switching to Player color tab shows token swatches and hides skin palette', () => {
-    renderSelect();
-    fireEvent.click(screen.getByTestId('tab-player-color'));
-    expect(screen.getByTestId('player-color-panel')).toBeTruthy();
-    expect(screen.queryByTestId('skin-color-panel')).toBeNull();
-    // Ensure the 8 identity tokens are shown.
-    const swatches = screen.getAllByRole('button').filter((b) =>
-      ['red', 'blue', 'green', 'yellow', 'purple', 'orange', 'cyan', 'pink'].includes(
-        b.getAttribute('aria-label') ?? '',
-      ),
-    );
-    expect(swatches).toHaveLength(8);
-  });
-
-  // ── Store: selectedCharacterColor ─────────────────────────────────────────
-
   describe('gameStore selectedCharacterColor', () => {
     it('defaults to null (native skin color)', () => {
       useGameStore.getState().reset();
-      // After reset the color must be null — not a string, not undefined.
-      const color = useGameStore.getState().selectedCharacterColor;
-      expect(color).toBe(null);
+      expect(useGameStore.getState().selectedCharacterColor).toBe(null);
     });
 
     it('setSelectedCharacterColor updates state and persists to localStorage', () => {

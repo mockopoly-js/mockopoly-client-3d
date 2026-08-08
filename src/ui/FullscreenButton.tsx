@@ -1,28 +1,38 @@
 import React, { useEffect, useState } from 'react';
 import { Maximize, Minimize } from 'lucide-react';
-import { useIsMobile } from './useIsMobile';
 import { FONT_FAMILY } from '../constants/fonts';
+import { Z } from './kit';
+import { CHROME_PITCH, CHROME_ROW_H, CHROME_ROW_RIGHT, CHROME_ROW_TOP } from './chromeRow';
+import { useHudStandDown } from './takeoverStage';
 
 const FONT = FONT_FAMILY;
 
 /**
  * Small HUD toggle for the browser Fullscreen API.
  *
- * Placement: right-middle edge, directly above the CameraViewButton (bottom:72)
- * which itself sits above the MuteButton (bottom:16) — stacking further up the
- * same free right-edge gutter so none of the three chips overlap. z-index sits
- * just under CameraViewButton's 49.
+ * ONE LAYOUT, NOT A DESKTOP/MOBILE BRANCH — see CameraViewButton's note; the
+ * kit's safe-area frame renders identically on desktop review and on device.
+ *
+ * Placement: leftmost chip of the TOP-RIGHT utility cluster, two CHROME_PITCHes
+ * in from MuteButton. The row's geometry lives in ./chromeRow; see MuteButton
+ * for why the row is in the corner and what had to move for it.
+ * z-index sits on the kit's HUD layer, under the toast layer (Z.toast).
  *
  * iPhone Safari has no Fullscreen API at all (`document.fullscreenEnabled` is
  * false there), so the button renders nothing and those users rely on
  * Add-to-Home-Screen for a chrome-less experience instead. iPad Safari and
  * Android Chrome do support it and get the button.
+ *
+ * Stands down under a takeover with the rest of the cluster — the reasoning for
+ * the whole row is on <MuteButton>.
  */
 export function FullscreenButton() {
-  const isMobile = useIsMobile();
   const [isFullscreen, setIsFullscreen] = useState<boolean>(
     typeof document !== 'undefined' && !!document.fullscreenElement,
   );
+  // Before the capability guard below: hooks may not sit behind a conditional
+  // return, and this one is a store subscription.
+  const standDown = useHudStandDown();
 
   useEffect(() => {
     const onChange = () => setIsFullscreen(!!document.fullscreenElement);
@@ -46,23 +56,23 @@ export function FullscreenButton() {
 
   const style: React.CSSProperties = {
     position: 'fixed',
-    // Desktop: top of the right-edge chip stack (bottom:128). Mobile in-game:
-    // leftmost chip of the TOP-RIGHT round cluster (right:112, left of Camera at
-    // right:60 and Mute at right:8), below modals (z:35 < modal z:40).
-    top: isMobile ? 'calc(8px + env(safe-area-inset-top))' : undefined,
-    bottom: isMobile ? 'auto' : 128,
-    right: isMobile ? 'calc(112px + env(safe-area-inset-right))' : 16,
-    zIndex: isMobile ? 35 : 48,
+    top: CHROME_ROW_TOP,
+    bottom: 'auto',
+    // Two pitches added ON TOP of the same anchor MuteButton uses — see
+    // CameraViewButton's note on why `max(var(--sa-r), 112px)` is wrong once
+    // the device's real right inset exceeds a raw pad smaller than it.
+    right: `calc(${CHROME_ROW_RIGHT} + ${CHROME_PITCH * 2}px)`,
+    zIndex: Z.hud,
     pointerEvents: 'auto',
     fontFamily: FONT,
     fontWeight: 800,
     fontSize: 20,
     lineHeight: 1,
     border: 'none',
-    borderRadius: isMobile ? 999 : 12,
-    padding: isMobile ? 0 : '10px 14px',
-    width: isMobile ? 44 : undefined,
-    height: isMobile ? 44 : undefined,
+    borderRadius: 999,
+    padding: 0,
+    width: CHROME_ROW_H,
+    height: CHROME_ROW_H,
     background: '#12121e',
     color: '#e8e8f0',
     cursor: 'pointer',
@@ -70,12 +80,13 @@ export function FullscreenButton() {
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'center',
+    ...standDown.style,
   };
 
   const label = isFullscreen ? 'Exit fullscreen' : 'Enter fullscreen';
 
   return (
-    <button style={style} onClick={toggle} aria-label={label} title={label}>
+    <button style={style} aria-hidden={standDown.ariaHidden} onClick={toggle} aria-label={label} title={label}>
       {isFullscreen ? <Minimize size={20} aria-hidden /> : <Maximize size={20} aria-hidden />}
     </button>
   );

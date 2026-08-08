@@ -1,264 +1,141 @@
-import React from 'react';
 import { useGameStore } from '../state/gameStore';
 import { BOARD_SPACES } from '../constants/board';
 import { COLOR_GROUP_HEX, TOKEN_HEX } from '../constants/theme';
-import { formatMoney } from '../utils/format';
-import { useIsMobile } from './useIsMobile';
-import { useIsLandscape } from './useIsLandscape';
-import { FONT_FAMILY } from '../constants/fonts';
-import { DeedCard } from './DeedCard';
-
-const FONT = FONT_FAMILY;
+import { Badge, Deed, KIT, Money, Panel, groupColor } from './kit';
+import type { KitStyle } from './kit';
+import type { Partnership, Player } from '../types/GameState';
+import {
+  buildRentRows, currentRentTier, equityOf, groupLabel, myPartnershipFor, otherPartners, rentTierValue,
+} from './propertyDeed';
+import { useHudStandDown } from './takeoverStage';
 
 /**
- * Read-only deed-card inspect modal, opened when the player clicks a purchasable
- * tile on the 3D board. Reads `deedCardIndex` from the store — separate from
- * `selectedPropertyIndex` / `showPropertyCard` which drive MortgagePanel.
+ * Read-only deed inspect, opened when the player taps a tile on the 3D board.
+ * Reads `deedCardIndex` — separate from `selectedPropertyIndex` /
+ * `showPropertyCard`, which drive MortgagePanel.
  *
- * Shows:
- *   - DeedCard sprite (front, or mortgage-back if mortgaged)
- *   - Color-group accent strip
- *   - Property name + price
- *   - Owner line (player name + token swatch, or "Unowned")
- *   - State line (houses / hotel / mortgaged tag)
- *
- * No buy / mortgage / build buttons — read-only inspect only.
- * Close by clicking the button or clicking the overlay.
+ * GAP 2/3 FIXED HERE. The old version showed the owner's name and stopped —
+ * a partner reading a deed inside their own partnership had no way to see
+ * their stake, and the printed rent is what the PAYER owes, not what a
+ * partner actually pockets. Both share ONE "Partnership" block below the
+ * ladder: it always names every partner and their equity (gap 2), and — only
+ * when a rent tier is currently active (mortgaged / unowned show neither) —
+ * each row also carries that partner's £ share of it (gap 3), answering
+ * "what do I actually get" at the exact point a partner could otherwise
+ * misread the ladder as their own income. One block, not two, was a deliberate
+ * tightening: a separate "who's in it" strip above a separate "here's the
+ * split" block measured ~35px taller for the fully redundant equity
+ * percentages, on the same 312px panel width the kit's own <Deed> docs already
+ * budget close to the edge of.
  */
 export function PropertyCardModal() {
   const deedCardIndex = useGameStore((s) => s.deedCardIndex);
   const closeDeedCard = useGameStore((s) => s.closeDeedCard);
   const properties = useGameStore((s) => s.state?.properties);
   const players = useGameStore((s) => s.state?.players);
-  const isMobile = useIsMobile();
-  const isLandscape = useIsLandscape();
-  const landscape = isMobile && isLandscape;
-
-  if (deedCardIndex === null) return null;
+  const partnerships = useGameStore((s) => s.state?.partnerships);
+  const myId = useGameStore((s) => s.myPlayerId);
+  // A tapped-open deed is opened by the player and closed by the player —
+  // nothing dismisses it when a takeover arrives, and at --z-panel (134) it is
+  // UNDER --z-takeover (140) with its own scrim, so it would print through.
+  const standDown = useHudStandDown();
 
   // .at() is BoardSpace | undefined — an out-of-range index is a real runtime
   // possibility, so the guard below is live (and narrows space to non-null).
-  const space = BOARD_SPACES.at(deedCardIndex);
-  if (!space) return null;
+  const space = deedCardIndex !== null ? BOARD_SPACES.at(deedCardIndex) : undefined;
+  const open = deedCardIndex !== null && !!space;
 
-  const propState = properties?.find((p) => p.spaceIndex === deedCardIndex);
+  const propState = space ? properties?.find((p) => p.spaceIndex === space.index) : undefined;
   const ownerId = propState?.ownerId ?? null;
-  const owner = ownerId ? players?.find((pl) => pl.id === ownerId) : undefined;
+  const owner: Player | undefined = ownerId ? players?.find((pl) => pl.id === ownerId) : undefined;
+  const amIOwner = myId != null && ownerId === myId;
 
-  const accent = space.colorGroup ? COLOR_GROUP_HEX[space.colorGroup] : '#d4af37';
-  const cardFrame = space.cardFrame;
+  const myPs: Partnership | null = open ? myPartnershipFor(space.colorGroup, partnerships, myId) : null;
+
   const mortgaged = !!propState?.isMortgaged;
-  const deedW = landscape ? 112 : isMobile ? 128 : 150;
-
   const houseCount = propState?.houses ?? 0;
   const hasHotel = propState?.hasHotel ?? false;
 
-  const stateLabel = (() => {
-    if (mortgaged) return 'Mortgaged';
-    if (hasHotel) return 'Hotel';
-    if (houseCount > 0) return `Houses: ${houseCount}`;
-    return null;
-  })();
+  const rawAccent = open && space.colorGroup ? COLOR_GROUP_HEX[space.colorGroup] : KIT.gold;
+  const accent = groupColor(rawAccent, true);
 
-  // Textual details (name / price / owner / state / close) — shared by the
-  // portrait/desktop stacked layout and the landscape side-by-side layout.
-  const details = (
-    <>
-      {/* Name */}
-      <div style={{ fontWeight: 800, fontSize: 20 }}>{space.name}</div>
+  const current = open
+    ? currentRentTier(space, { ownerId, houses: houseCount, hasHotel, isMortgaged: mortgaged }, properties, partnerships)
+    : -1;
+  const rows = open ? buildRentRows(space.rents, current) : [];
+  const rentValue = open && space.rents && current >= 0 ? rentTierValue(space.rents, current) : null;
 
-      {/* Price */}
-      {space.price != null && (
-        <div style={{ color: '#9a8f7c', margin: '4px 0 12px', fontVariantNumeric: 'tabular-nums' }}>
-          Price {formatMoney(space.price)}
-        </div>
-      )}
+  const stateLabel = mortgaged ? 'Mortgaged' : hasHotel ? 'Hotel' : houseCount > 0 ? `${houseCount} house${houseCount === 1 ? '' : 's'}` : null;
 
-      {/* Owner */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
-        {owner ? (
-          <>
-            <span
-              style={{
-                display: 'inline-block',
-                width: 12,
-                height: 12,
-                borderRadius: '50%',
-                // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- TOKEN_HEX is a total Record over TokenType, but an out-of-contract token yields undefined at runtime
-                background: TOKEN_HEX[owner.token] ?? '#888',
-                flexShrink: 0,
-              }}
-            />
-            <span style={{ fontSize: 14, color: '#3b3224' }}>
-              Owned by <strong>{owner.name}</strong>
-            </span>
-          </>
-        ) : (
-          <span style={{ fontSize: 14, color: '#9a8f7c' }}>Unowned</span>
-        )}
-      </div>
-
-      {/* State (houses / hotel / mortgaged) */}
-      {stateLabel && (
-        <div
-          style={{
-            display: 'inline-block',
-            fontSize: 13,
-            fontWeight: 700,
-            background: mortgaged ? '#e7dcbf' : accent + '33',
-            color: mortgaged ? '#6b5c3e' : '#3b3224',
-            borderRadius: 8,
-            padding: '3px 10px',
-            marginBottom: 12,
-          }}
-        >
-          {stateLabel}
-        </div>
-      )}
-
-      {/* Close */}
-      <div style={{ marginTop: 16 }}>
-        <button onClick={closeDeedCard} style={{ ...btn, ...closeBtn }}>
-          Close
-        </button>
-      </div>
-    </>
-  );
-
-  const inner = (
-    <>
-      {/* Color-group accent strip */}
-      <div style={{ height: 10, borderRadius: 6, background: accent, marginBottom: 12 }} />
-
-      {/* Deed sprite */}
-      {cardFrame != null && (
-        <div style={{ display: 'grid', placeItems: 'center', marginBottom: 14 }}>
-          <DeedCard
-            cardFrame={cardFrame}
-            mortgaged={mortgaged}
-            width={deedW}
-            aria-label={`${space.name} deed`}
-          />
-        </div>
-      )}
-
-      {details}
-    </>
-  );
-
-  // ── Mobile LANDSCAPE (wide + short): deed on the left, details on the right. ──
-  if (landscape) {
-    return (
-      <div style={wrapLandscape} onClick={closeDeedCard}>
-        <div style={cardLandscape} onClick={(e) => e.stopPropagation()}>
-          <div style={rowLandscape}>
-            {cardFrame != null && (
-              <DeedCard cardFrame={cardFrame} mortgaged={mortgaged} width={deedW} aria-label={`${space.name} deed`} />
-            )}
-            <div style={infoColLandscape}>
-              <div style={{ height: 8, borderRadius: 6, background: accent, marginBottom: 8 }} />
-              {details}
-            </div>
-          </div>
-        </div>
-      </div>
-    );
-  }
-
-  if (isMobile) {
-    return (
-      <div style={wrapMobile} onClick={closeDeedCard}>
-        <div
-          style={sheetMobile}
-          onClick={(e) => e.stopPropagation()}
-        >
-          {inner}
-        </div>
-      </div>
-    );
-  }
+  // "Partnership" is deliberately left off this line — the partnership block
+  // below already carries it, and this line wrapping to a second row was
+  // measured to cost ~16px of an already-tight 312px-panel budget for no new
+  // information.
+  const subParts = open
+    ? [
+        space.colorGroup ? groupLabel(space.colorGroup) : null,
+        owner ? `Owned by ${amIOwner ? 'you' : owner.name}` : 'Unowned',
+      ].filter((p): p is string => p != null)
+    : [];
 
   return (
-    <div style={wrap} onClick={closeDeedCard}>
-      <div style={card} onClick={(e) => e.stopPropagation()}>
-        {inner}
-      </div>
+    <div style={{ ...stage, ...standDown.style }} aria-hidden={standDown.ariaHidden}>
+      <Panel
+        open={open}
+        width="narrow"
+        scrim="light"
+        onClose={closeDeedCard}
+        label={space ? `${space.name} deed` : 'Property deed'}
+      >
+        {open && (
+          <Deed color={accent} title={space.name} sub={subParts.join(' · ')} rows={rows} mortgaged={mortgaged}>
+            {stateLabel && (
+              <div style={badgeRow}>
+                <Badge tone={mortgaged ? 'warn' : 'good'}>{stateLabel}</Badge>
+              </div>
+            )}
+
+            {myPs && myId != null && (
+              <div style={partnerBlock}>
+                <div style={mutedLabel}>{rentValue != null ? 'Partnership · this tier' : 'Partnership'}</div>
+                <div style={splitRows}>
+                  <div style={splitRowMine}>
+                    YOU <b style={boldGold}>{equityOf(myPs, myId)}%</b>
+                    {rentValue != null && <>{' '}<Money value={(rentValue * equityOf(myPs, myId)) / 100} size="label" tone="gold" /></>}
+                  </div>
+                  {otherPartners(myPs, myId).map((p) => {
+                    const partner = players?.find((pl) => pl.id === p.playerId);
+                    const dotColor = partner ? TOKEN_HEX[partner.token] : KIT.gold;
+                    return (
+                      <div key={p.playerId} style={splitRowOther}>
+                        <i aria-hidden="true" style={{ ...partnerDot, background: dotColor, boxShadow: `0 0 8px 2px ${dotColor}` }} />
+                        {partner?.name ?? p.playerId} <b style={boldText}>{p.percentage}%</b>
+                        {rentValue != null && <>{' '}<Money value={(rentValue * p.percentage) / 100} size="label" /></>}
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+          </Deed>
+        )}
+      </Panel>
     </div>
   );
 }
 
-// ── Desktop styles ──────────────────────────────────────────────────────────
-const wrap: React.CSSProperties = {
-  position: 'fixed',
-  inset: 0,
-  display: 'grid',
-  placeItems: 'center',
-  fontFamily: FONT,
-  zIndex: 50,
-  background: 'rgba(0,0,0,0.5)',
+// ── kit-surface host. Kit surfaces are position:absolute and need a
+// full-size positioned ancestor of their own — see kit gotcha #1. ──
+const stage: KitStyle = { position: 'fixed', inset: 0, zIndex: KIT.zPanel, pointerEvents: 'none' };
+const badgeRow: KitStyle = { padding: `${KIT.sp1} ${KIT.rowPad} 0` };
+const mutedLabel: KitStyle = {
+  fontSize: KIT.fsMicro, fontWeight: 700, color: KIT.text2,
+  textTransform: 'uppercase', letterSpacing: KIT.lsWider,
 };
-const card: React.CSSProperties = {
-  background: '#fbf6ec',
-  color: '#3b3224',
-  borderRadius: 18,
-  padding: 22,
-  minWidth: 260,
-  maxWidth: '92vw',
-  boxShadow: '0 24px 60px -20px rgba(0,0,0,.6)',
-  maxHeight: '90dvh',
-  overflowY: 'auto',
-};
-const btn: React.CSSProperties = {
-  fontFamily: FONT,
-  fontWeight: 800,
-  border: 'none',
-  borderRadius: 14,
-  padding: '12px 20px',
-  cursor: 'pointer',
-  width: '100%',
-  minHeight: 44,
-};
-const closeBtn: React.CSSProperties = {
-  background: '#e7dcbf',
-  color: '#3b3224',
-};
-
-// ── Mobile bottom-sheet styles ──────────────────────────────────────────────
-const wrapMobile: React.CSSProperties = {
-  position: 'fixed',
-  inset: 0,
-  fontFamily: FONT,
-  zIndex: 50,
-  display: 'flex',
-  alignItems: 'flex-end',
-  background: 'rgba(0,0,0,0.5)',
-};
-const sheetMobile: React.CSSProperties = {
-  background: '#fbf6ec',
-  color: '#3b3224',
-  borderRadius: '20px 20px 0 0',
-  padding: 22,
-  width: '100vw',
-  maxHeight: '85dvh',
-  overflowY: 'auto',
-  boxShadow: '0 -8px 40px -8px rgba(0,0,0,.6)',
-  paddingBottom: 'calc(22px + env(safe-area-inset-bottom))',
-  paddingLeft: 'calc(22px + env(safe-area-inset-left))',
-  paddingRight: 'calc(22px + env(safe-area-inset-right))',
-  boxSizing: 'border-box',
-};
-
-// ── Mobile LANDSCAPE styles (wide + short) ──────────────────────────────────
-const wrapLandscape: React.CSSProperties = {
-  position: 'fixed', inset: 0, fontFamily: FONT, zIndex: 50, display: 'flex',
-  background: 'rgba(0,0,0,0.5)', boxSizing: 'border-box',
-  padding:
-    'max(8px, env(safe-area-inset-top)) max(10px, env(safe-area-inset-right)) max(8px, env(safe-area-inset-bottom)) max(20px, env(safe-area-inset-left))',
-};
-const cardLandscape: React.CSSProperties = {
-  background: '#fbf6ec', color: '#3b3224', borderRadius: 18, padding: 18,
-  width: 'min(560px, 100%)', maxHeight: '100%', overflowY: 'auto', margin: 'auto',
-  boxShadow: '0 24px 60px -20px rgba(0,0,0,.6)', boxSizing: 'border-box',
-};
-const rowLandscape: React.CSSProperties = { display: 'flex', flexDirection: 'row', gap: 16, alignItems: 'center' };
-const infoColLandscape: React.CSSProperties = { flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column' };
+const partnerBlock: KitStyle = { marginTop: KIT.sp1, padding: `${KIT.sp1} ${KIT.rowPad} ${KIT.sp2}`, borderTop: `1px solid ${KIT.borderSoft}` };
+const partnerDot: KitStyle = { width: 8, height: 8, borderRadius: '50%', flex: '0 0 auto' };
+const boldGold: KitStyle = { color: KIT.goldBright, fontWeight: 800 };
+const boldText: KitStyle = { color: KIT.text, fontWeight: 800 };
+const splitRows: KitStyle = { marginTop: 3, display: 'flex', flexDirection: 'column', gap: 3 };
+const splitRowMine: KitStyle = { fontSize: KIT.fsLabel, fontWeight: 600, color: KIT.text };
+const splitRowOther: KitStyle = { display: 'flex', alignItems: 'center', gap: 5, fontSize: KIT.fsLabel, fontWeight: 600, color: KIT.text2 };

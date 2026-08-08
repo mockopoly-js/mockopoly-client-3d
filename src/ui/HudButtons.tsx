@@ -1,86 +1,96 @@
-import type React from 'react';
-import { useGameStore, selectIsMyTurn } from '../state/gameStore';
-import { useIsMobile } from './useIsMobile';
-import { FONT_FAMILY } from '../constants/fonts';
-import { GameButton } from './GameButton';
+import { useGameStore } from '../state/gameStore';
+import { gameBus } from '../state/gameBus';
+import { Actions, Button, Dot, KIT } from './kit';
+import type { KitStyle } from './kit';
+import { useActionBadges } from './useActionBadges';
 
-export function HudButtons() {
+interface HudButtonsProps {
+  /**
+   * REQUIRED to render. See the note below — a bare `<HudButtons />` draws
+   * nothing on purpose.
+   */
+  inline?: boolean;
+  /** Called after a panel is opened, so a host popover can close itself. */
+  onPick?: () => void;
+}
+
+/**
+ * The three negotiation actions — Trade / Partnership / Deal — as an
+ * unpositioned kit cluster with their attention dots, plus a fourth,
+ * conditional RAISE CASH action that opens <BankruptcyPanel>'s liquidation
+ * flow. Unlike the other three, RAISE CASH does not render at all outside
+ * debt (turn.mustPayRent for me) — there is no disabled state for it.
+ *
+ * WHY IT RENDERS NOTHING WITHOUT `inline`.
+ * The old component was a fixed bottom-LEFT sidebar on desktop and `null` on
+ * mobile, and it duplicated its three buttons and all four badge derivations
+ * inside ActionsSheet. Both are wrong under the kit: bottom-left is the worst
+ * quadrant on a landscape phone and the left column is read-only by design, so
+ * a primary interaction may not live there. These three are now overflow
+ * actions reached from the ⋯ button in the bottom-right cluster, and this is
+ * their single definition — <ActionsSheet> renders `<HudButtons inline />`.
+ *
+ * App.tsx USED TO mount a bare `<HudButtons />` as a top-level sibling. That
+ * mount was a no-op left over from the sidebar version and has been removed;
+ * <ActionsSheet> is now the only call site. The `inline` guard stays as the
+ * guard rail that made the leftover harmless in the first place: without a
+ * positioned host this cluster would drop three buttons at the top-left of the
+ * document, so it renders nothing rather than render them in the wrong place.
+ */
+export function HudButtons({ inline = false, onPick }: HudButtonsProps) {
   const trade = useGameStore((s) => s.toggleTradePanel);
   const partnership = useGameStore((s) => s.togglePartnershipPanel);
   const deal = useGameStore((s) => s.toggleDealPanel);
-  const myId = useGameStore((s) => s.myPlayerId);
-  const isMyTurn = useGameStore(selectIsMyTurn);
-  const activeTrade = useGameStore((s) => s.state?.activeTrade);
-  const proposal = useGameStore((s) => s.state?.activePartnershipProposal);
-  const activeRentDeal = useGameStore((s) => s.state?.activeRentDeal);
-  const mustPayRent = useGameStore((s) => s.state?.turn.mustPayRent ?? false);
-  const isMobile = useIsMobile();
-
-  // Badge derivations (all guarded — only show dot if data is present)
-  // Trade: I am the recipient of a pending incoming trade
-  const tradeBadge = !!(activeTrade && myId && activeTrade.toPlayerId === myId && activeTrade.status === 'pending');
-  // Partnership: a proposal targets me (I'm in the equity list but not the initiator)
-  const partnershipBadge = !!(proposal && myId &&
-    proposal.status === 'pending' &&
-    proposal.initiatorId !== myId &&
-    proposal.proposedEquity.some((e) => e.playerId === myId) &&
-    !proposal.acceptedPlayerIds.includes(myId));
-  // Deal: a deal awaits my response OR mustPayRent on my turn
-  const dealBadge = !!(
-    (mustPayRent && isMyTurn) ||
-    (activeRentDeal && myId && activeRentDeal.status === 'pending' &&
-      activeRentDeal.lastOfferBy !== myId &&
-      (activeRentDeal.creditorIds.includes(myId) || activeRentDeal.debtorId === myId))
+  // Same debt gate App.tsx uses to auto-open <DealPanel> (turn.mustPayRent &&
+  // I am the player on the hook). RAISE CASH is the manual alternative to
+  // negotiating a deal, NOT an auto-open — <BankruptcyPanel> deliberately does
+  // not open itself on this condition, because two takeovers fighting over
+  // one debt is worse than none. It must not render at all outside debt —
+  // no disabled button sitting in the sheet for no reason.
+  const inDebt = useGameStore(
+    (s) => !!(s.state?.turn.mustPayRent && s.state.turn.currentPlayerId === s.myPlayerId),
   );
+  const badges = useActionBadges();
 
-  // On mobile these three secondary actions live behind the ⋯ button in
-  // TurnHud's bottom-right cluster (see ActionsSheet) instead of crowding the
-  // board with a full-width bar. Desktop keeps the compact left sidebar below.
-  if (isMobile) return null;
+  if (!inline) return null;
+
+  const pick = (open: (show?: boolean) => void) => () => {
+    open(true);
+    onPick?.();
+  };
+
+  const raiseCash = () => {
+    gameBus.emit('open-liquidation');
+    onPick?.();
+  };
 
   return (
-    <div style={wrap}>
-      <div style={btnWrap}>
-        <GameButton variant="dark" onClick={() => trade(true)} style={btnDesktopOverride}>Trade</GameButton>
-        {tradeBadge && <span style={dot} aria-hidden="true" />}
+    <Actions style={stretch}>
+      <div style={row}>
+        <Button block label="Trade" onClick={pick(trade)} />
+        {badges.trade && <Dot tone="danger" pin pulse />}
       </div>
-      <div style={btnWrap}>
-        <GameButton variant="dark" onClick={() => partnership(true)} style={btnDesktopOverride}>Partnership</GameButton>
-        {partnershipBadge && <span style={dot} aria-hidden="true" />}
+      <div style={row}>
+        <Button block label="Partnership" onClick={pick(partnership)} />
+        {badges.partnership && <Dot tone="danger" pin pulse />}
       </div>
-      <div style={btnWrap}>
-        <GameButton variant="dark" onClick={() => deal(true)} style={btnDesktopOverride}>Deal</GameButton>
-        {dealBadge && <span style={dot} aria-hidden="true" />}
+      <div style={row}>
+        <Button block label="Deal" onClick={pick(deal)} />
+        {badges.deal && <Dot tone="danger" pin pulse />}
       </div>
-    </div>
+      {inDebt && (
+        <div style={row}>
+          <Button block label="Raise Cash" onClick={raiseCash} />
+          <Dot tone="danger" pin pulse />
+        </div>
+      )}
+    </Actions>
   );
 }
 
-const F = FONT_FAMILY;
-
-// ── Badge wrapper + dot ──
-const btnWrap: React.CSSProperties = { position: 'relative', display: 'inline-flex' };
-const dot: React.CSSProperties = {
-  position: 'absolute', top: 4, right: 4,
-  width: 8, height: 8, borderRadius: '50%',
-  background: '#e5533d', pointerEvents: 'none',
-};
-
-// ── Desktop styles (unchanged layout) ──
-const wrap: React.CSSProperties = {
-  position: 'fixed',
-  bottom: 14,
-  left: 14,
-  display: 'flex',
-  flexDirection: 'column',
-  gap: 8,
-  zIndex: 30,
-  fontFamily: F,
-};
-
-// Desktop GameButton size override — keep the compact sidebar feel
-const btnDesktopOverride: React.CSSProperties = {
-  fontSize: 13,
-  padding: '9px 14px',
-  borderRadius: 12,
-};
+const stretch: KitStyle = { alignItems: 'stretch', width: '100%' };
+/**
+ * The dot is `position:absolute` and OVERHANGS its anchor by 2px (rule R1), so
+ * this wrapper must not clip — it sets `position` and nothing else.
+ */
+const row: KitStyle = { position: 'relative', display: 'flex', minWidth: KIT.btnWPrimary };
