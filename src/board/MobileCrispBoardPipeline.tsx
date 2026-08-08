@@ -24,6 +24,7 @@ import { WarmGradeEffectImpl } from '../screens/WarmGradeEffect';
 import { PreExposureEffectImpl } from '../screens/PreExposureEffect';
 import { useGameStore } from '../state/gameStore';
 import { BOARD_LAYER, CITY_LAYER, FOREST_GROUND_LAYER, MOBILE_FOREST_SHADOWS_ENABLED } from './positions';
+import { thermalSceneDprCap } from './mobileRender';
 
 /**
  * ── MOBILE NIGHT SKY AT NATIVE DPR (NIGHT-ONLY, TOGGLE) ──────────────────────
@@ -45,7 +46,12 @@ import { BOARD_LAYER, CITY_LAYER, FOREST_GROUND_LAYER, MOBILE_FOREST_SHADOWS_ENA
  * FALLBACK: flip to false → EXACT pre-feature behavior (sky drawn into the
  * reduced-dpr scene FBO). DAY and DESKTOP never touch this path regardless.
  */
-const MOBILE_NIGHT_SKY_NATIVE = true;
+// Typed `boolean` (not the literal `true`) so the FALLBACK path documented above stays a
+// live, type-checked branch for a rebuild flip — as the literal, the two `&&` arms in the
+// night-native arming block are "always truthy" and the pre-feature sky path reads as
+// dead code. Same pattern as MOBILE_FOREST_SHADOWS_ENABLED in positions.ts.
+// eslint-disable-next-line @typescript-eslint/no-inferrable-types -- the `boolean` annotation is deliberate; see above
+const MOBILE_NIGHT_SKY_NATIVE: boolean = true;
 
 // Scratch matrix for the per-frame inverse view-projection fed to the composite's
 // native-sky view-ray reconstruction. Module-scoped (the pipeline is a singleton).
@@ -348,125 +354,336 @@ float viewZ(float depth) {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-// PROCEDURAL NIGHT SKY — reproduces the LOOK of night-sky-008.webp (deep navy +
-// a warm-dusty Milky Way arch + a dense field of fine cool-white stars) entirely
-// from the world view-ray dir. No texture, ~0 VRAM, crisp at any dpr → also
-// eliminates the 8K-background OOM crash class. Everything below is LINEAR-space
-// radiance (the composite FBO is HalfFloat / NoColorSpace), so it feeds the same
-// ACES + grade the HDRI sky did and lands at a consistent brightness/gamma.
+// PROCEDURAL NIGHT SKY — ASTROPHOTOGRAPHY REWRITE
+//
+// A believable night sky built PER-PIXEL from the world view-ray alone: a deep navy
+// gradient with horizon airglow, a filamentary warm-cream MILKY WAY band carved by
+// dark red-brown dust lanes, and a pixel-locked star field (dense fine field +
+// sparse hero stars with soft halos, power-law brightness, warm/neutral/blue-white
+// colour spread, atmospheric extinction toward the horizon). No texture, ~0 VRAM,
+// crisp at any dpr → also eliminates the 8K-background OOM crash class.
+//
+// ── WHAT THE PREVIOUS VERSION GOT WRONG (do not reintroduce) ───────────────
+//  1. STARS ON A 3D LATTICE. It sampled 'floor(dir * density)' — a 3D cube lattice
+//     cut by the UNIT SPHERE. Wherever the sphere grazes a cell tangentially the
+//     "distance-to-point < radius" test stays true across a large solid angle, so a
+//     single star smeared into a 40–80px soft SQUARE / slanted parallelogram, and
+//     star angular size varied by >10× with view direction. FIX: a 2D lattice on an
+//     EQUI-ANGULAR CUBE FACE (see faceQ) with the star footprint measured against
+//     the PIXEL's own angular size — so every star is the same 1–2 device-px dot
+//     regardless of view direction or zoom, which is also exactly what a real,
+//     optically-unresolved point source does.
+//  2. MILKY WAY AT ~16° FEATURE SIZE. 'fbm(dir * 3.5)', 3 octaves of 3D noise,
+//     inside ONE fat σ=0.22 gaussian, tinted flat grey (0.32,0.34,0.40) → grey
+//     smoke, and at 0.35 linear it graded to a 184/255 grey WASH. FIX: 2D FBM in the
+//     band's OWN (longitude, distance-from-plane) frame, strongly ANISOTROPIC so
+//     filaments and dust lanes run ALONG the band, a NARROW bright core ridge inside
+//     a WIDE faint halo, and warm-cream / blue-white / red-brown tints.
+//
+// ── LINEAR SPACE + THE NIGHT GRADE (READ THIS BEFORE TUNING) ───────────────
+// Everything returned here is LINEAR radiance (composite FBO is HalfFloat /
+// NoColorSpace). The grade pass then applies PreExposure(0.95) → ACES_FILMIC →
+// HueSaturation(−0.1) → BrightnessContrast(contrast +0.22, applied in sRGB space) →
+// sRGB encode. That chain is BLACK-CRUSHING: +0.22 contrast maps sRGB 0.11 → 0, so
+// any linear radiance below ~0.029 lands at PURE BLACK, and 0.94 already clips to
+// white — the whole sky has to live inside linear [0.03, 1.0] (plus HDR star cores
+// above it, for the ACES shoulder). Anchors measured through the REAL chain:
+//     linear 0.029 →   0/255     linear 0.100 →  71/255
+//     linear 0.040 →  15/255     linear 0.160 → 112/255
+//     linear 0.055 →  33/255     linear 0.350 → 184/255
+//     linear 0.080 →  54/255     linear 1.400 → 255/255
+// This is why the base-sky values below look "too bright" for a night sky in
+// isolation: at the old 0.004–0.032 the entire base sky was mathematically BLACK.
+//
+// ── PRECISION (iOS) ───────────────────────────────────────────────────────
+// This shader declares 'precision highp float' at the top of the file, so every
+// float — and every hash below — is fp32 on iOS. That is LOAD-BEARING: these
+// fract-chain hashes visibly quantise (and the star lattice collapses into bands) at
+// mediump/fp16, and stray mediump is exactly what gets shaders silently rejected by
+// the iOS/Metal compiler. Belt and braces: every hash declares its working locals
+// 'highp' EXPLICITLY so the numerics survive even if this block is ever pasted into
+// a shader with a different default precision. Hash ARGUMENTS are also bounded by
+// construction (star cell indices ≤ ~1400, noise domain ≤ ~600 — see the face-offset
+// consts) so the final 'fract' never runs out of mantissa. Nothing here uses a
+// large-magnitude 'sin(dot(p,k)) * 43758.5453' hash (the classic iOS casualty).
 //
 // ── TUNABLES (art knobs — tune on device) ──────────────────────────────────
-// Base sky (linear). Deep navy overhead, a touch lighter/warmer toward horizon.
-const vec3  SKY_ZENITH_COL  = vec3(0.0040, 0.0080, 0.0200); // ~sRGB #0a1024 navy
-const vec3  SKY_HORIZON_COL = vec3(0.0100, 0.0160, 0.0320); // slightly lifted horizon
-// Milky Way band: a GREAT-CIRCLE band, bright where dot(dir,BAND_NORMAL)≈0. The
-// normal is (near-)unit and roughly horizontal so the band ARCHES over the sky
-// (through the upper hemisphere) like the HDRI, from any orbit azimuth.
-const vec3  BAND_NORMAL     = vec3(0.1495, 0.2492, 0.9568); // = normalize(0.15,0.25,0.96)
-const float BAND_SIGMA      = 0.22;  // gaussian half-width of the band (in dot units)
-const float BAND_INTENSITY  = 1.00;  // overall band brightness multiplier
-const vec3  BAND_CORE_COL   = vec3(0.32, 0.34, 0.40); // cool-white bright core
-const vec3  BAND_DUST_COL   = vec3(0.16, 0.10, 0.06); // warm-brown dust tint
-const float BAND_CLOUD_FREQ = 3.5;   // low-freq mottled cloud structure
-const float BAND_DUST_FREQ  = 9.0;   // higher-freq dust-lane structure
-const float BAND_DUST_LO    = 0.45;  // dust-lane carve ramp (start)
-const float BAND_DUST_HI    = 0.78;  // dust-lane carve ramp (end)
-const float BAND_DUST_STR   = 0.90;  // how hard the dust lanes darken the core
-#define     BAND_OCTAVES      3       // FBM octaves — the main sky ALU knob (2..4)
-// Stars. Fine field (crisp ~1px points) + sparse bright hero stars, both denser
-// on the band. Power-law brightness (many faint, few bright) via pow(hash, POW).
-const vec3  STAR_COL        = vec3(1.5, 1.6, 1.9);  // fine-star colour+gain (cool white)
-const float STAR_DENSITY    = 200.0; // spherical cell frequency (higher = more/finer)
-const float STAR_RAD        = 0.14;  // point radius in cell units (smaller = tighter)
-const float STAR_POW        = 3.5;   // brightness power law (higher = fewer bright)
-const float STAR_PROB       = 0.55;  // fraction of cells that hold a star (off-band)
-const float STAR_BAND_MULT  = 1.8;   // density boost factor ON the band
-const vec3  HERO_COL        = vec3(3.0, 3.2, 3.6); // bright hero stars (HDR, ACES rolls off)
-const float HERO_DENSITY    = 42.0;  // sparse
-const float HERO_RAD        = 0.10;
-const float HERO_POW        = 1.5;   // less steep → heroes are genuinely bright
-const float HERO_PROB       = 0.16;
-const float HERO_GLOW       = 0.5;   // soft halo around hero stars (0 = none)
+// ┌─ BASE SKY (linear radiance) ─────────────────────────────────────────────
+const vec3  SKY_ZENITH_COL   = vec3(0.0300, 0.0360, 0.0520); // deep navy overhead → rgb(4,10,24)
+const vec3  SKY_HORIZON_COL  = vec3(0.0440, 0.0495, 0.0620); // lifted + less saturated low
+const float SKY_GRAD_LO      = -0.08; // dir.y at which the HORIZON colour is fully reached
+const float SKY_GRAD_HI      =  0.60; // dir.y at which the ZENITH colour is fully reached
+// AIRGLOW — a faint warm sliver hugging the horizon (real airglow + light pollution).
+// Cheap (1 exp) and it is most of what stops the gradient reading as a flat wash.
+const vec3  AIRGLOW_COL      = vec3(0.0140, 0.0112, 0.0052); // warm; ADDED on top of the gradient
+const float AIRGLOW_HEIGHT   = 0.09;  // e-fold height in dir.y (~5° — keep it low and thin)
+const float AIRGLOW_FADE_LO  = -0.05; // fades out below the horizon line …
+const float AIRGLOW_FADE_HI  =  0.01; // … and is full just above it
+// ┌─ MILKY WAY BAND ────────────────────────────────────────────────────────
+// A GREAT CIRCLE: s = dot(dir, BAND_NORMAL) is the signed sine of the angular
+// distance from the band plane (s = 0 IS the core ridge).
+//
+// BAND_NORMAL.y IS cos(the band's peak elevation) — exactly, because the band's high
+// point is normalize(+Y − n·n.y). THAT IS THE KNOB THAT MATTERS, because the mobile
+// camera can only ever SEE a low strip of sky: MOBILE_MAX_POLAR_ANGLE 1.52 with
+// MOBILE_MIN_CAM_Y 1.0 puts the view axis ~3–10° BELOW horizontal, so with fov 50 the
+// visible sky runs from the horizon to only ~+22° (≈+29° in the frame corners). The
+// old normal (0.1495, 0.2492, 0.9568) had .y = 0.249 → a band peaking at 76°, i.e.
+// crossing the horizon at a near-VERTICAL 76° and never showing its core inside the
+// visible strip. 0.788 → the band peaks at 38° elevation and sweeps DIAGONALLY across
+// the upper frame — the classic landscape-astro "Milky Way rising" read, visible over
+// a wide range of orbit azimuths. Rotate the horizontal part (x,z) to move WHICH
+// azimuth it rises from; keep |y| well below 1 (at |y| → 1 the band lies flat on the
+// horizon and the +Y-based band frame below degenerates).
+const vec3  BAND_NORMAL      = vec3(0.3080, 0.7880, 0.5330); // .y = cos(38°) → peaks at 38° el
+const float BAND_INTENSITY   = 1.00;  // master band multiplier (fastest A/B knob)
+const float BAND_CORE_SIGMA  = 0.055; // NARROW bright ridge (FWHM ≈ 7.4° ≈ 135 device px)
+const float BAND_HALO_SIGMA  = 0.180; // WIDE faint halo around it (FWHM ≈ 23°)
+const float BAND_CORE_GAIN   = 0.135; // peak core radiance → ~120/255 through the grade
+const float BAND_HALO_GAIN   = 0.026; // peak halo radiance → a subtle cool lift
+const float BAND_DUST_GAIN   = 0.050; // red-brown glow ADDED inside the dust lanes
+const vec3  BAND_CORE_COL    = vec3(1.00, 0.82, 0.56); // warm cream / pale gold core
+const vec3  BAND_EDGE_COL    = vec3(0.55, 0.72, 1.00); // cooler blue-white at the edges
+const vec3  BAND_DUST_COL    = vec3(1.00, 0.42, 0.15); // dark red-brown dust
+// ANISOTROPIC noise frequencies, as (ALONG the band, ACROSS the band). The across
+// value being ~4× the along value is what makes structure read as FILAMENTS parallel
+// to the band instead of round blobs — the single biggest visual lever here.
+const vec2  BAND_CLOUD_FREQ  = vec2(2.2, 8.0);  // mid-freq mottled cloud (≈475×130 px cells)
+const vec2  BAND_DUST_FREQ   = vec2(2.6, 16.0); // dust lanes: long, thin, band-parallel
+const float BAND_CLOUD_LO    = 0.28;  // cloud → clump ramp (start). Raise for more gaps.
+const float BAND_CLOUD_HI    = 0.80;  // cloud → clump ramp (end)
+const float BAND_CLOUD_DEPTH = 0.88;  // how far the clump ramp can dim the core (1 = to 0)
+const float BAND_HALO_DEPTH  = 0.45;  // same, for the wide halo (kept gentler)
+const float BAND_DUST_LO     = 0.46;  // dust-lane carve ramp (start)
+const float BAND_DUST_HI     = 0.74;  // dust-lane carve ramp (end)
+const float BAND_DUST_STR    = 0.92;  // how hard a lane cuts the core (1 = fully)
+const float BAND_EXT_FLOOR   = 0.25;  // band brightness AT the horizon vs. above it
+#define     BAND_OCTAVES       3      // cloud FBM octaves — PRIMARY sky ALU knob (2..4)
+#define     BAND_DUST_OCTAVES  2      // dust FBM octaves — secondary ALU knob (1..3)
+// ┌─ STARS ─────────────────────────────────────────────────────────────────
+// DENSITY is in cells per equi-angular cube-face unit (1 face unit = π/4 rad), so
+// on-screen cell size ≈ (π/4) / (DENSITY · radiansPerPixel). At fov 50°, 390 css ×
+// dpr 2.5 ≈ 975 px tall → ~9.6e-4 rad/px → a 72-cell face gives ~11 device-px cells
+// (≈1900 visible stars). KEEP THESE INTEGRAL: a whole number of cells per face means
+// the cube-face seams land exactly on cell boundaries, so no cell straddles a seam
+// and no star is ever half-drawn. Also keep cells ≳ 6 px: the star footprint is
+// clamped to the cell (see starLayer) and would start being cropped below that.
+const float STAR_DENSITY     = 72.0;  // fine-field cells per face unit (higher = finer/denser)
+const float STAR_PROB        = 0.32;  // fraction of cells holding a star (thins the field)
+const float STAR_BAND_MULT   = 1.90;  // density multiplier ON the band (unresolved-star haze)
+const float STAR_POW         = 9.00;  // brightness power law — HIGHER = far fewer bright stars
+const float STAR_MAG_FLOOR   = 0.030; // faintest star radiance fraction (the faint dusting)
+const float STAR_GAIN        = 1.15;  // brightest fine-star radiance (>1 ⇒ ACES rolls it off)
+const float STAR_R_MIN_PX    = 1.15;  // PSF radius (DEVICE PX) of the faintest stars
+const float STAR_R_MAX_PX    = 1.90;  // PSF radius (DEVICE PX) of the brightest ones
+const float STAR_JITTER      = 0.52;  // sub-cell placement spread (0 = dead centre, 1 = edges)
+const vec3  STAR_COL_MID     = vec3(0.92, 0.96, 1.00); // the neutral majority
+const vec3  STAR_COL_WARM    = vec3(1.00, 0.70, 0.42); // warm/amber minority
+const vec3  STAR_COL_BLUE    = vec3(0.58, 0.76, 1.00); // blue-white minority
+const float STAR_WARM_FRAC   = 0.30;  // colour-index below this ramps into WARM
+const float STAR_BLUE_FRAC   = 0.74;  // colour-index above this ramps into BLUE
+// HERO stars — their own, much coarser lattice (so their halo has room inside its
+// cell), HDR-bright cores + a soft compact halo.
+const float HERO_DENSITY     = 13.0;  // ~60 heroes over the visible sky
+const float HERO_PROB        = 0.26;
+const float HERO_POW         = 1.30;  // shallow → heroes are genuinely bright
+const float HERO_MAG_FLOOR   = 0.18;
+const float HERO_GAIN        = 2.20;  // >1 ⇒ blown to white by ACES, as a bright star should
+const float HERO_R_MIN_PX    = 1.40;
+const float HERO_R_MAX_PX    = 2.40;
+const float HERO_JITTER      = 0.60;
+const float HERO_HALO        = 0.045; // halo peak as a fraction of the core (0 = no halo)
+const float HERO_HALO_SCALE  = 5.00;  // halo radius = this × core radius (clamped to the cell)
+// ATMOSPHERIC EXTINCTION — stars (and, more gently, the band) fade out toward and
+// below the horizon instead of marching at full brightness into the ground line.
+// Kept TIGHT to the horizon on purpose: the visible sky only reaches ~+22° (see
+// BAND_NORMAL), so a wide ramp would extinguish the entire star field.
+const float STAR_EXT_LO      = -0.015; // dir.y where stars are fully extinguished
+const float STAR_EXT_HI      =  0.130; // dir.y where they reach full brightness (~7.5°)
+// Per-face lattice offsets. Integral and spaced WIDER than the per-face cell span
+// (±DENSITY) so no two faces — and neither layer — can ever share a cell index, while
+// staying small enough to keep the hashes numerically clean (see PRECISION above).
+const vec2  STAR_FACE_OFF    = vec2(163.0, 101.0); // × faceId; span ±72 ⇒ disjoint
+const vec2  HERO_FACE_OFF    = vec2(31.0, 23.0);   // × faceId; span ±13 ⇒ disjoint
+const vec2  HERO_FACE_BASE   = vec2(1201.0, 853.0); // lifts heroes clear of the fine lattice
+const float FOUR_OVER_PI     = 1.2732395447351628;
+const float EAC_K            = 0.3476; // equi-angular face warp strength (see faceQ)
 
-// 1D hash of a 3D cell → [0,1) (Dave Hoskins-style, cheap, tap-free).
-float hash13(vec3 p3) {
-  p3 = fract(p3 * 0.1031);
-  p3 += dot(p3, p3.zyx + 31.32);
+// 2D→1D hash → [0,1) (Dave Hoskins-style: cheap, no texture tap, no big constants).
+float hash21(vec2 p) {
+  highp vec3 p3 = fract(vec3(p.xyx) * 0.1031);
+  p3 += dot(p3, p3.yzx + 33.33);
   return fract((p3.x + p3.y) * p3.z);
 }
-// 3D→3D hash for star existence / sub-cell position / brightness.
-vec3 hash33(vec3 p3) {
-  p3 = fract(p3 * vec3(0.1031, 0.1030, 0.0973));
-  p3 += dot(p3, p3.yxz + 33.33);
-  return fract((p3.xxy + p3.yzz) * p3.zyx);
+// 2D→4D hash. ONE tap yields a star's existence / sub-cell x,y / brightness, and a
+// 5th (colour) value is remixed from those below — so a whole star costs one hash.
+vec4 hash42(vec2 p) {
+  highp vec4 p4 = fract(vec4(p.xyxy) * vec4(0.1031, 0.1030, 0.0973, 0.1099));
+  p4 += dot(p4, p4.wzxy + 33.33);
+  return fract((p4.xxyz + p4.yzzw) * p4.zywx);
 }
-// Value noise (trilinear over 8 hashed corners).
-float vnoise(vec3 p) {
-  vec3 i = floor(p);
-  vec3 f = fract(p);
+// 2D value noise (bilinear over 4 hashed corners). HALF the taps of the 3D value
+// noise this replaces (4 vs 8) — which is what pays for the extra band octaves.
+float vnoise2(vec2 p) {
+  vec2 i = floor(p);
+  vec2 f = p - i;
   f = f * f * (3.0 - 2.0 * f);
-  float n000 = hash13(i + vec3(0.0, 0.0, 0.0));
-  float n100 = hash13(i + vec3(1.0, 0.0, 0.0));
-  float n010 = hash13(i + vec3(0.0, 1.0, 0.0));
-  float n110 = hash13(i + vec3(1.0, 1.0, 0.0));
-  float n001 = hash13(i + vec3(0.0, 0.0, 1.0));
-  float n101 = hash13(i + vec3(1.0, 0.0, 1.0));
-  float n011 = hash13(i + vec3(0.0, 1.0, 1.0));
-  float n111 = hash13(i + vec3(1.0, 1.0, 1.0));
-  return mix(mix(mix(n000, n100, f.x), mix(n010, n110, f.x), f.y),
-             mix(mix(n001, n101, f.x), mix(n011, n111, f.x), f.y), f.z);
+  float a = hash21(i);
+  float b = hash21(i + vec2(1.0, 0.0));
+  float c = hash21(i + vec2(0.0, 1.0));
+  float d = hash21(i + vec2(1.0, 1.0));
+  return mix(mix(a, b, f.x), mix(c, d, f.x), f.y);
 }
-// FBM → normalised ~[0,1]. BAND_OCTAVES bounds the cost (main sky ALU knob).
-float fbm(vec3 p) {
+// FBM → normalised ~[0,1]. 'oct' is always one of the BAND_*_OCTAVES defines at the
+// call sites, so this unrolls; those defines are the sky's primary ALU knobs.
+float fbm2(vec2 p, int oct) {
   float a = 0.5;
   float s = 0.0;
   float norm = 0.0;
-  for (int i = 0; i < BAND_OCTAVES; i++) {
-    s += a * vnoise(p);
+  for (int i = 0; i < oct; i++) {
+    s += a * vnoise2(p);
     norm += a;
-    p = p * 2.02 + vec3(11.7, 3.1, 7.3);
+    p = p * 2.03 + vec2(17.3, 5.9);
     a *= 0.5;
   }
   return s / norm;
 }
-// One star field layer. Samples ONLY the cell containing dir (the star is placed
-// away from cell edges so its whole footprint stays inside one cell → no neighbour
-// taps). Returns a scalar the caller tints. bandBoost raises density on the band.
-float starLayer(vec3 dir, float density, float rad, float pw, float prob,
-                float bandBoost, float glowAmt) {
-  vec3 gp = dir * density;
-  vec3 cell = floor(gp);
-  vec3 f = fract(gp);
-  vec3 h = hash33(cell);
-  if (h.z > prob * mix(1.0, STAR_BAND_MULT, bandBoost)) return 0.0;
-  vec3 sp = 0.25 + 0.5 * h;            // sub-cell position, kept off the edges
-  float d = length(f - sp);
-  float core = smoothstep(rad, rad * 0.35, d); // crisp point
-  float glow = glowAmt * exp(-d * d / (rad * rad * 8.0));
-  return (core + glow) * pow(h.x, pw); // power-law brightness
+// (4/π)·atan(x) for |x| ≤ 1, as a 4-ALU polynomial (max error ~0.4%). Turns the
+// gnomonic cube-face coordinate into an EQUI-ANGULAR one: cell angular size becomes
+// (near-)constant over the face instead of varying 5.2× between face centre and cube
+// corner, which would otherwise show up as a cube-shaped star-DENSITY pattern. A real
+// atan() would cost a transcendental for accuracy this does not need.
+float eac(float x) {
+  return x + EAC_K * x * (1.0 - abs(x));
 }
-vec3 proceduralNightSky(vec3 dir) {
-  // BASE: navy gradient, a touch lighter toward the horizon.
-  vec3 col = mix(SKY_HORIZON_COL, SKY_ZENITH_COL, smoothstep(-0.10, 0.60, dir.y));
+// Direction → equi-angular CUBE FACE coords, returned as (u, v, faceId) with u,v in
+// [-1,1]. The dominant axis picks the face; the other two components divided by it
+// give the gnomonic face coords; eac() then equalises them. This is the fix for the
+// "huge soft squares" defect: a 2D lattice on a cube face has uniform-ish angular
+// cell size and NO pole singularity, unlike a 3D lattice cut by the unit sphere.
+vec3 faceQ(vec3 dir) {
+  vec3 ad = abs(dir);
+  vec2 q;
+  float fid;
+  if (ad.x >= ad.y && ad.x >= ad.z) {
+    q = dir.zy / ad.x;
+    fid = dir.x < 0.0 ? 1.0 : 0.0;
+  } else if (ad.y >= ad.z) {
+    q = dir.xz / ad.y;
+    fid = dir.y < 0.0 ? 3.0 : 2.0;
+  } else {
+    q = dir.xy / ad.z;
+    fid = dir.z < 0.0 ? 5.0 : 4.0;
+  }
+  return vec3(eac(q.x), eac(q.y), fid);
+}
+// One star layer on the cube face. Samples ONLY the cell containing fq: the star is
+// jittered inside the cell's middle and its radius is CLAMPED to the remaining
+// margin, so the whole PSF provably stays inside its own cell → 1 hash tap, no
+// neighbour lookups, and no star can ever be clipped by a cell (or face) boundary.
+//
+// 'pixFace' is the pixel's angular footprint expressed in face units, so the PSF
+// radius is specified in DEVICE PIXELS (STAR_R_*_PX): a star is the same small dot
+// whatever the view direction or zoom — which is both what an unresolved point
+// source physically does and the reason this never aliases, shimmers or drops out.
+// The kernel is the compact quartic (1−t²)², C¹ and zero at its edge, so it is
+// inherently anti-aliased against that footprint without a fixed smoothstep radius.
+vec3 starLayer(vec2 fq, float density, vec2 faceOff, float pixFace, float prob,
+               float pw, float magFloor, float gain, float rMinPx, float rMaxPx,
+               float jitter, float haloAmt, float haloScale) {
+  vec2 gp = fq * density + faceOff;
+  vec2 cell = floor(gp);
+  vec4 h = hash42(cell);
+  if (h.x >= prob) return vec3(0.0); // most cells are empty; cells span many pixels
+  float mag = mix(magFloor, 1.0, pow(h.w, pw)); // power-law: many faint, few bright
+  float radMax = 0.5 - 0.5 * jitter;            // margin left by the jitter, in cell units
+  float rad = min(pixFace * density * mix(rMinPx, rMaxPx, mag), radMax);
+  vec2 sp = 0.5 + (h.yz - 0.5) * jitter;
+  float d = length(gp - cell - sp);
+  float t = min(d / rad, 1.0);
+  float core = 1.0 - t * t;
+  core *= core;
+  // Soft halo (hero layer only — haloAmt is a literal 0.0 at the fine-field call
+  // site, so this whole block folds away there). Cubed for a softer knee, and its
+  // radius is clamped to the same cell margin so it cannot leak a square edge.
+  float ht = min(d / min(rad * haloScale, radMax), 1.0);
+  float hs = 1.0 - ht * ht;
+  hs = hs * hs * hs;
+  // Colour: a 5th random remixed from the hash. Most stars stay near STAR_COL_MID,
+  // with a warm minority below STAR_WARM_FRAC and a blue one above STAR_BLUE_FRAC.
+  // (Both ramps are written edge0 < edge1 — GLSL leaves smoothstep UNDEFINED for a
+  // reversed pair, so the warm side is '1 - smoothstep', not 'smoothstep(hi, 0, x)'.)
+  float ct = fract(h.y * 31.7 + h.z * 17.3 + h.x * 7.1);
+  vec3 tint = mix(STAR_COL_MID, STAR_COL_WARM, 1.0 - smoothstep(0.0, STAR_WARM_FRAC, ct));
+  tint = mix(tint, STAR_COL_BLUE, smoothstep(STAR_BLUE_FRAC, 1.0, ct));
+  return tint * (gain * mag * (core + haloAmt * hs));
+}
+// 'pixAng' is the pixel's angular footprint in radians (see main(): it is derived
+// from the view-ray derivatives in UNIFORM control flow, which is what makes it
+// legal). It is the only thing the star field needs to stay pixel-crisp.
+vec3 proceduralNightSky(vec3 dir, float pixAng) {
+  // ── BASE: navy gradient + a thin warm airglow hugging the horizon ─────────
+  vec3 col = mix(SKY_HORIZON_COL, SKY_ZENITH_COL, smoothstep(SKY_GRAD_LO, SKY_GRAD_HI, dir.y));
+  float airglow = exp(-max(dir.y, 0.0) / AIRGLOW_HEIGHT)
+                * smoothstep(AIRGLOW_FADE_LO, AIRGLOW_FADE_HI, dir.y);
+  col += AIRGLOW_COL * airglow;
 
-  // MILKY WAY: gaussian falloff from the great-circle band axis, modulated by a
-  // low-freq cloud FBM (mottled structure) and carved by a higher-freq dust FBM
-  // (dark lanes). Warm-brown in the dust, cool-white in the bright core.
-  float bc = dot(dir, BAND_NORMAL);
-  float band = exp(-(bc * bc) / (2.0 * BAND_SIGMA * BAND_SIGMA));
-  float cloud = fbm(dir * BAND_CLOUD_FREQ + vec3(4.3, 1.7, 9.2));
-  float dust = fbm(dir * BAND_DUST_FREQ + vec3(19.1, 7.4, 2.8));
-  float glow = band * mix(0.25, 1.0, cloud);
+  // ── MILKY WAY ────────────────────────────────────────────────────────────
+  // Band-local frame. s = signed sine of the angular distance from the band plane
+  // (s = 0 is the core ridge); the longitude is measured from t1 = the band's HIGHEST
+  // point (the projection of +Y onto the band plane). Measuring from the high point
+  // deliberately parks atan()'s ±π branch cut — the one seam in the noise domain — on
+  // the band's NADIR, far below the horizon where extinction has already taken the
+  // band to zero, so the seam is never visible. All four consts fold at compile time
+  // (constant arguments), so the frame costs nothing at runtime and BAND_NORMAL stays
+  // the single knob. The +1e-6 keeps atan(0,0) (dir exactly ‖ BAND_NORMAL, where the
+  // band is zero anyway) out of undefined territory so no NaN can propagate.
+  vec3 bn = normalize(BAND_NORMAL);
+  vec3 t1 = normalize(vec3(0.0, 1.0, 0.0) - bn * bn.y);
+  vec3 t2 = cross(bn, t1);
+  float s = dot(dir, bn);
+  float lon = atan(dot(dir, t2), dot(dir, t1) + 1e-6);
+  // 2D FBM in that frame, ANISOTROPIC (freq.x along the band ≪ freq.y across it), so
+  // structure reads as band-parallel filaments — 4 taps/octave instead of 8.
+  vec2 q = vec2(lon, s);
+  float cloud = fbm2(q * BAND_CLOUD_FREQ + vec2(4.3, 1.7), BAND_OCTAVES);
+  float dust = fbm2(q * BAND_DUST_FREQ + vec2(19.1, 7.4), BAND_DUST_OCTAVES);
+  // Envelope: a NARROW bright core ridge sitting inside a WIDE faint halo (the old
+  // version had one fat gaussian, which is why it read as smoke rather than a band).
+  float sc = s / BAND_CORE_SIGMA;
+  float sh = s / BAND_HALO_SIGMA;
+  float coreE = exp(-0.5 * sc * sc);
+  float haloE = exp(-0.5 * sh * sh);
+  // Mid-freq cloud clumps the core along the band; high-freq dust carves lanes out of
+  // it AND adds its own dark red-brown glow, so a lane reads as DUST (warm, opaque,
+  // still brighter than empty sky) instead of a hole punched in the band.
+  float clump = mix(1.0 - BAND_CLOUD_DEPTH, 1.0, smoothstep(BAND_CLOUD_LO, BAND_CLOUD_HI, cloud));
   float lane = smoothstep(BAND_DUST_LO, BAND_DUST_HI, dust);
-  glow *= (1.0 - BAND_DUST_STR * lane * band);       // dust lanes darken the core
-  vec3 bandCol = mix(BAND_DUST_COL, BAND_CORE_COL, cloud);
-  bandCol = mix(bandCol, BAND_DUST_COL, lane * 0.6); // warm the dusty regions
-  col += bandCol * glow * BAND_INTENSITY;
+  float coreA = coreE * clump * (1.0 - BAND_DUST_STR * lane);
+  float haloA = haloE * mix(1.0 - BAND_HALO_DEPTH, 1.0, cloud);
+  // Extinction: shared ramp for stars (full) and the band (floored, so the band
+  // still reaches the treeline instead of ending in mid-air).
+  float ext = smoothstep(STAR_EXT_LO, STAR_EXT_HI, dir.y);
+  vec3 band = BAND_CORE_COL * (coreA * BAND_CORE_GAIN)
+            + BAND_EDGE_COL * (haloA * BAND_HALO_GAIN)
+            + BAND_DUST_COL * (lane * coreE * BAND_DUST_GAIN);
+  col += band * (BAND_INTENSITY * mix(BAND_EXT_FLOOR, 1.0, ext));
 
-  // STARS: fine field + sparse hero stars, both denser along the band.
-  float bandBoost = smoothstep(0.15, 0.90, band);
-  col += STAR_COL * starLayer(dir, STAR_DENSITY, STAR_RAD, STAR_POW, STAR_PROB, bandBoost, 0.0);
-  col += HERO_COL * starLayer(dir, HERO_DENSITY, HERO_RAD, HERO_POW, HERO_PROB, bandBoost, HERO_GLOW);
+  // ── STARS: fine field + sparse heroes, both on the cube-face lattice ──────
+  // One faceQ per pixel is shared by both layers (each just multiplies by its own
+  // density and lattice offset). 1 face unit = π/4 rad by construction, so the pixel
+  // footprint converts with a single multiply. The fine field is denser ON the band
+  // (STAR_BAND_MULT) — the unresolved-star haze that makes a real band glow.
+  vec3 fq = faceQ(dir);
+  float pixFace = pixAng * FOUR_OVER_PI;
+  float boost = mix(1.0, STAR_BAND_MULT, haloE);
+  vec3 stars = starLayer(fq.xy, STAR_DENSITY, fq.z * STAR_FACE_OFF, pixFace,
+                         STAR_PROB * boost, STAR_POW, STAR_MAG_FLOOR, STAR_GAIN,
+                         STAR_R_MIN_PX, STAR_R_MAX_PX, STAR_JITTER, 0.0, 1.0);
+  stars += starLayer(fq.xy, HERO_DENSITY, fq.z * HERO_FACE_OFF + HERO_FACE_BASE, pixFace,
+                     HERO_PROB, HERO_POW, HERO_MAG_FLOOR, HERO_GAIN,
+                     HERO_R_MIN_PX, HERO_R_MAX_PX, HERO_JITTER, HERO_HALO, HERO_HALO_SCALE);
+  col += stars * ext;
   return col;
 }
 // ═══════════════════════════════════════════════════════════════════════════
@@ -484,14 +701,34 @@ void main() {
   // inverse view-projection, minus the camera) and sample the equirect. Detection
   // is DEPTH-based (not scene alpha) so it is unaffected by the SSAO pass, which
   // rewrites sceneColor into a separate buffer while sceneDepth stays the true depth.
-  if (uNightSky > 0.5 && sd >= 0.999999) {
+  //
+  // TWO NESTED BRANCHES, DELIBERATELY. The OUTER test is on a UNIFORM (uNightSky), so
+  // every fragment of a 2×2 quad takes it together — which is precisely what makes the
+  // dFdx/dFdy below WELL-DEFINED. They measure the pixel's angular footprint (the
+  // procedural star field needs it to keep stars a fixed size in DEVICE PIXELS), and
+  // derivatives are only defined in uniform control flow: taken inside the per-pixel
+  // DEPTH test they would be garbage on every sky/geometry silhouette, where a quad
+  // straddles that test. So the ray + footprint are computed first, and the depth test
+  // (INNER, per-pixel) only decides whether the result is used. Derivatives of 'dir'
+  // (not of the cube-face coords) are taken because 'dir' is smooth EVERYWHERE — face
+  // coords jump at the cube seams, which would spike the footprint into a bright blob
+  // along a seam. Note the footprint tracks the LIVE composite resolution, so while
+  // the adaptive-dpr controller drops dpr during an orbit stars stay ~1.5 px (i.e.
+  // momentarily larger in CSS px) rather than aliasing away — the right trade.
+  // DAY / desktop (uNightSky == 0) skip the whole block: byte-identical to before.
+  if (uNightSky > 0.5) {
     vec4 wp = uInvViewProj * vec4(vUv * 2.0 - 1.0, 1.0, 1.0);
     vec3 dir = normalize(wp.xyz / wp.w - uCamPos);
-    // PROCEDURAL (default): per-pixel sky from dir — crisp, no texture. HDRI:
-    // sample the equirect night HDRI verbatim (the 34a08a6 path). Same LINEAR
-    // output × uSkyIntensity so both grade identically downstream.
-    vec3 sky = uProcedural > 0.5 ? proceduralNightSky(dir) : texture(uSky, equirectUv(dir)).rgb;
-    outC = sky * uSkyIntensity;
+    float pixAng = max(max(length(dFdx(dir)), length(dFdy(dir))), 1e-7);
+    if (sd >= 0.999999) {
+      // PROCEDURAL (default): per-pixel sky from dir — crisp, no texture. HDRI:
+      // sample the equirect night HDRI verbatim (the 34a08a6 path). Same LINEAR
+      // output × uSkyIntensity so both grade identically downstream.
+      vec3 sky = uProcedural > 0.5
+        ? proceduralNightSky(dir, pixAng)
+        : texture(uSky, equirectUv(dir)).rgb;
+      outC = sky * uSkyIntensity;
+    }
   }
   float zS  = viewZ(sd);
   float outZ = zS;
@@ -664,7 +901,7 @@ export function MobileCrispBoardPipeline({
       cfg.color = new THREE.Color(ssaoColor); // cool/dark shadow tint
       cfg.halfRes = ssaoHalfRes; // resolutionScale 0.5 (MRT float path when true)
       cfg.depthAwareUpsampling = true;
-      (cfg as any).transparencyAware = false;
+      cfg.transparencyAware = false;
     }
 
     const compositeMat = new THREE.RawShaderMaterial({
@@ -1021,10 +1258,18 @@ export function MobileCrispBoardPipeline({
     const dpr = gl.getPixelRatio();
     const nativeW = Math.max(1, Math.round(size.width * dpr));
     const nativeH = Math.max(1, Math.round(size.height * dpr));
-    const sDpr = Math.min(dpr, sceneDpr);
+    // THERMAL STEP-DOWN: the scene/city dpr PROPS are the tier-0 ceiling; the
+    // live thermal tier can lower them further (see mobileRender.ts /
+    // thermalDpr.ts). Read per frame rather than plumbed as a prop deliberately —
+    // this block already re-derives every FBO size from the live ratio and
+    // re-allocates only on an actual change, so a tier step needs no React
+    // re-render, no Canvas reconfigure and no resource rebuild. At tier 0
+    // thermalSceneDprCap() is the identity function, so this line is
+    // byte-identical to `Math.min(dpr, sceneDpr)` on first load and on desktop.
+    const sDpr = Math.min(dpr, thermalSceneDprCap(sceneDpr));
     const sceneW = Math.max(1, Math.round(size.width * sDpr));
     const sceneH = Math.max(1, Math.round(size.height * sDpr));
-    const cDpr = Math.min(dpr, cityDpr);
+    const cDpr = Math.min(dpr, thermalSceneDprCap(cityDpr));
     const cityW = Math.max(1, Math.round(size.width * cDpr));
     const cityH = Math.max(1, Math.round(size.height * cDpr));
 
@@ -1092,7 +1337,9 @@ export function MobileCrispBoardPipeline({
       // (WebGLBackground) — match it so the procedural/HDRI sky brightness is
       // consistent with the old FBO sky. In procedural mode scene.background is null
       // but backgroundIntensity is still set (MOBILE_NIGHT_BG_INTENSITY) as the knob.
-      rig.compositeMat.uniforms.uSkyIntensity.value = scene.backgroundIntensity ?? 1;
+      // No `?? 1` fallback: three's Scene constructor initialises backgroundIntensity to
+      // 1 and types it as a required `number`, so it is never null/undefined here.
+      rig.compositeMat.uniforms.uSkyIntensity.value = scene.backgroundIntensity;
       if (proceduralNight) {
         rig.compositeMat.uniforms.uProcedural.value = 1;
         // uSky unused by the procedural branch; keep it bound to a valid texture.
@@ -1133,7 +1380,10 @@ export function MobileCrispBoardPipeline({
       if (!baked.current || casterCheckElapsed.current <= CASTER_SIG_WINDOW_MS) {
         casterSig = 0;
         scene.traverse((o) => {
-          if ((o as THREE.Mesh).castShadow === true) casterSig++;
+          // `castShadow` lives on Object3D (not Mesh) and is always a boolean, so the
+          // old `(o as THREE.Mesh).castShadow === true` never narrowed anything and
+          // never filtered to meshes — this counts the exact same set of objects.
+          if (o.castShadow) casterSig++;
         });
       }
     }
@@ -1332,9 +1582,16 @@ export function MobileCrispBoardPipeline({
     // this frame's pose) so the reconstructed sky matches exactly what those passes
     // rendered. Skipped when useNativeSky is false (uNightSky already 0).
     if (useNativeSky) {
+      // three types every `uniforms` entry as `IUniform<any>`, so `.value` comes back as
+      // `any`. These two are the only uniforms this path MUTATES IN PLACE (rather than
+      // assigning a fresh value), so they are the only ones that need their real type
+      // restated — they are built as a Matrix4 / Vector3 in the composite uniforms block
+      // above, and re-stating that here keeps the copy/getWorldPosition calls checked.
+      const uInvViewProj = rig.compositeMat.uniforms.uInvViewProj as THREE.IUniform<THREE.Matrix4>;
+      const uCamPos = rig.compositeMat.uniforms.uCamPos as THREE.IUniform<THREE.Vector3>;
       _skyInvViewProj.multiplyMatrices(cam.projectionMatrix, cam.matrixWorldInverse).invert();
-      rig.compositeMat.uniforms.uInvViewProj.value.copy(_skyInvViewProj);
-      cam.getWorldPosition(rig.compositeMat.uniforms.uCamPos.value);
+      uInvViewProj.value.copy(_skyInvViewProj);
+      cam.getWorldPosition(uCamPos.value);
     }
 
     // 4. COMPOSITE — 3-way depth merge (city over board over scene) into a native
